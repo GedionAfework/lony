@@ -24,6 +24,15 @@ type Querier interface {
 	RotateSession(ctx context.Context, arg RotateSessionParams) (UserSession, error)
 	TouchSession(ctx context.Context, id uuid.UUID) error
 	UpdateUserProfile(ctx context.Context, arg UpdateUserProfileParams) (User, error)
+	GetUserByUsername(ctx context.Context, username string) (User, error)
+	SearchUsers(ctx context.Context, arg SearchUsersParams) ([]SearchUsersRow, error)
+	InsertFriendship(ctx context.Context, arg InsertFriendshipParams) (Friendship, error)
+	GetFriendshipByID(ctx context.Context, id uuid.UUID) (Friendship, error)
+	GetFriendshipByPair(ctx context.Context, arg GetFriendshipByPairParams) (Friendship, error)
+	UpdateFriendship(ctx context.Context, arg UpdateFriendshipParams) (Friendship, error)
+	ListAcceptedFriendships(ctx context.Context, userID uuid.UUID) ([]Friendship, error)
+	ListIncomingFriendRequests(ctx context.Context, addresseeID uuid.UUID) ([]Friendship, error)
+	ListOutgoingFriendRequests(ctx context.Context, requesterID uuid.UUID) ([]Friendship, error)
 }
 
 var _ Querier = (*Queries)(nil)

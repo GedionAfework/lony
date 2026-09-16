@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: EquiLend API
   version: 0.1.0
-  description: Shared peer loan ledger. Phase 1 covers authentication and profile only.
+  description: Shared peer loan ledger. Phase 2 covers authentication, profile, and friendships.
 servers:
   - url: http://localhost:8080/api/v1
 paths:
@@ -126,6 +126,155 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/UserResponse"
+  /users/search:
+    get:
+      summary: Search verified users by email, username, or name
+      operationId: searchUsers
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: q
+          required: true
+          schema: { type: string, minLength: 2 }
+      responses:
+        "200":
+          description: Matching users
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserSearchResponse"
+  /users/{userID}/block:
+    post:
+      summary: Block a user and prevent future friend requests
+      operationId: blockUser
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: userID
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Blocked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FriendshipResponse"
+  /friends:
+    get:
+      summary: List accepted friends
+      operationId: listFriends
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Accepted connections
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FriendsResponse"
+  /friend-requests:
+    get:
+      summary: List incoming friend requests
+      operationId: listIncomingFriendRequests
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Pending requests sent to the current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FriendRequestsResponse"
+    post:
+      summary: Send a friend request by email, username, or user id
+      operationId: createFriendRequest
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FriendRequestCreate"
+      responses:
+        "201":
+          description: Request created or existing pending request returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FriendshipResponse"
+        "409":
+          description: Already friends
+  /friend-requests/outgoing:
+    get:
+      summary: List outgoing friend requests
+      operationId: listOutgoingFriendRequests
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Pending requests sent by the current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FriendRequestsResponse"
+  /friend-requests/{id}/accept:
+    post:
+      summary: Accept a friend request
+      operationId: acceptFriendRequest
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Now friends
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FriendshipResponse"
+  /friend-requests/{id}/reject:
+    post:
+      summary: Reject a friend request
+      operationId: rejectFriendRequest
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Rejected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FriendshipResponse"
+  /friendships/{id}/remove:
+    post:
+      summary: Remove an accepted friendship without deleting loan history
+      operationId: removeFriendship
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Removed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FriendshipResponse"
 components:
   securitySchemes:
     bearerAuth:
@@ -200,6 +349,54 @@ components:
         timezone: { type: string }
         locale: { type: string }
         default_currency_code: { type: string }
+    UserSearchHit:
+      type: object
+      required: [id, display_name]
+      properties:
+        id: { type: string, format: uuid }
+        display_name: { type: string }
+        username: { type: string, nullable: true }
+    UserSearchResponse:
+      type: object
+      required: [users]
+      properties:
+        users:
+          type: array
+          items: { $ref: "#/components/schemas/UserSearchHit" }
+    Friendship:
+      type: object
+      required: [id, status, requested_at, peer]
+      properties:
+        id: { type: string, format: uuid }
+        status: { type: string, enum: [pending, accepted, rejected, removed, blocked] }
+        requested_at: { type: string, format: date-time }
+        accepted_at: { type: string, format: date-time, nullable: true }
+        peer: { $ref: "#/components/schemas/UserSearchHit" }
+    FriendshipResponse:
+      type: object
+      required: [friendship]
+      properties:
+        friendship: { $ref: "#/components/schemas/Friendship" }
+    FriendsResponse:
+      type: object
+      required: [friends]
+      properties:
+        friends:
+          type: array
+          items: { $ref: "#/components/schemas/Friendship" }
+    FriendRequestsResponse:
+      type: object
+      required: [requests]
+      properties:
+        requests:
+          type: array
+          items: { $ref: "#/components/schemas/Friendship" }
+    FriendRequestCreate:
+      type: object
+      properties:
+        email: { type: string, format: email }
+        username: { type: string }
+        user_id: { type: string, format: uuid }
     ErrorResponse:
       type: object
       required: [error]

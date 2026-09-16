@@ -60,3 +60,18 @@ type IdempotencyRecord struct {
 	CreatedAt        time.Time  `json:"created_at"`
 	ExpiresAt        time.Time  `json:"expires_at"`
 }
+
+type Friendship struct {
+	ID              uuid.UUID  `json:"id"`
+	RequesterID     uuid.UUID  `json:"requester_id"`
+	AddresseeID     uuid.UUID  `json:"addressee_id"`
+	UserLowID       uuid.UUID  `json:"user_low_id"`
+	UserHighID      uuid.UUID  `json:"user_high_id"`
+	Status          string     `json:"status"`
+	RequestedAt     time.Time  `json:"requested_at"`
+	AcceptedAt      *time.Time `json:"accepted_at"`
+	RemovedAt       *time.Time `json:"removed_at"`
+	BlockedByUserID *uuid.UUID `json:"blocked_by_user_id"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+}

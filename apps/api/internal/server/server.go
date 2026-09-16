@@ -7,7 +7,9 @@ import (
 
 	"equilend/api/internal/auth"
 	"equilend/api/internal/config"
+	"equilend/api/internal/friends"
 	"equilend/api/internal/httpx"
+	"equilend/api/internal/store"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -15,9 +17,9 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func New(cfg config.Config, pool *pgxpool.Pool, store auth.Store) http.Handler {
-	svc := auth.NewService(store, cfg)
-	h := auth.NewHandler(svc)
+func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.Handler {
+	authH := auth.NewHandler(auth.NewService(sqlStore, cfg))
+	friendsH := friends.NewHandler(friends.NewService(sqlStore))
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -44,16 +46,26 @@ func New(cfg config.Config, pool *pgxpool.Pool, store auth.Store) http.Handler {
 	})
 
 	r.Route("/api/v1", func(r chi.Router) {
-		r.Post("/auth/register", h.Register)
-		r.Post("/auth/verify", h.Verify)
-		r.Post("/auth/login", h.Login)
-		r.Post("/auth/refresh", h.Refresh)
+		r.Post("/auth/register", authH.Register)
+		r.Post("/auth/verify", authH.Verify)
+		r.Post("/auth/login", authH.Login)
+		r.Post("/auth/refresh", authH.Refresh)
 
 		r.Group(func(r chi.Router) {
 			r.Use(auth.Middleware(cfg.JWTSecret))
-			r.Post("/auth/logout", h.Logout)
-			r.Get("/me", h.Me)
-			r.Patch("/me", h.PatchMe)
+			r.Post("/auth/logout", authH.Logout)
+			r.Get("/me", authH.Me)
+			r.Patch("/me", authH.PatchMe)
+
+			r.Get("/users/search", friendsH.Search)
+			r.Post("/users/{userID}/block", friendsH.Block)
+			r.Get("/friends", friendsH.ListFriends)
+			r.Post("/friend-requests", friendsH.Request)
+			r.Get("/friend-requests", friendsH.ListIncoming)
+			r.Get("/friend-requests/outgoing", friendsH.ListOutgoing)
+			r.Post("/friend-requests/{id}/accept", friendsH.Accept)
+			r.Post("/friend-requests/{id}/reject", friendsH.Reject)
+			r.Post("/friendships/{id}/remove", friendsH.Remove)
 		})
 	})
 

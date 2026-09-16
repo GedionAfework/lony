@@ -13,7 +13,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { api, type User } from './src/api';
+import { api, type Friendship, type SearchHit, type User } from './src/api';
 import { colors } from './src/theme';
 
 const ACCESS_KEY = 'equilend.access_token';
@@ -27,6 +27,11 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [user, setUser] = useState<User | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+  const [friends, setFriends] = useState<Friendship[]>([]);
+  const [incoming, setIncoming] = useState<Friendship[]>([]);
+  const [hits, setHits] = useState<SearchHit[]>([]);
+  const [query, setQuery] = useState('');
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -42,6 +47,7 @@ export default function App() {
           return;
         }
         const me = await api.me(token);
+        setToken(token);
         setUser(me.user);
         setScreen('home');
       } catch {
@@ -56,6 +62,7 @@ export default function App() {
   async function persistTokens(access: string, refresh: string, nextUser: User) {
     await SecureStore.setItemAsync(ACCESS_KEY, access);
     await SecureStore.setItemAsync(REFRESH_KEY, refresh);
+    setToken(access);
     setUser(nextUser);
     setScreen('home');
   }
@@ -117,8 +124,111 @@ export default function App() {
     await SecureStore.deleteItemAsync(ACCESS_KEY);
     await SecureStore.deleteItemAsync(REFRESH_KEY);
     setUser(null);
+    setToken(null);
+    setFriends([]);
+    setIncoming([]);
+    setHits([]);
     setPassword('');
     setScreen('login');
+  }
+
+  async function refreshFriends(access = token) {
+    if (!access) {
+      return;
+    }
+    const [friendRes, incomingRes] = await Promise.all([api.listFriends(access), api.listIncoming(access)]);
+    setFriends(friendRes.friends ?? []);
+    setIncoming(incomingRes.requests ?? []);
+  }
+
+  useEffect(() => {
+    if (screen === 'home' && token) {
+      refreshFriends(token).catch((e) => {
+        setError(e instanceof Error ? e.message : 'Could not load friends');
+      });
+    }
+  }, [screen, token]);
+
+  async function onSearch() {
+    if (!token) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api.searchUsers(token, query.trim());
+      setHits(res.users);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Search failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onAdd(hit: SearchHit) {
+    if (!token) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.sendRequest(token, { user_id: hit.id });
+      setHits([]);
+      setQuery('');
+      await refreshFriends();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not send request');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onAccept(id: string) {
+    if (!token) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.acceptRequest(token, id);
+      await refreshFriends();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not accept');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onReject(id: string) {
+    if (!token) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.rejectRequest(token, id);
+      await refreshFriends();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not reject');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onRemove(id: string) {
+    if (!token) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.removeFriend(token, id);
+      await refreshFriends();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not remove');
+    } finally {
+      setBusy(false);
+    }
   }
 
   if (booting) {
@@ -153,6 +263,68 @@ export default function App() {
               <Pressable style={styles.secondaryButton} onPress={onLogout}>
                 <Text style={styles.secondaryButtonText}>Sign out</Text>
               </Pressable>
+            </View>
+          ) : null}
+
+          {screen === 'home' && user ? (
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>Find people</Text>
+              <Field label="Email or name" value={query} onChange={setQuery} />
+              <Pressable style={styles.button} onPress={onSearch} disabled={busy}>
+                <Text style={styles.buttonText}>{busy ? 'Working…' : 'Search'}</Text>
+              </Pressable>
+              {hits.map((hit) => (
+                <View key={hit.id} style={styles.row}>
+                  <View style={styles.flex}>
+                    <Text style={styles.rowTitle}>{hit.display_name}</Text>
+                    <Text style={styles.muted}>{hit.username ?? 'No username'}</Text>
+                  </View>
+                  <Pressable style={styles.smallButton} onPress={() => onAdd(hit)} disabled={busy}>
+                    <Text style={styles.smallButtonText}>Add</Text>
+                  </Pressable>
+                </View>
+              ))}
+            </View>
+          ) : null}
+
+          {screen === 'home' && incoming.length > 0 ? (
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>Requests</Text>
+              {incoming.map((req) => (
+                <View key={req.id} style={styles.row}>
+                  <View style={styles.flex}>
+                    <Text style={styles.rowTitle}>{req.peer.display_name}</Text>
+                    <Text style={styles.muted}>Wants to connect</Text>
+                  </View>
+                  <Pressable style={styles.smallButton} onPress={() => onAccept(req.id)} disabled={busy}>
+                    <Text style={styles.smallButtonText}>Accept</Text>
+                  </Pressable>
+                  <Pressable style={styles.ghostButton} onPress={() => onReject(req.id)} disabled={busy}>
+                    <Text style={styles.ghostButtonText}>Reject</Text>
+                  </Pressable>
+                </View>
+              ))}
+            </View>
+          ) : null}
+
+          {screen === 'home' && user ? (
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>Friends</Text>
+              {friends.length === 0 ? (
+                <Text style={styles.muted}>No connections yet. Search by email to add someone.</Text>
+              ) : (
+                friends.map((friend) => (
+                  <View key={friend.id} style={styles.row}>
+                    <View style={styles.flex}>
+                      <Text style={styles.rowTitle}>{friend.peer.display_name}</Text>
+                      <Text style={styles.muted}>{friend.peer.username ?? friend.status}</Text>
+                    </View>
+                    <Pressable style={styles.ghostButton} onPress={() => onRemove(friend.id)} disabled={busy}>
+                      <Text style={styles.ghostButtonText}>Remove</Text>
+                    </Pressable>
+                  </View>
+                ))
+              )}
             </View>
           ) : null}
 
@@ -240,6 +412,25 @@ function Field({
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
   flex: { flex: 1 },
+  row: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  rowTitle: { color: colors.text, fontSize: 16, fontWeight: '600' },
+  smallButton: {
+    backgroundColor: colors.primary,
+    borderRadius: 10,
+    minHeight: 44,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  smallButtonText: { color: colors.onPrimary, fontWeight: '700' },
+  ghostButton: {
+    borderRadius: 10,
+    minHeight: 44,
+    paddingHorizontal: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  ghostButtonText: { color: colors.tertiary, fontWeight: '600' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   container: { padding: 16, paddingTop: 48, gap: 16 },
   brand: { color: colors.text, fontSize: 28, fontWeight: '700' },

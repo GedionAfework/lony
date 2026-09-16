@@ -68,4 +68,36 @@ export const api = {
     }),
   me: (token: string) => request<{ user: User }>('/me', { method: 'GET' }, token),
   logout: (token: string) => request<void>('/auth/logout', { method: 'POST' }, token),
+  searchUsers: (token: string, q: string) =>
+    request<{ users: SearchHit[] }>(`/users/search?q=${encodeURIComponent(q)}`, { method: 'GET' }, token),
+  listFriends: (token: string) => request<{ friends: Friendship[] }>('/friends', { method: 'GET' }, token),
+  listIncoming: (token: string) =>
+    request<{ requests: Friendship[] }>('/friend-requests', { method: 'GET' }, token),
+  sendRequest: (token: string, body: { email?: string; username?: string; user_id?: string }) =>
+    request<{ friendship: Friendship }>('/friend-requests', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }, token),
+  acceptRequest: (token: string, id: string) =>
+    request<{ friendship: Friendship }>(`/friend-requests/${id}/accept`, { method: 'POST' }, token),
+  rejectRequest: (token: string, id: string) =>
+    request<{ friendship: Friendship }>(`/friend-requests/${id}/reject`, { method: 'POST' }, token),
+  removeFriend: (token: string, id: string) =>
+    request<{ friendship: Friendship }>(`/friendships/${id}/remove`, { method: 'POST' }, token),
+  blockUser: (token: string, userID: string) =>
+    request<{ friendship: Friendship }>(`/users/${userID}/block`, { method: 'POST' }, token),
+};
+
+export type SearchHit = {
+  id: string;
+  display_name: string;
+  username: string | null;
+};
+
+export type Friendship = {
+  id: string;
+  status: string;
+  requested_at: string;
+  accepted_at?: string | null;
+  peer: SearchHit;
 };
