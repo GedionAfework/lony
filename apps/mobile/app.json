@@ -1,0 +1,27 @@
+{
+  "expo": {
+    "name": "EquiLend",
+    "slug": "equilend",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#0b1326"
+    },
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "io.equilend.app"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#0b1326"
+      },
+      "package": "io.equilend.app"
+    },
+    "plugins": [
+      "expo-secure-store"
+    ]
+  }
+}

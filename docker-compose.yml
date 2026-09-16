@@ -1,0 +1,31 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: equilend-postgres
+    environment:
+      POSTGRES_USER: equilend
+      POSTGRES_PASSWORD: equilend
+      POSTGRES_DB: equilend
+    ports:
+      - "5432:5432"
+    volumes:
+      - equilend_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U equilend -d equilend"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: equilend-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  equilend_pg:
