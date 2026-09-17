@@ -153,6 +153,21 @@ export const api = {
       { method: 'GET' },
       token,
     ),
+  listNotifications: (token: string, unread = false) =>
+    request<{ notifications: AppNotification[]; unread_count: number }>(
+      `/notifications${unread ? '?unread=1' : ''}`,
+      { method: 'GET' },
+      token,
+    ),
+  markNotificationRead: (token: string, id: string) =>
+    request<{ notification: AppNotification }>(`/notifications/${id}/read`, { method: 'POST' }, token),
+  markAllNotificationsRead: (token: string) =>
+    request<{ ok: boolean }>('/notifications/read-all', { method: 'POST' }, token),
+  registerDeviceToken: (token: string, platform: string, deviceToken: string) =>
+    request<{ device_token: DeviceToken }>('/device-tokens', {
+      method: 'POST',
+      body: JSON.stringify({ platform, token: deviceToken }),
+    }, token),
 };
 
 export type SearchHit = {
@@ -288,4 +303,25 @@ export type Repayment = {
   created_at: string;
   can_confirm: boolean;
   can_reject: boolean;
+};
+
+export type AppNotification = {
+  id: string;
+  type: string;
+  loan_id?: string | null;
+  title: string;
+  body: string;
+  payload: Record<string, unknown>;
+  push_status: string;
+  read_at?: string | null;
+  created_at: string;
+};
+
+export type DeviceToken = {
+  id: string;
+  platform: string;
+  token: string;
+  enabled: boolean;
+  last_seen_at: string;
+  created_at: string;
 };

@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: Lony API
   version: 0.1.0
-  description: Shared peer loan ledger. Phase 6 adds repayment claims and lender confirmation.
+  description: Shared peer loan ledger. Phase 7 adds in-app notifications and due reminders.
 servers:
   - url: http://localhost:8080/api/v1
 paths:
@@ -760,6 +760,71 @@ paths:
           description: Not the lender
         "409":
           description: Not pending
+  /notifications:
+    get:
+      summary: In-app notification inbox
+      operationId: listNotifications
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: unread
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: Notifications and unread count
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationsResponse"
+  /notifications/read-all:
+    post:
+      summary: Mark all notifications as read
+      operationId: markAllNotificationsRead
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Cleared
+  /notifications/{id}/read:
+    post:
+      summary: Mark one notification as read
+      operationId: markNotificationRead
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/NotificationResponse"
+        "404":
+          description: Not found
+  /device-tokens:
+    post:
+      summary: Register a push device token
+      operationId: registerDeviceToken
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DeviceTokenRequest"
+      responses:
+        "200":
+          description: Registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeviceTokenResponse"
 components:
   securitySchemes:
     bearerAuth:
@@ -1150,6 +1215,53 @@ components:
         repayments:
           type: array
           items: { $ref: "#/components/schemas/Repayment" }
+    Notification:
+      type: object
+      required: [id, type, title, body, payload, push_status, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        type: { type: string }
+        loan_id: { type: string, format: uuid, nullable: true }
+        title: { type: string }
+        body: { type: string }
+        payload: { type: object }
+        push_status: { type: string, enum: [pending, sent, skipped, failed] }
+        read_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+    NotificationResponse:
+      type: object
+      required: [notification]
+      properties:
+        notification: { $ref: "#/components/schemas/Notification" }
+    NotificationsResponse:
+      type: object
+      required: [notifications, unread_count]
+      properties:
+        notifications:
+          type: array
+          items: { $ref: "#/components/schemas/Notification" }
+        unread_count: { type: integer }
+    DeviceTokenRequest:
+      type: object
+      required: [platform, token]
+      properties:
+        platform: { type: string, enum: [ios, android, web] }
+        token: { type: string }
+    DeviceToken:
+      type: object
+      required: [id, platform, token, enabled, last_seen_at, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        platform: { type: string }
+        token: { type: string }
+        enabled: { type: boolean }
+        last_seen_at: { type: string, format: date-time }
+        created_at: { type: string, format: date-time }
+    DeviceTokenResponse:
+      type: object
+      required: [device_token]
+      properties:
+        device_token: { $ref: "#/components/schemas/DeviceToken" }
     ErrorResponse:
       type: object
       required: [error]

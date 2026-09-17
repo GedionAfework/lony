@@ -16,12 +16,22 @@ import (
 )
 
 type Service struct {
-	store Store
-	now   func() time.Time
+	store    Store
+	notifier Notifier
+	now      func() time.Time
+}
+
+type Notifier interface {
+	OnFriendRequest(ctx context.Context, addresseeID uuid.UUID) error
+	OnFriendAccepted(ctx context.Context, requesterID uuid.UUID) error
 }
 
 func NewService(store Store) *Service {
 	return &Service{store: store, now: time.Now}
+}
+
+func (s *Service) SetNotifier(n Notifier) {
+	s.notifier = n
 }
 
 func (s *Service) Search(ctx context.Context, viewer uuid.UUID, query string) ([]SearchHit, error) {
@@ -75,6 +85,9 @@ func (s *Service) Request(ctx context.Context, actor uuid.UUID, email, username 
 			if err != nil {
 				return FriendDTO{}, err
 			}
+			if s.notifier != nil {
+				_ = s.notifier.OnFriendRequest(ctx, target.ID)
+			}
 			return s.toDTO(ctx, actor, updated)
 		}
 	}
@@ -89,6 +102,9 @@ func (s *Service) Request(ctx context.Context, actor uuid.UUID, email, username 
 	})
 	if err != nil {
 		return FriendDTO{}, err
+	}
+	if s.notifier != nil {
+		_ = s.notifier.OnFriendRequest(ctx, target.ID)
 	}
 	return s.toDTO(ctx, actor, created)
 }
@@ -110,6 +126,9 @@ func (s *Service) Accept(ctx context.Context, actor, friendshipID uuid.UUID) (Fr
 	updated, err := s.store.UpdateFriendship(ctx, row)
 	if err != nil {
 		return FriendDTO{}, err
+	}
+	if s.notifier != nil {
+		_ = s.notifier.OnFriendAccepted(ctx, row.RequesterID)
 	}
 	return s.toDTO(ctx, actor, updated)
 }

@@ -18,13 +18,24 @@ import (
 )
 
 type Service struct {
-	store Store
-	loans LoanAccess
-	now   func() time.Time
+	store    Store
+	loans    LoanAccess
+	notifier Notifier
+	now      func() time.Time
+}
+
+type Notifier interface {
+	OnClaimed(ctx context.Context, loan loans.Record) error
+	OnConfirmed(ctx context.Context, loan loans.Record) error
+	OnRejected(ctx context.Context, loan loans.Record) error
 }
 
 func NewService(store Store, loans LoanAccess) *Service {
 	return &Service{store: store, loans: loans, now: time.Now}
+}
+
+func (s *Service) SetNotifier(n Notifier) {
+	s.notifier = n
 }
 
 func (s *Service) Claim(ctx context.Context, actor, loanID uuid.UUID, in ClaimInput) (DTO, error) {
@@ -90,9 +101,13 @@ func (s *Service) Claim(ctx context.Context, actor, loanID uuid.UUID, in ClaimIn
 	saved, updatedLoan, err := s.store.Insert(ctx, rec, loan, loans.Event{
 		ActorID: &actor,
 		Type:    EventClaimed,
+		Payload: claimPayload(rec),
 	})
 	if err != nil {
 		return DTO{}, err
+	}
+	if s.notifier != nil {
+		_ = s.notifier.OnClaimed(ctx, updatedLoan)
 	}
 	return toDTO(saved, actor, updatedLoan), nil
 }
@@ -141,6 +156,9 @@ func (s *Service) Confirm(ctx context.Context, actor, repaymentID uuid.UUID) (DT
 	if err != nil {
 		return DTO{}, err
 	}
+	if s.notifier != nil {
+		_ = s.notifier.OnConfirmed(ctx, updatedLoan)
+	}
 	return toDTO(saved, actor, updatedLoan), nil
 }
 
@@ -180,6 +198,9 @@ func (s *Service) Reject(ctx context.Context, actor, repaymentID uuid.UUID, in R
 	})
 	if err != nil {
 		return DTO{}, err
+	}
+	if s.notifier != nil {
+		_ = s.notifier.OnRejected(ctx, updatedLoan)
 	}
 	return toDTO(saved, actor, updatedLoan), nil
 }

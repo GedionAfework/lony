@@ -44,7 +44,7 @@ func Migrate(ctx context.Context, databaseURL string) error {
 		if _, err := tx.Exec(ctx, string(schemaSQL)); err != nil {
 			return fmt.Errorf("apply baseline schema: %w", err)
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO schema_migrations (version) VALUES ('00001'), ('00002'), ('00003'), ('00004'), ('00005')`); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO schema_migrations (version) VALUES ('00001'), ('00002'), ('00003'), ('00004'), ('00005'), ('00006')`); err != nil {
 			return fmt.Errorf("record baseline: %w", err)
 		}
 		return tx.Commit(ctx)
@@ -53,10 +53,16 @@ func Migrate(ctx context.Context, databaseURL string) error {
 	if err := applyMigration(ctx, pool, "00002", "migrations/00002_friendships.sql"); err != nil {
 		return err
 	}
+	if err := applyMigration(ctx, pool, "00003", "migrations/00003_loans.sql"); err != nil {
+		return err
+	}
 	if err := applyMigration(ctx, pool, "00004", "migrations/00004_bank_profiles.sql"); err != nil {
 		return err
 	}
-	return applyMigration(ctx, pool, "00005", "migrations/00005_repayments.sql")
+	if err := applyMigration(ctx, pool, "00005", "migrations/00005_repayments.sql"); err != nil {
+		return err
+	}
+	return applyMigration(ctx, pool, "00006", "migrations/00006_notifications.sql")
 }
 
 func applyMigration(ctx context.Context, pool *pgxpool.Pool, version, path string) error {

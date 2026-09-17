@@ -21,14 +21,24 @@ type FriendshipGate interface {
 	CanCreateLoan(ctx context.Context, a, b uuid.UUID) (bool, error)
 }
 
+type Hooks interface {
+	AfterCreate(ctx context.Context, loan Record) error
+	AfterAccept(ctx context.Context, loan Record) error
+}
+
 type Service struct {
 	store Store
 	gate  FriendshipGate
+	hooks Hooks
 	now   func() time.Time
 }
 
 func NewService(store Store, gate FriendshipGate) *Service {
 	return &Service{store: store, gate: gate, now: time.Now}
+}
+
+func (s *Service) SetHooks(h Hooks) {
+	s.hooks = h
 }
 
 func (s *Service) Create(ctx context.Context, actor uuid.UUID, in CreateInput) (LoanDTO, error) {
@@ -97,6 +107,9 @@ func (s *Service) Create(ctx context.Context, actor uuid.UUID, in CreateInput) (
 	if err != nil {
 		return LoanDTO{}, err
 	}
+	if s.hooks != nil {
+		_ = s.hooks.AfterCreate(ctx, created)
+	}
 	return s.toDTO(ctx, actor, created, true)
 }
 
@@ -149,6 +162,9 @@ func (s *Service) Accept(ctx context.Context, actor, loanID uuid.UUID) (LoanDTO,
 	updated, err := s.store.ApplyTransition(ctx, rec, rec.CurrentTermsID, Event{ActorID: &actor, Type: EventAccepted, Payload: payload})
 	if err != nil {
 		return LoanDTO{}, err
+	}
+	if s.hooks != nil {
+		_ = s.hooks.AfterAccept(ctx, updated)
 	}
 	return s.toDTO(ctx, actor, updated, true)
 }

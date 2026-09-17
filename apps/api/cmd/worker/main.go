@@ -12,6 +12,7 @@ import (
 	"equilend/api/internal/config"
 	"equilend/api/internal/friends"
 	"equilend/api/internal/loans"
+	"equilend/api/internal/notifications"
 	"equilend/api/internal/store"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -38,8 +39,9 @@ func main() {
 
 	sqlStore := store.New(pool)
 	loanSvc := loans.NewService(sqlStore, friends.NewService(sqlStore))
+	notifySvc := notifications.NewService(sqlStore, notifications.LogPusher{})
 
-	log.Printf("lony worker scanning overdue loans (%s)", cfg.AppEnv)
+	log.Printf("lony worker overdue+reminders (%s)", cfg.AppEnv)
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 
@@ -47,13 +49,21 @@ func main() {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 
 	run := func() {
-		n, err := loanSvc.MarkOverdue(context.Background())
-		if err != nil {
+		bg := context.Background()
+		if n, err := loanSvc.MarkOverdue(bg); err != nil {
 			log.Printf("overdue scan: %v", err)
-			return
-		}
-		if n > 0 {
+		} else if n > 0 {
 			log.Printf("marked %d loan(s) overdue", n)
+		}
+		if n, err := notifySvc.ProcessDueJobs(bg); err != nil {
+			log.Printf("reminder jobs: %v", err)
+		} else if n > 0 {
+			log.Printf("delivered %d reminder job(s)", n)
+		}
+		if n, err := notifySvc.Reconcile(bg); err != nil {
+			log.Printf("reminder reconcile: %v", err)
+		} else if n > 0 {
+			log.Printf("rebuilt %d missing reminder job(s)", n)
 		}
 	}
 	run()

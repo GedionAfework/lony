@@ -65,6 +65,22 @@ type Querier interface {
 	GetPendingRepaymentForLoan(ctx context.Context, loanID uuid.UUID) (Repayment, error)
 	UpdateRepayment(ctx context.Context, arg UpdateRepaymentParams) (Repayment, error)
 	SumClaimedAgainstOutstanding(ctx context.Context, loanID uuid.UUID) (string, error)
+	InsertNotification(ctx context.Context, arg InsertNotificationParams) (Notification, error)
+	ListNotificationsForUser(ctx context.Context, arg ListNotificationsForUserParams) ([]Notification, error)
+	GetNotificationByID(ctx context.Context, id uuid.UUID) (Notification, error)
+	MarkNotificationRead(ctx context.Context, arg MarkNotificationReadParams) (Notification, error)
+	MarkAllNotificationsRead(ctx context.Context, userID uuid.UUID) error
+	CountUnreadNotifications(ctx context.Context, userID uuid.UUID) (int32, error)
+	UpsertDeviceToken(ctx context.Context, arg UpsertDeviceTokenParams) (DeviceToken, error)
+	ListEnabledDeviceTokens(ctx context.Context, userID uuid.UUID) ([]DeviceToken, error)
+	DisableDeviceToken(ctx context.Context, arg DisableDeviceTokenParams) (DeviceToken, error)
+	InsertNotificationJob(ctx context.Context, arg InsertNotificationJobParams) (NotificationJob, error)
+	GetNotificationJobByKey(ctx context.Context, jobKey string) (NotificationJob, error)
+	ListPendingNotificationJobs(ctx context.Context, arg ListPendingNotificationJobsParams) ([]NotificationJob, error)
+	CompleteNotificationJob(ctx context.Context, id uuid.UUID) (NotificationJob, error)
+	FailNotificationJob(ctx context.Context, arg FailNotificationJobParams) (NotificationJob, error)
+	CancelPendingJobsForLoan(ctx context.Context, loanID uuid.UUID) error
+	ListOpenLoansForReminders(ctx context.Context) ([]OpenLoanForReminder, error)
 }
 
 var _ Querier = (*Queries)(nil)

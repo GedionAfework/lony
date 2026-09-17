@@ -12,6 +12,7 @@ import (
 	"equilend/api/internal/friends"
 	"equilend/api/internal/httpx"
 	"equilend/api/internal/loans"
+	"equilend/api/internal/notifications"
 	"equilend/api/internal/repayments"
 	"equilend/api/internal/store"
 
@@ -32,6 +33,11 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 	banksH := banks.NewHandler(banksSvc)
 	repaySvc := repayments.NewService(sqlStore, loansSvc)
 	repayH := repayments.NewHandler(repaySvc)
+	notifySvc := notifications.NewService(sqlStore, notifications.LogPusher{})
+	notifyH := notifications.NewHandler(notifySvc)
+	loansSvc.SetHooks(notifications.LoanHooks{Svc: notifySvc})
+	friendsSvc.SetNotifier(notifications.FriendHooks{Svc: notifySvc})
+	repaySvc.SetNotifier(notifications.RepayHooks{Svc: notifySvc})
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -103,6 +109,11 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 			r.Get("/bank-profiles/{id}/events", banksH.Events)
 			r.Get("/bank-profile-shares", banksH.ListShares)
 			r.Post("/bank-profile-shares/{id}/revoke", banksH.Revoke)
+
+			r.Get("/notifications", notifyH.List)
+			r.Post("/notifications/read-all", notifyH.MarkAllRead)
+			r.Post("/notifications/{id}/read", notifyH.MarkRead)
+			r.Post("/device-tokens", notifyH.RegisterDevice)
 		})
 	})
 
