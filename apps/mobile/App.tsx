@@ -13,11 +13,45 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { api, type BankProfile, type BankProfileShare, type Dashboard, type Friendship, type Loan, type SearchHit, type User } from './src/api';
+import { api, DISCLAIMER, type BankProfile, type BankProfileShare, type Dashboard, type Friendship, type Loan, type SearchHit, type User } from './src/api';
 import { colors } from './src/theme';
 
 const ACCESS_KEY = 'lony.access_token';
 const REFRESH_KEY = 'lony.refresh_token';
+
+const STATUS_LABELS: Record<string, string> = {
+  pending: 'Pending acceptance',
+  active: 'Active',
+  overdue: 'Overdue',
+  repayment_pending: 'Repayment pending confirmation',
+  completed: 'Completed',
+  rejected: 'Rejected',
+  cancelled: 'Cancelled',
+};
+
+function statusLabel(status: string): string {
+  return STATUS_LABELS[status] ?? status.replaceAll('_', ' ');
+}
+
+function formatMoney(amount: string | null | undefined, currency: string | null | undefined, locale = 'en'): string {
+  if (!amount) {
+    return '';
+  }
+  const n = Number(amount);
+  if (Number.isFinite(n)) {
+    try {
+      return new Intl.NumberFormat(locale, {
+        style: currency ? 'currency' : 'decimal',
+        currency: currency || undefined,
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 4,
+      }).format(n);
+    } catch {
+      /* fall through */
+    }
+  }
+  return currency ? `${amount} ${currency}` : amount;
+}
 
 type Screen = 'login' | 'register' | 'verify' | 'home' | 'new-loan' | 'loan' | 'banks';
 
@@ -60,6 +94,7 @@ export default function App() {
   const [displayName, setDisplayName] = useState('');
   const [code, setCode] = useState('');
   const [devCode, setDevCode] = useState<string | undefined>();
+  const [acceptedDisclaimer, setAcceptedDisclaimer] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -93,7 +128,7 @@ export default function App() {
     setBusy(true);
     setError(null);
     try {
-      const res = await api.register(email.trim(), password, displayName.trim());
+      const res = await api.register(email.trim(), password, displayName.trim(), acceptedDisclaimer);
       setDevCode(res.verification_code);
       setScreen('verify');
     } catch (e) {
@@ -712,7 +747,9 @@ export default function App() {
                         {loan.reference_code} · {loan.your_role}
                       </Text>
                       <Text style={styles.muted}>
-                        {loan.expected_total ? `${loan.expected_total} ${loan.currency_code}` : 'Waiting for terms'} · {loan.status}
+                        {loan.expected_total
+                          ? `${formatMoney(loan.expected_total, loan.currency_code, user?.locale)} · ${statusLabel(loan.status)}`
+                          : `Waiting for terms · ${statusLabel(loan.status)}`}
                       </Text>
                     </View>
                   </Pressable>
@@ -761,21 +798,38 @@ export default function App() {
             <View style={styles.card}>
               <Text style={styles.cardTitle}>{selectedLoan.reference_code}</Text>
               <Text style={styles.hero}>
-                {selectedLoan.expected_total ? `${selectedLoan.expected_total} ${selectedLoan.currency_code}` : selectedLoan.status}
+                {selectedLoan.expected_total
+                  ? formatMoney(selectedLoan.expected_total, selectedLoan.currency_code, user?.locale)
+                  : statusLabel(selectedLoan.status)}
               </Text>
               <Text style={styles.muted}>
                 {selectedLoan.your_role === 'borrower' ? `From ${selectedLoan.lender.display_name}` : `To ${selectedLoan.borrower.display_name}`}
               </Text>
-              <Text style={styles.muted}>Status: {selectedLoan.status}</Text>
+              <Text style={styles.muted} accessibilityRole="text">
+                Status: {statusLabel(selectedLoan.status)}
+              </Text>
               {selectedLoan.principal ? (
                 <Text style={styles.muted}>
-                  Principal {selectedLoan.principal} · {selectedLoan.interest_basis} {selectedLoan.interest_rate_percent}% · due {selectedLoan.due_at?.slice(0, 10)}
+                  Principal {formatMoney(selectedLoan.principal, selectedLoan.currency_code, user?.locale)} · {selectedLoan.interest_basis}{' '}
+                  {selectedLoan.interest_rate_percent}% · due{' '}
+                  {selectedLoan.due_at
+                    ? new Date(selectedLoan.due_at).toLocaleDateString(user?.locale || 'en', { year: 'numeric', month: 'short', day: 'numeric' })
+                    : '—'}
                 </Text>
               ) : null}
               {selectedLoan.can_accept ? (
-                <Pressable style={styles.button} onPress={() => onLoanAction('accept')} disabled={busy}>
-                  <Text style={styles.buttonText}>Accept terms</Text>
-                </Pressable>
+                <>
+                  <Text style={styles.disclaimer}>{DISCLAIMER}</Text>
+                  <Pressable
+                    style={styles.button}
+                    onPress={() => onLoanAction('accept')}
+                    disabled={busy}
+                    accessibilityRole="button"
+                    accessibilityLabel="Accept loan terms and disclaimer"
+                  >
+                    <Text style={styles.buttonText}>Accept terms</Text>
+                  </Pressable>
+                </>
               ) : null}
               {selectedLoan.can_reject ? (
                 <Pressable style={styles.secondaryButton} onPress={() => onLoanAction('reject')} disabled={busy}>
@@ -954,10 +1008,27 @@ export default function App() {
               <Field label="Display name" value={displayName} onChange={setDisplayName} />
               <Field label="Email" value={email} onChange={setEmail} keyboardType="email-address" />
               <Field label="Password" value={password} onChange={setPassword} secure />
-              <Pressable style={styles.button} onPress={onRegister} disabled={busy}>
+              <Text style={styles.disclaimer}>{DISCLAIMER}</Text>
+              <Pressable
+                style={styles.row}
+                onPress={() => setAcceptedDisclaimer((v) => !v)}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: acceptedDisclaimer }}
+                accessibilityLabel="Accept Lony product disclaimer"
+              >
+                <Text style={styles.checkbox}>{acceptedDisclaimer ? '[x]' : '[ ]'}</Text>
+                <Text style={[styles.muted, styles.flex]}>I understand Lony is a shared ledger, not a bank or escrow.</Text>
+              </Pressable>
+              <Pressable
+                style={styles.button}
+                onPress={onRegister}
+                disabled={busy || !acceptedDisclaimer}
+                accessibilityRole="button"
+                accessibilityLabel="Register"
+              >
                 <Text style={styles.buttonText}>{busy ? 'Working…' : 'Register'}</Text>
               </Pressable>
-              <Pressable onPress={() => setScreen('login')}>
+              <Pressable onPress={() => setScreen('login')} accessibilityRole="link" accessibilityLabel="Go to sign in">
                 <Text style={styles.link}>Already have an account? Sign in</Text>
               </Pressable>
             </View>
@@ -1024,6 +1095,7 @@ function Field({
         keyboardType={keyboardType ?? 'default'}
         placeholderTextColor={colors.muted}
         style={styles.input}
+        accessibilityLabel={label}
       />
     </View>
   );
@@ -1095,6 +1167,8 @@ const styles = StyleSheet.create({
   secondaryButtonText: { color: colors.text, fontWeight: '600' },
   link: { color: colors.tertiary, textAlign: 'center', paddingVertical: 8 },
   muted: { color: colors.muted, fontSize: 14 },
+  disclaimer: { color: colors.muted, fontSize: 13, lineHeight: 18 },
+  checkbox: { color: colors.primary, fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }), fontSize: 16 },
   error: { color: colors.error, fontSize: 14 },
   dev: { color: colors.secondary, fontSize: 13, fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }) },
 });

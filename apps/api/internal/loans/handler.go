@@ -99,8 +99,15 @@ func (h *Handler) ProposeTerms(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Accept(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		AcceptedDisclaimer bool `json:"accepted_disclaimer"`
+	}
+	if err := httpx.Decode(r, &body); err != nil {
+		httpx.Error(w, err)
+		return
+	}
 	h.withID(w, r, func(id uuid.UUID) (LoanDTO, error) {
-		return h.svc.Accept(r.Context(), auth.UserIDFrom(r.Context()), id)
+		return h.svc.Accept(r.Context(), auth.UserIDFrom(r.Context()), id, body.AcceptedDisclaimer)
 	})
 }
 

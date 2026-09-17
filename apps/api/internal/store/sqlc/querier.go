@@ -81,6 +81,10 @@ type Querier interface {
 	FailNotificationJob(ctx context.Context, arg FailNotificationJobParams) (NotificationJob, error)
 	CancelPendingJobsForLoan(ctx context.Context, loanID uuid.UUID) error
 	ListOpenLoansForReminders(ctx context.Context) ([]OpenLoanForReminder, error)
+	ListOpenLoansForReconcile(ctx context.Context) ([]OpenLoanForReconcile, error)
+	SumConfirmedRepayments(ctx context.Context, loanID uuid.UUID) (string, error)
+	GetIdempotencyRecord(ctx context.Context, arg GetIdempotencyRecordParams) (IdempotencyRecord, error)
+	InsertIdempotencyRecord(ctx context.Context, arg InsertIdempotencyRecordParams) (IdempotencyRecord, error)
 }
 
 var _ Querier = (*Queries)(nil)

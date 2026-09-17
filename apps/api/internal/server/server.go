@@ -11,8 +11,10 @@ import (
 	"equilend/api/internal/dashboard"
 	"equilend/api/internal/friends"
 	"equilend/api/internal/httpx"
+	"equilend/api/internal/idempotency"
 	"equilend/api/internal/loans"
 	"equilend/api/internal/notifications"
+	"equilend/api/internal/ratelimit"
 	"equilend/api/internal/repayments"
 	"equilend/api/internal/store"
 
@@ -39,6 +41,10 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 	friendsSvc.SetNotifier(notifications.FriendHooks{Svc: notifySvc})
 	repaySvc.SetNotifier(notifications.RepayHooks{Svc: notifySvc})
 
+	authLimit := ratelimit.New(30, time.Minute)
+	apiLimit := ratelimit.New(180, time.Minute)
+	idem := idempotency.New(sqlStore, 24*time.Hour)
+
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
@@ -49,6 +55,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "Idempotency-Key", "X-Device-Label"},
+		ExposedHeaders:   []string{"Idempotent-Replay"},
 		AllowCredentials: false,
 		MaxAge:           300,
 	}))
@@ -64,56 +71,60 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 	})
 
 	r.Route("/api/v1", func(r chi.Router) {
-		r.Post("/auth/register", authH.Register)
-		r.Post("/auth/verify", authH.Verify)
-		r.Post("/auth/login", authH.Login)
-		r.Post("/auth/refresh", authH.Refresh)
+		r.Group(func(r chi.Router) {
+			r.Use(authLimit.Middleware)
+			r.With(idem.Handler("auth.register")).Post("/auth/register", authH.Register)
+			r.With(idem.Handler("auth.verify")).Post("/auth/verify", authH.Verify)
+			r.With(idem.Handler("auth.login")).Post("/auth/login", authH.Login)
+			r.With(idem.Handler("auth.refresh")).Post("/auth/refresh", authH.Refresh)
+		})
 
 		r.Group(func(r chi.Router) {
+			r.Use(apiLimit.Middleware)
 			r.Use(auth.Middleware(cfg.JWTSecret))
 			r.Post("/auth/logout", authH.Logout)
 			r.Get("/me", authH.Me)
 			r.Patch("/me", authH.PatchMe)
 
 			r.Get("/users/search", friendsH.Search)
-			r.Post("/users/{userID}/block", friendsH.Block)
+			r.With(idem.Handler("friends.block")).Post("/users/{userID}/block", friendsH.Block)
 			r.Get("/friends", friendsH.ListFriends)
-			r.Post("/friend-requests", friendsH.Request)
+			r.With(idem.Handler("friends.request")).Post("/friend-requests", friendsH.Request)
 			r.Get("/friend-requests", friendsH.ListIncoming)
 			r.Get("/friend-requests/outgoing", friendsH.ListOutgoing)
-			r.Post("/friend-requests/{id}/accept", friendsH.Accept)
-			r.Post("/friend-requests/{id}/reject", friendsH.Reject)
-			r.Post("/friendships/{id}/remove", friendsH.Remove)
+			r.With(idem.Handler("friends.accept")).Post("/friend-requests/{id}/accept", friendsH.Accept)
+			r.With(idem.Handler("friends.reject")).Post("/friend-requests/{id}/reject", friendsH.Reject)
+			r.With(idem.Handler("friends.remove")).Post("/friendships/{id}/remove", friendsH.Remove)
 
 			r.Get("/dashboard", dashH.Get)
-			r.Post("/loans", loansH.Create)
+			r.With(idem.Handler("loans.create")).Post("/loans", loansH.Create)
 			r.Get("/loans", loansH.List)
 			r.Get("/loans/{id}", loansH.Get)
 			r.Get("/loans/{id}/payment-profile", banksH.LoanPaymentProfile)
-			r.Post("/loans/{id}/terms", loansH.ProposeTerms)
-			r.Post("/loans/{id}/accept", loansH.Accept)
-			r.Post("/loans/{id}/reject", loansH.Reject)
-			r.Post("/loans/{id}/cancel", loansH.Cancel)
-			r.Post("/loans/{id}/repayments", repayH.Claim)
+			r.With(idem.Handler("loans.terms")).Post("/loans/{id}/terms", loansH.ProposeTerms)
+			r.With(idem.Handler("loans.accept")).Post("/loans/{id}/accept", loansH.Accept)
+			r.With(idem.Handler("loans.reject")).Post("/loans/{id}/reject", loansH.Reject)
+			r.With(idem.Handler("loans.cancel")).Post("/loans/{id}/cancel", loansH.Cancel)
+			r.With(idem.Handler("repayments.claim")).Post("/loans/{id}/repayments", repayH.Claim)
 			r.Get("/loans/{id}/repayments", repayH.ListForLoan)
-			r.Post("/repayments/{id}/confirm", repayH.Confirm)
-			r.Post("/repayments/{id}/reject", repayH.Reject)
+			r.With(idem.Handler("repayments.confirm")).Post("/repayments/{id}/confirm", repayH.Confirm)
+			r.With(idem.Handler("repayments.reject")).Post("/repayments/{id}/reject", repayH.Reject)
 
 			r.Get("/bank-profiles", banksH.List)
-			r.Post("/bank-profiles", banksH.Create)
+			r.With(idem.Handler("banks.create")).Post("/bank-profiles", banksH.Create)
 			r.Get("/bank-profiles/{id}", banksH.Get)
 			r.Patch("/bank-profiles/{id}", banksH.Patch)
-			r.Post("/bank-profiles/{id}/archive", banksH.Archive)
-			r.Post("/bank-profiles/{id}/preferred", banksH.Preferred)
-			r.Post("/bank-profiles/{id}/share", banksH.Share)
+			r.With(idem.Handler("banks.archive")).Post("/bank-profiles/{id}/archive", banksH.Archive)
+			r.With(idem.Handler("banks.preferred")).Post("/bank-profiles/{id}/preferred", banksH.Preferred)
+			r.With(idem.Handler("banks.share")).Post("/bank-profiles/{id}/share", banksH.Share)
 			r.Get("/bank-profiles/{id}/events", banksH.Events)
 			r.Get("/bank-profile-shares", banksH.ListShares)
-			r.Post("/bank-profile-shares/{id}/revoke", banksH.Revoke)
+			r.With(idem.Handler("banks.revoke")).Post("/bank-profile-shares/{id}/revoke", banksH.Revoke)
 
 			r.Get("/notifications", notifyH.List)
-			r.Post("/notifications/read-all", notifyH.MarkAllRead)
-			r.Post("/notifications/{id}/read", notifyH.MarkRead)
-			r.Post("/device-tokens", notifyH.RegisterDevice)
+			r.With(idem.Handler("notifications.read_all")).Post("/notifications/read-all", notifyH.MarkAllRead)
+			r.With(idem.Handler("notifications.read")).Post("/notifications/{id}/read", notifyH.MarkRead)
+			r.With(idem.Handler("notifications.device")).Post("/device-tokens", notifyH.RegisterDevice)
 		})
 	})
 

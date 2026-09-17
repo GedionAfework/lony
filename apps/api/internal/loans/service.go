@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"equilend/api/internal/httpx"
+	"equilend/api/internal/legal"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -140,7 +141,12 @@ func (s *Service) Propose(ctx context.Context, actor, loanID uuid.UUID, in Terms
 	return s.toDTO(ctx, actor, updated, true)
 }
 
-func (s *Service) Accept(ctx context.Context, actor, loanID uuid.UUID) (LoanDTO, error) {
+func (s *Service) Accept(ctx context.Context, actor, loanID uuid.UUID, acceptedDisclaimer bool) (LoanDTO, error) {
+	if !acceptedDisclaimer {
+		return LoanDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"accepted_disclaimer": "you must accept the Lony product disclaimer to activate this loan",
+		})
+	}
 	rec, err := s.mustGet(ctx, actor, loanID)
 	if err != nil {
 		return LoanDTO{}, err
@@ -158,7 +164,10 @@ func (s *Service) Accept(ctx context.Context, actor, loanID uuid.UUID) (LoanDTO,
 	rec.Status = StatusActive
 	rec.AcceptedTermsID = rec.CurrentTermsID
 	rec.AcceptedAt = &now
-	payload, _ := json.Marshal(termsSnapshot(rec))
+	snap := termsSnapshot(rec)
+	snap["disclaimer_accepted"] = true
+	snap["disclaimer_version"] = legal.Version
+	payload, _ := json.Marshal(snap)
 	updated, err := s.store.ApplyTransition(ctx, rec, rec.CurrentTermsID, Event{ActorID: &actor, Type: EventAccepted, Payload: payload})
 	if err != nil {
 		return LoanDTO{}, err

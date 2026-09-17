@@ -380,8 +380,8 @@ Critical end-to-end path (from SDS testing strategy):
 
 ## Immediate next step
 
-Phase 0 is this document. After the frozen decisions above are accepted:
+Phase 8 MVP hardening is done (rate limits, idempotency, IDOR tests, report-only balance reconcile, legal disclaimer, light a11y, RUNBOOK).
 
-**Start Phase 1** — scaffold the monorepo, SQL schema for users/sessions, Go auth API, OpenAPI spec, and an Expo shell with Lony splash + sign-in.
+Deferred: full EAS signed builds, pixel-perfect Stitch UI pass, production Redis/Asynq and alerting.
 
-Do not skip ahead to loans or dashboard until Phase 1 definition of done is met.
+Product is ready for further polish or TestFlight prep when you want those deferred items.

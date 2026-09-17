@@ -13,6 +13,7 @@ import (
 	"equilend/api/internal/friends"
 	"equilend/api/internal/loans"
 	"equilend/api/internal/notifications"
+	"equilend/api/internal/reconcile"
 	"equilend/api/internal/store"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -40,8 +41,9 @@ func main() {
 	sqlStore := store.New(pool)
 	loanSvc := loans.NewService(sqlStore, friends.NewService(sqlStore))
 	notifySvc := notifications.NewService(sqlStore, notifications.LogPusher{})
+	reconcileSvc := reconcile.New(sqlStore)
 
-	log.Printf("lony worker overdue+reminders (%s)", cfg.AppEnv)
+	log.Printf("lony worker overdue+reminders+reconcile (%s)", cfg.AppEnv)
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 
@@ -64,6 +66,14 @@ func main() {
 			log.Printf("reminder reconcile: %v", err)
 		} else if n > 0 {
 			log.Printf("rebuilt %d missing reminder job(s)", n)
+		}
+		if mismatches, err := reconcileSvc.Report(bg); err != nil {
+			log.Printf("balance reconcile: %v", err)
+		} else if len(mismatches) > 0 {
+			for _, m := range mismatches {
+				log.Printf("balance mismatch loan=%s ref=%s status=%s stored=%s computed=%s",
+					m.LoanID, m.ReferenceCode, m.Status, m.StoredOutstanding, m.ComputedOutstanding)
+			}
 		}
 	}
 	run()

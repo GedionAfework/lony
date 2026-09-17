@@ -50,11 +50,24 @@ async function request<T>(path: string, init: RequestInit = {}, token?: string):
   return data as T;
 }
 
+function idemKey(prefix: string): string {
+  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+export const DISCLAIMER =
+  'Lony is a shared ledger and reminder app, not a bank, wallet, escrow, or payment processor. Money moves outside the app. Records are for personal tracking only and are not legally binding contracts.';
+
 export const api = {
-  register: (email: string, password: string, displayName: string) =>
+  register: (email: string, password: string, displayName: string, acceptedDisclaimer: boolean) =>
     request<{ user: User; verification_code?: string; verification_hint: string }>('/auth/register', {
       method: 'POST',
-      body: JSON.stringify({ email, password, display_name: displayName }),
+      headers: { 'Idempotency-Key': idemKey('register') },
+      body: JSON.stringify({
+        email,
+        password,
+        display_name: displayName,
+        accepted_disclaimer: acceptedDisclaimer,
+      }),
     }),
   verify: (email: string, code: string) =>
     request<{ user: User }>('/auth/verify', {
@@ -76,16 +89,29 @@ export const api = {
   sendRequest: (token: string, body: { email?: string; username?: string; user_id?: string }) =>
     request<{ friendship: Friendship }>('/friend-requests', {
       method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('friend-request') },
       body: JSON.stringify(body),
     }, token),
   acceptRequest: (token: string, id: string) =>
-    request<{ friendship: Friendship }>(`/friend-requests/${id}/accept`, { method: 'POST' }, token),
+    request<{ friendship: Friendship }>(`/friend-requests/${id}/accept`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('friend-accept') },
+    }, token),
   rejectRequest: (token: string, id: string) =>
-    request<{ friendship: Friendship }>(`/friend-requests/${id}/reject`, { method: 'POST' }, token),
+    request<{ friendship: Friendship }>(`/friend-requests/${id}/reject`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('friend-reject') },
+    }, token),
   removeFriend: (token: string, id: string) =>
-    request<{ friendship: Friendship }>(`/friendships/${id}/remove`, { method: 'POST' }, token),
+    request<{ friendship: Friendship }>(`/friendships/${id}/remove`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('friend-remove') },
+    }, token),
   blockUser: (token: string, userID: string) =>
-    request<{ friendship: Friendship }>(`/users/${userID}/block`, { method: 'POST' }, token),
+    request<{ friendship: Friendship }>(`/users/${userID}/block`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('block') },
+    }, token),
   listLoans: (token: string, query: { status?: string; role?: string; currency?: string; filter?: string } = {}) => {
     const params = new URLSearchParams();
     if (query.status) params.set('status', query.status);
@@ -98,27 +124,50 @@ export const api = {
   dashboard: (token: string) => request<{ dashboard: Dashboard }>(`/dashboard`, { method: 'GET' }, token),
   getLoan: (token: string, id: string) => request<{ loan: Loan }>(`/loans/${id}`, { method: 'GET' }, token),
   createLoan: (token: string, body: CreateLoanBody) =>
-    request<{ loan: Loan }>('/loans', { method: 'POST', body: JSON.stringify(body) }, token),
+    request<{ loan: Loan }>('/loans', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('loan-create') },
+      body: JSON.stringify(body),
+    }, token),
   proposeTerms: (token: string, id: string, body: LoanTermsBody) =>
-    request<{ loan: Loan }>(`/loans/${id}/terms`, { method: 'POST', body: JSON.stringify(body) }, token),
+    request<{ loan: Loan }>(`/loans/${id}/terms`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('loan-terms') },
+      body: JSON.stringify(body),
+    }, token),
   acceptLoan: (token: string, id: string) =>
-    request<{ loan: Loan }>(`/loans/${id}/accept`, { method: 'POST' }, token),
+    request<{ loan: Loan }>(`/loans/${id}/accept`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('loan-accept') },
+      body: JSON.stringify({ accepted_disclaimer: true }),
+    }, token),
   rejectLoan: (token: string, id: string) =>
-    request<{ loan: Loan }>(`/loans/${id}/reject`, { method: 'POST' }, token),
+    request<{ loan: Loan }>(`/loans/${id}/reject`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('loan-reject') },
+    }, token),
   cancelLoan: (token: string, id: string) =>
-    request<{ loan: Loan }>(`/loans/${id}/cancel`, { method: 'POST' }, token),
+    request<{ loan: Loan }>(`/loans/${id}/cancel`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('loan-cancel') },
+    }, token),
   claimRepayment: (token: string, loanId: string, body: { amount?: string; note?: string } = {}) =>
     request<{ repayment: Repayment }>(`/loans/${loanId}/repayments`, {
       method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('repay-claim') },
       body: JSON.stringify(body),
     }, token),
   listRepayments: (token: string, loanId: string) =>
     request<{ repayments: Repayment[] }>(`/loans/${loanId}/repayments`, { method: 'GET' }, token),
   confirmRepayment: (token: string, id: string) =>
-    request<{ repayment: Repayment }>(`/repayments/${id}/confirm`, { method: 'POST' }, token),
+    request<{ repayment: Repayment }>(`/repayments/${id}/confirm`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('repay-confirm') },
+    }, token),
   rejectRepayment: (token: string, id: string, reason: string) =>
     request<{ repayment: Repayment }>(`/repayments/${id}/reject`, {
       method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('repay-reject') },
       body: JSON.stringify({ reason }),
     }, token),
   listBankProfiles: (token: string) =>
@@ -126,6 +175,7 @@ export const api = {
   createBankProfile: (token: string, body: CreateBankProfileBody) =>
     request<{ bank_profile: BankProfile }>('/bank-profiles', {
       method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('bank-create') },
       body: JSON.stringify(body),
     }, token),
   getBankProfile: (token: string, id: string, reveal = false) =>

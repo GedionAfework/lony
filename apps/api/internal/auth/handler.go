@@ -16,9 +16,10 @@ func NewHandler(svc *Service) *Handler {
 }
 
 type registerBody struct {
-	Email       string `json:"email"`
-	Password    string `json:"password"`
-	DisplayName string `json:"display_name"`
+	Email              string `json:"email"`
+	Password           string `json:"password"`
+	DisplayName        string `json:"display_name"`
+	AcceptedDisclaimer bool   `json:"accepted_disclaimer"`
 }
 
 type verifyBody struct {

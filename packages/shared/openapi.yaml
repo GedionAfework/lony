@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: Lony API
   version: 0.1.0
-  description: Shared peer loan ledger. Phase 7 adds in-app notifications and due reminders.
+  description: Shared peer loan ledger. Phase 8 adds rate limits, idempotency, balance reconcile reporting, and legal disclaimer acceptance.
 servers:
   - url: http://localhost:8080/api/v1
 paths:
@@ -391,6 +391,13 @@ paths:
           name: id
           required: true
           schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AcceptLoanRequest"
       responses:
         "200":
           description: Loan is now active
@@ -400,6 +407,8 @@ paths:
                 $ref: "#/components/schemas/LoanResponse"
         "409":
           description: Invalid state
+        "422":
+          description: Disclaimer not accepted
   /loans/{id}/reject:
     post:
       summary: Reject a pending loan
@@ -826,6 +835,13 @@ paths:
               schema:
                 $ref: "#/components/schemas/DeviceTokenResponse"
 components:
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema: { type: string, maxLength: 100 }
+      description: Optional replay key for state-changing POSTs
   securitySchemes:
     bearerAuth:
       type: http
@@ -852,11 +868,14 @@ components:
         user: { $ref: "#/components/schemas/User" }
     RegisterRequest:
       type: object
-      required: [email, password, display_name]
+      required: [email, password, display_name, accepted_disclaimer]
       properties:
         email: { type: string, format: email }
         password: { type: string, minLength: 8 }
         display_name: { type: string }
+        accepted_disclaimer:
+          type: boolean
+          description: Must be true; acknowledges Lony is a ledger, not a bank or escrow
     RegisterResponse:
       type: object
       required: [user, verification_hint]
@@ -967,6 +986,13 @@ components:
         interest_rate_percent: { type: string }
         due_at: { type: string, format: date-time }
         note: { type: string, maxLength: 500 }
+    AcceptLoanRequest:
+      type: object
+      required: [accepted_disclaimer]
+      properties:
+        accepted_disclaimer:
+          type: boolean
+          description: Must be true; acknowledges Lony is a ledger, not a bank or escrow
     LoanParty:
       type: object
       required: [id, display_name]

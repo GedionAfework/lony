@@ -28,9 +28,10 @@ func NewService(store Store, cfg config.Config) *Service {
 }
 
 type RegisterInput struct {
-	Email       string
-	Password    string
-	DisplayName string
+	Email              string
+	Password           string
+	DisplayName        string
+	AcceptedDisclaimer bool
 }
 
 type RegisterResult struct {
@@ -56,6 +57,11 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (RegisterResul
 	email, err := normalizeEmail(in.Email)
 	if err != nil {
 		return RegisterResult{}, err
+	}
+	if !in.AcceptedDisclaimer {
+		return RegisterResult{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"accepted_disclaimer": "you must accept the Lony product disclaimer",
+		})
 	}
 	displayName := strings.TrimSpace(in.DisplayName)
 	if utf8.RuneCountInString(displayName) < 1 || utf8.RuneCountInString(displayName) > 120 {

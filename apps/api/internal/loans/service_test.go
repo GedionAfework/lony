@@ -1,4 +1,4 @@
-package loans
+﻿package loans
 
 import (
 	"context"
@@ -49,7 +49,7 @@ func TestCreateAcceptSameTerms(t *testing.T) {
 		t.Fatal("interest basis")
 	}
 
-	accepted, err := svc.Accept(ctx, b.ID, created.ID)
+	accepted, err := svc.Accept(ctx, b.ID, created.ID, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestCannotEditAcceptedTerms(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Accept(ctx, b.ID, created.ID); err != nil {
+	if _, err := svc.Accept(ctx, b.ID, created.ID, true); err != nil {
 		t.Fatal(err)
 	}
 	_, err = svc.Propose(ctx, a.ID, created.ID, TermsInput{
@@ -102,13 +102,13 @@ func TestInvalidTransitions(t *testing.T) {
 		CounterpartyID: b.ID, Role: RoleBorrower,
 		Principal: ptr("50"), CurrencyCode: ptr("ETB"), InterestRatePercent: ptr("1"), DueAt: &due,
 	})
-	if _, err := svc.Accept(ctx, a.ID, created.ID); err == nil {
+	if _, err := svc.Accept(ctx, a.ID, created.ID, true); err == nil {
 		t.Fatal("proposer cannot accept")
 	}
-	if _, err := svc.Accept(ctx, b.ID, created.ID); err != nil {
+	if _, err := svc.Accept(ctx, b.ID, created.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.Accept(ctx, b.ID, created.ID); err == nil {
+	if _, err := svc.Accept(ctx, b.ID, created.ID, true); err == nil {
 		t.Fatal("second accept")
 	}
 	if _, err := svc.Reject(ctx, b.ID, created.ID); err == nil {
@@ -129,7 +129,7 @@ func TestRequestThenLenderSetsTerms(t *testing.T) {
 	if created.Principal != nil {
 		t.Fatal("expected no terms yet")
 	}
-	if _, err := svc.Accept(ctx, b.ID, created.ID); err == nil {
+	if _, err := svc.Accept(ctx, b.ID, created.ID, true); err == nil {
 		t.Fatal("accept without terms")
 	}
 	due := futureDue()
@@ -142,7 +142,7 @@ func TestRequestThenLenderSetsTerms(t *testing.T) {
 	if proposed.ExpectedTotal == nil || *proposed.ExpectedTotal != "825.5500" {
 		t.Fatalf("expected total %v", proposed.ExpectedTotal)
 	}
-	accepted, err := svc.Accept(ctx, a.ID, proposed.ID)
+	accepted, err := svc.Accept(ctx, a.ID, proposed.ID, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,7 +182,7 @@ func TestMarkOverdue(t *testing.T) {
 		CounterpartyID: b.ID, Role: RoleBorrower,
 		Principal: ptr("10"), CurrencyCode: ptr("ETB"), InterestRatePercent: ptr("0"), DueAt: &due,
 	})
-	if _, err := svc.Accept(context.Background(), b.ID, created.ID); err != nil {
+	if _, err := svc.Accept(context.Background(), b.ID, created.ID, true); err != nil {
 		t.Fatal(err)
 	}
 	svc.now = func() time.Time { return due.Add(time.Hour) }
