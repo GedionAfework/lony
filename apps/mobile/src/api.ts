@@ -86,6 +86,73 @@ export const api = {
     request<{ friendship: Friendship }>(`/friendships/${id}/remove`, { method: 'POST' }, token),
   blockUser: (token: string, userID: string) =>
     request<{ friendship: Friendship }>(`/users/${userID}/block`, { method: 'POST' }, token),
+  listLoans: (token: string, query: { status?: string; role?: string; currency?: string; filter?: string } = {}) => {
+    const params = new URLSearchParams();
+    if (query.status) params.set('status', query.status);
+    if (query.role) params.set('role', query.role);
+    if (query.currency) params.set('currency', query.currency);
+    if (query.filter) params.set('filter', query.filter);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return request<{ loans: Loan[] }>(`/loans${suffix}`, { method: 'GET' }, token);
+  },
+  dashboard: (token: string) => request<{ dashboard: Dashboard }>(`/dashboard`, { method: 'GET' }, token),
+  getLoan: (token: string, id: string) => request<{ loan: Loan }>(`/loans/${id}`, { method: 'GET' }, token),
+  createLoan: (token: string, body: CreateLoanBody) =>
+    request<{ loan: Loan }>('/loans', { method: 'POST', body: JSON.stringify(body) }, token),
+  proposeTerms: (token: string, id: string, body: LoanTermsBody) =>
+    request<{ loan: Loan }>(`/loans/${id}/terms`, { method: 'POST', body: JSON.stringify(body) }, token),
+  acceptLoan: (token: string, id: string) =>
+    request<{ loan: Loan }>(`/loans/${id}/accept`, { method: 'POST' }, token),
+  rejectLoan: (token: string, id: string) =>
+    request<{ loan: Loan }>(`/loans/${id}/reject`, { method: 'POST' }, token),
+  cancelLoan: (token: string, id: string) =>
+    request<{ loan: Loan }>(`/loans/${id}/cancel`, { method: 'POST' }, token),
+  claimRepayment: (token: string, loanId: string, body: { amount?: string; note?: string } = {}) =>
+    request<{ repayment: Repayment }>(`/loans/${loanId}/repayments`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }, token),
+  listRepayments: (token: string, loanId: string) =>
+    request<{ repayments: Repayment[] }>(`/loans/${loanId}/repayments`, { method: 'GET' }, token),
+  confirmRepayment: (token: string, id: string) =>
+    request<{ repayment: Repayment }>(`/repayments/${id}/confirm`, { method: 'POST' }, token),
+  rejectRepayment: (token: string, id: string, reason: string) =>
+    request<{ repayment: Repayment }>(`/repayments/${id}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    }, token),
+  listBankProfiles: (token: string) =>
+    request<{ bank_profiles: BankProfile[] }>('/bank-profiles', { method: 'GET' }, token),
+  createBankProfile: (token: string, body: CreateBankProfileBody) =>
+    request<{ bank_profile: BankProfile }>('/bank-profiles', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }, token),
+  getBankProfile: (token: string, id: string, reveal = false) =>
+    request<{ bank_profile: BankProfile }>(`/bank-profiles/${id}${reveal ? '?reveal=1' : ''}`, { method: 'GET' }, token),
+  preferBankProfile: (token: string, id: string) =>
+    request<{ bank_profile: BankProfile }>(`/bank-profiles/${id}/preferred`, { method: 'POST' }, token),
+  archiveBankProfile: (token: string, id: string) =>
+    request<{ bank_profile: BankProfile }>(`/bank-profiles/${id}/archive`, { method: 'POST' }, token),
+  shareBankProfile: (token: string, id: string, body: { recipient_id: string; loan_id?: string }) =>
+    request<{ share: BankProfileShare }>(`/bank-profiles/${id}/share`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }, token),
+  listBankShares: (token: string, incoming = false) =>
+    request<{ shares: BankProfileShare[] }>(
+      `/bank-profile-shares${incoming ? '?direction=incoming' : ''}`,
+      { method: 'GET' },
+      token,
+    ),
+  revokeBankShare: (token: string, id: string) =>
+    request<{ share: BankProfileShare }>(`/bank-profile-shares/${id}/revoke`, { method: 'POST' }, token),
+  loanPaymentProfile: (token: string, loanId: string, reveal = false) =>
+    request<{ bank_profile: BankProfile }>(
+      `/loans/${loanId}/payment-profile${reveal ? '?reveal=1' : ''}`,
+      { method: 'GET' },
+      token,
+    ),
 };
 
 export type SearchHit = {
@@ -100,4 +167,125 @@ export type Friendship = {
   requested_at: string;
   accepted_at?: string | null;
   peer: SearchHit;
+};
+
+export type LoanParty = {
+  id: string;
+  display_name: string;
+  username?: string | null;
+};
+
+export type Loan = {
+  id: string;
+  reference_code: string;
+  status: string;
+  borrower: LoanParty;
+  lender: LoanParty;
+  your_role: 'borrower' | 'lender';
+  interest_basis: string;
+  principal: string | null;
+  currency_code: string | null;
+  interest_rate_percent: string | null;
+  interest_amount: string | null;
+  expected_total: string | null;
+  due_at: string | null;
+  note: string | null;
+  can_accept: boolean;
+  can_reject: boolean;
+  can_cancel: boolean;
+  can_propose_terms: boolean;
+  events?: { id: string; event_type: string; created_at: string }[];
+};
+
+export type CreateLoanBody = {
+  counterparty_id: string;
+  role: 'borrower' | 'lender';
+  principal?: string;
+  currency_code?: string;
+  interest_rate_percent?: string;
+  due_at?: string;
+  note?: string;
+};
+
+export type LoanTermsBody = {
+  principal: string;
+  currency_code: string;
+  interest_rate_percent: string;
+  due_at: string;
+  note?: string;
+};
+
+export type DashboardFriend = {
+  peer: LoanParty;
+  receivables: string;
+  payables: string;
+  net: string;
+};
+
+export type DashboardCurrency = {
+  currency_code: string;
+  receivables: string;
+  payables: string;
+  net: string;
+  due_soon: string;
+  due_soon_count: number;
+  pending_requests: number;
+  open_loan_count: number;
+  friends: DashboardFriend[];
+};
+
+export type Dashboard = {
+  pending_requests: number;
+  pending_confirmations: number;
+  by_currency: DashboardCurrency[];
+};
+
+export type BankProfile = {
+  id: string;
+  profile_type: 'bank_account' | 'mobile_wallet' | 'other' | string;
+  label: string;
+  institution_name?: string | null;
+  account_last4: string;
+  currency_code?: string | null;
+  is_preferred: boolean;
+  archived_at?: string | null;
+  created_at: string;
+  account_identifier?: string | null;
+  can_reveal: boolean;
+};
+
+export type BankProfileShare = {
+  id: string;
+  profile: BankProfile;
+  owner_id: string;
+  recipient_id: string;
+  loan_id?: string | null;
+  created_at: string;
+  revoked_at?: string | null;
+};
+
+export type CreateBankProfileBody = {
+  profile_type: string;
+  label: string;
+  institution_name?: string;
+  account_identifier: string;
+  currency_code?: string;
+  is_preferred?: boolean;
+};
+
+export type Repayment = {
+  id: string;
+  loan_id: string;
+  submitted_by_user_id: string;
+  amount: string;
+  status: string;
+  note?: string | null;
+  submitted_at: string;
+  confirmed_by_user_id?: string | null;
+  confirmed_at?: string | null;
+  rejected_at?: string | null;
+  rejection_reason?: string | null;
+  created_at: string;
+  can_confirm: boolean;
+  can_reject: boolean;
 };

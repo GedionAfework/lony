@@ -3,6 +3,7 @@ package httpx
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 )
 
@@ -60,6 +61,9 @@ func Error(w http.ResponseWriter, err error) {
 func Decode(r *http.Request, dst any) error {
 	dec := json.NewDecoder(r.Body)
 	if err := dec.Decode(dst); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
 		return Field(http.StatusBadRequest, "MALFORMED_JSON", "request body is invalid JSON", nil)
 	}
 	return nil

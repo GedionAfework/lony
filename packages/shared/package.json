@@ -1,6 +1,6 @@
 {
-  "name": "@equilend/shared",
+  "name": "@lony/shared",
   "private": true,
   "version": "0.1.0",
-  "description": "OpenAPI contract for the EquiLend API"
+  "description": "OpenAPI contract for the Lony API"
 }

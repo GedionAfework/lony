@@ -45,7 +45,7 @@ func main() {
 
 	errCh := make(chan error, 1)
 	go func() {
-		log.Printf("equilend api listening on %s (%s)", cfg.HTTPAddr, cfg.AppEnv)
+		log.Printf("lony api listening on %s (%s)", cfg.HTTPAddr, cfg.AppEnv)
 		errCh <- httpServer.ListenAndServe()
 	}()
 

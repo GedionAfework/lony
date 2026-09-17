@@ -1,4 +1,4 @@
-# EquiLend
+# Lony
 
 Shared peer loan ledger. Phase 1 is foundation: Go API auth + Expo sign-in shell.
 

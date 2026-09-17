@@ -1,8 +1,8 @@
 openapi: 3.0.3
 info:
-  title: EquiLend API
+  title: Lony API
   version: 0.1.0
-  description: Shared peer loan ledger. Phase 2 covers authentication, profile, and friendships.
+  description: Shared peer loan ledger. Phase 6 adds repayment claims and lender confirmation.
 servers:
   - url: http://localhost:8080/api/v1
 paths:
@@ -275,6 +275,491 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/FriendshipResponse"
+  /dashboard:
+    get:
+      summary: Currency-grouped balances and action cards
+      operationId: getDashboard
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Dashboard; no cross-currency total is returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardResponse"
+  /loans:
+    get:
+      summary: List loans for the current user
+      operationId: listLoans
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: status
+          schema: { type: string, enum: [pending, active, overdue, rejected, cancelled, completed] }
+        - in: query
+          name: role
+          schema: { type: string, enum: [borrower, lender] }
+        - in: query
+          name: currency
+          schema: { type: string, enum: [ETB, USD] }
+        - in: query
+          name: filter
+          schema: { type: string, enum: [receivables, payables, due_soon, pending_action, pending_confirmations] }
+      responses:
+        "200":
+          description: Loans
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoansResponse"
+    post:
+      summary: Create a loan request, optionally with terms
+      operationId: createLoan
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateLoanRequest"
+      responses:
+        "201":
+          description: Loan created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoanResponse"
+        "403":
+          description: Not accepted friends
+  /loans/{id}:
+    get:
+      summary: Loan details, terms history, and timeline
+      operationId: getLoan
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Loan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoanResponse"
+        "404":
+          description: Not found or not a party
+  /loans/{id}/terms:
+    post:
+      summary: Propose or replace pending terms
+      operationId: proposeLoanTerms
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoanTermsRequest"
+      responses:
+        "200":
+          description: Terms proposed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoanResponse"
+        "409":
+          description: Loan is not pending
+  /loans/{id}/accept:
+    post:
+      summary: Accept the current proposed terms
+      operationId: acceptLoan
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Loan is now active
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoanResponse"
+        "409":
+          description: Invalid state
+  /loans/{id}/reject:
+    post:
+      summary: Reject a pending loan
+      operationId: rejectLoan
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Rejected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoanResponse"
+        "409":
+          description: Invalid state
+  /loans/{id}/cancel:
+    post:
+      summary: Cancel a pending loan
+      operationId: cancelLoan
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Cancelled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoanResponse"
+        "409":
+          description: Invalid state
+  /loans/{id}/payment-profile:
+    get:
+      summary: Masked payment profile shared with the borrower for this loan
+      operationId: getLoanPaymentProfile
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+        - in: query
+          name: reveal
+          schema: { type: boolean }
+          description: Decrypt the account identifier. Requires recent authentication.
+      responses:
+        "200":
+          description: Payment profile; account_identifier only when reveal=true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BankProfileResponse"
+        "403":
+          description: Recent authentication required to reveal
+        "404":
+          description: No active share or not the borrower
+  /bank-profiles:
+    get:
+      summary: List the current user's payment profiles (last4 only)
+      operationId: listBankProfiles
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: include_archived
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: Profiles without full account identifiers
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BankProfilesResponse"
+    post:
+      summary: Create an encrypted payment profile
+      operationId: createBankProfile
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBankProfileRequest"
+      responses:
+        "201":
+          description: Created; response never includes the full identifier
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BankProfileResponse"
+  /bank-profiles/{id}:
+    get:
+      summary: Get a payment profile the caller owns or has an active share for
+      operationId: getBankProfile
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+        - in: query
+          name: reveal
+          schema: { type: boolean }
+      responses:
+        "200":
+          description: Profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BankProfileResponse"
+        "403":
+          description: Recent authentication required to reveal
+        "404":
+          description: Not found or unauthorized
+    patch:
+      summary: Update label, type, institution, currency, or identifier
+      operationId: patchBankProfile
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PatchBankProfileRequest"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BankProfileResponse"
+  /bank-profiles/{id}/archive:
+    post:
+      summary: Archive a payment profile
+      operationId: archiveBankProfile
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Archived
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BankProfileResponse"
+  /bank-profiles/{id}/preferred:
+    post:
+      summary: Mark this as the only preferred profile
+      operationId: preferBankProfile
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Preferred
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BankProfileResponse"
+  /bank-profiles/{id}/share:
+    post:
+      summary: Share a profile with a friend, optionally scoped to a loan
+      operationId: shareBankProfile
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ShareBankProfileRequest"
+      responses:
+        "200":
+          description: Share created or already active
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BankProfileShareResponse"
+        "403":
+          description: Not friends, or not the lender on the loan
+  /bank-profiles/{id}/events:
+    get:
+      summary: Audit events for a profile the caller owns (no full identifiers)
+      operationId: listBankProfileEvents
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BankProfileEventsResponse"
+  /bank-profile-shares:
+    get:
+      summary: List outgoing or incoming payment-profile shares
+      operationId: listBankProfileShares
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: direction
+          schema: { type: string, enum: [outgoing, incoming] }
+      responses:
+        "200":
+          description: Shares with masked profiles
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BankProfileSharesResponse"
+  /bank-profile-shares/{id}/revoke:
+    post:
+      summary: Revoke a share immediately
+      operationId: revokeBankProfileShare
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Revoked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BankProfileShareResponse"
+        "404":
+          description: Not found or not the owner
+  /loans/{id}/repayments:
+    get:
+      summary: List repayment claims for a loan
+      operationId: listLoanRepayments
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Repayments
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepaymentsResponse"
+    post:
+      summary: Borrower claims a repayment (default amount = outstanding)
+      operationId: claimRepayment
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClaimRepaymentRequest"
+      responses:
+        "201":
+          description: Claim created; loan becomes repayment_pending
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepaymentResponse"
+        "403":
+          description: Not the borrower
+        "409":
+          description: Pending claim exists or amount exceeds outstanding
+  /repayments/{id}/confirm:
+    post:
+      summary: Lender confirms a repayment claim
+      operationId: confirmRepayment
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Confirmed; loan completed when outstanding is zero
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepaymentResponse"
+        "403":
+          description: Not the lender, or borrower confirming own claim
+        "409":
+          description: Not pending
+  /repayments/{id}/reject:
+    post:
+      summary: Lender rejects a repayment claim with a reason
+      operationId: rejectRepayment
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RejectRepaymentRequest"
+      responses:
+        "200":
+          description: Rejected; loan returns to active or overdue
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepaymentResponse"
+        "403":
+          description: Not the lender
+        "409":
+          description: Not pending
 components:
   securitySchemes:
     bearerAuth:
@@ -397,6 +882,274 @@ components:
         email: { type: string, format: email }
         username: { type: string }
         user_id: { type: string, format: uuid }
+    CreateLoanRequest:
+      type: object
+      required: [counterparty_id, role]
+      properties:
+        counterparty_id: { type: string, format: uuid }
+        role: { type: string, enum: [borrower, lender] }
+        principal: { type: string, description: Decimal string, e.g. "1000.0000" }
+        currency_code: { type: string, enum: [ETB, USD] }
+        interest_rate_percent: { type: string }
+        due_at: { type: string, format: date-time }
+        note: { type: string, maxLength: 500 }
+    LoanTermsRequest:
+      type: object
+      required: [principal, currency_code, interest_rate_percent, due_at]
+      properties:
+        principal: { type: string }
+        currency_code: { type: string, enum: [ETB, USD] }
+        interest_rate_percent: { type: string }
+        due_at: { type: string, format: date-time }
+        note: { type: string, maxLength: 500 }
+    LoanParty:
+      type: object
+      required: [id, display_name]
+      properties:
+        id: { type: string, format: uuid }
+        display_name: { type: string }
+        username: { type: string, nullable: true }
+    LoanTerms:
+      type: object
+      required: [id, version, status, interest_basis, principal, currency_code, interest_rate_percent, interest_amount, expected_total, due_at, proposed_by_user_id, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        version: { type: integer }
+        status: { type: string, enum: [proposed, accepted, superseded] }
+        interest_basis: { type: string, example: flat_percent }
+        principal: { type: string }
+        currency_code: { type: string }
+        interest_rate_percent: { type: string }
+        interest_amount: { type: string }
+        expected_total: { type: string }
+        due_at: { type: string, format: date-time }
+        note: { type: string, nullable: true }
+        proposed_by_user_id: { type: string, format: uuid }
+        created_at: { type: string, format: date-time }
+    LoanEvent:
+      type: object
+      required: [id, event_type, payload, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        event_type: { type: string }
+        actor_id: { type: string, format: uuid, nullable: true }
+        payload: { type: object }
+        created_at: { type: string, format: date-time }
+    Loan:
+      type: object
+      required: [id, reference_code, status, borrower, lender, your_role, interest_basis, created_at, can_accept, can_reject, can_cancel, can_propose_terms]
+      properties:
+        id: { type: string, format: uuid }
+        reference_code: { type: string }
+        status: { type: string, enum: [pending, active, overdue, repayment_pending, rejected, cancelled, completed] }
+        borrower: { $ref: "#/components/schemas/LoanParty" }
+        lender: { $ref: "#/components/schemas/LoanParty" }
+        your_role: { type: string, enum: [borrower, lender] }
+        interest_basis: { type: string, example: flat_percent }
+        principal: { type: string, nullable: true }
+        currency_code: { type: string, nullable: true }
+        interest_rate_percent: { type: string, nullable: true }
+        interest_amount: { type: string, nullable: true }
+        expected_total: { type: string, nullable: true }
+        due_at: { type: string, format: date-time, nullable: true }
+        note: { type: string, nullable: true }
+        terms_version: { type: integer, nullable: true }
+        proposed_by_user_id: { type: string, format: uuid, nullable: true }
+        awaiting_user_id: { type: string, format: uuid, nullable: true }
+        accepted_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+        can_accept: { type: boolean }
+        can_reject: { type: boolean }
+        can_cancel: { type: boolean }
+        can_propose_terms: { type: boolean }
+        terms:
+          type: array
+          items: { $ref: "#/components/schemas/LoanTerms" }
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/LoanEvent" }
+    LoanResponse:
+      type: object
+      required: [loan]
+      properties:
+        loan: { $ref: "#/components/schemas/Loan" }
+    LoansResponse:
+      type: object
+      required: [loans]
+      properties:
+        loans:
+          type: array
+          items: { $ref: "#/components/schemas/Loan" }
+    DashboardFriendBalance:
+      type: object
+      required: [peer, receivables, payables, net]
+      properties:
+        peer: { $ref: "#/components/schemas/LoanParty" }
+        receivables: { type: string }
+        payables: { type: string }
+        net: { type: string }
+    DashboardCurrency:
+      type: object
+      required: [currency_code, receivables, payables, net, due_soon, due_soon_count, pending_requests, open_loan_count, friends]
+      properties:
+        currency_code: { type: string, enum: [ETB, USD] }
+        receivables: { type: string }
+        payables: { type: string }
+        net: { type: string }
+        due_soon: { type: string }
+        due_soon_count: { type: integer }
+        pending_requests: { type: integer }
+        open_loan_count: { type: integer }
+        friends:
+          type: array
+          items: { $ref: "#/components/schemas/DashboardFriendBalance" }
+    Dashboard:
+      type: object
+      required: [pending_requests, pending_confirmations, by_currency]
+      properties:
+        pending_requests: { type: integer }
+        pending_confirmations: { type: integer }
+        by_currency:
+          type: array
+          items: { $ref: "#/components/schemas/DashboardCurrency" }
+    DashboardResponse:
+      type: object
+      required: [dashboard]
+      properties:
+        dashboard: { $ref: "#/components/schemas/Dashboard" }
+    CreateBankProfileRequest:
+      type: object
+      required: [profile_type, label, account_identifier]
+      properties:
+        profile_type: { type: string, enum: [bank_account, mobile_wallet, other] }
+        label: { type: string, maxLength: 120 }
+        institution_name: { type: string, maxLength: 120 }
+        account_identifier: { type: string, minLength: 4, maxLength: 64 }
+        currency_code: { type: string, enum: [ETB, USD] }
+        is_preferred: { type: boolean }
+    PatchBankProfileRequest:
+      type: object
+      properties:
+        profile_type: { type: string, enum: [bank_account, mobile_wallet, other] }
+        label: { type: string, maxLength: 120 }
+        institution_name: { type: string, maxLength: 120 }
+        account_identifier: { type: string, minLength: 4, maxLength: 64 }
+        currency_code: { type: string, enum: [ETB, USD] }
+    ShareBankProfileRequest:
+      type: object
+      required: [recipient_id]
+      properties:
+        recipient_id: { type: string, format: uuid }
+        loan_id: { type: string, format: uuid }
+    BankProfile:
+      type: object
+      required: [id, profile_type, label, account_last4, is_preferred, created_at, can_reveal]
+      properties:
+        id: { type: string, format: uuid }
+        profile_type: { type: string, enum: [bank_account, mobile_wallet, other] }
+        label: { type: string }
+        institution_name: { type: string, nullable: true }
+        account_last4: { type: string }
+        currency_code: { type: string, nullable: true }
+        is_preferred: { type: boolean }
+        archived_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+        account_identifier:
+          type: string
+          description: Present only after an authorized reveal with recent authentication
+        can_reveal: { type: boolean }
+    BankProfileShare:
+      type: object
+      required: [id, profile, owner_id, recipient_id, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        profile: { $ref: "#/components/schemas/BankProfile" }
+        owner_id: { type: string, format: uuid }
+        recipient_id: { type: string, format: uuid }
+        loan_id: { type: string, format: uuid, nullable: true }
+        created_at: { type: string, format: date-time }
+        revoked_at: { type: string, format: date-time, nullable: true }
+    BankProfileEvent:
+      type: object
+      required: [id, event_type, payload, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        event_type: { type: string }
+        share_id: { type: string, format: uuid, nullable: true }
+        actor_id: { type: string, format: uuid, nullable: true }
+        payload: { type: object }
+        created_at: { type: string, format: date-time }
+    BankProfileResponse:
+      type: object
+      required: [bank_profile]
+      properties:
+        bank_profile: { $ref: "#/components/schemas/BankProfile" }
+    BankProfilesResponse:
+      type: object
+      required: [bank_profiles]
+      properties:
+        bank_profiles:
+          type: array
+          items: { $ref: "#/components/schemas/BankProfile" }
+    BankProfileShareResponse:
+      type: object
+      required: [share]
+      properties:
+        share: { $ref: "#/components/schemas/BankProfileShare" }
+    BankProfileSharesResponse:
+      type: object
+      required: [shares]
+      properties:
+        shares:
+          type: array
+          items: { $ref: "#/components/schemas/BankProfileShare" }
+    BankProfileEventsResponse:
+      type: object
+      required: [events]
+      properties:
+        events:
+          type: array
+          items: { $ref: "#/components/schemas/BankProfileEvent" }
+    ClaimRepaymentRequest:
+      type: object
+      properties:
+        amount: { type: string, description: Defaults to outstanding balance }
+        note: { type: string, maxLength: 500 }
+    RejectRepaymentRequest:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, maxLength: 500 }
+    Repayment:
+      type: object
+      required: [id, loan_id, submitted_by_user_id, amount, status, submitted_at, created_at, can_confirm, can_reject]
+      properties:
+        id: { type: string, format: uuid }
+        loan_id: { type: string, format: uuid }
+        submitted_by_user_id: { type: string, format: uuid }
+        amount: { type: string }
+        status: { type: string, enum: [pending, confirmed, rejected, cancelled] }
+        note: { type: string, nullable: true }
+        submitted_at: { type: string, format: date-time }
+        confirmed_by_user_id: { type: string, format: uuid, nullable: true }
+        confirmed_at: { type: string, format: date-time, nullable: true }
+        rejected_at: { type: string, format: date-time, nullable: true }
+        rejection_reason: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+        can_confirm: { type: boolean }
+        can_reject: { type: boolean }
+    RepaymentResponse:
+      type: object
+      required: [repayment]
+      properties:
+        repayment: { $ref: "#/components/schemas/Repayment" }
+    RepaymentsResponse:
+      type: object
+      required: [repayments]
+      properties:
+        repayments:
+          type: array
+          items: { $ref: "#/components/schemas/Repayment" }
     ErrorResponse:
       type: object
       required: [error]

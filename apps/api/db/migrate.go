@@ -42,36 +42,45 @@ func Migrate(ctx context.Context, databaseURL string) error {
 		}
 		defer tx.Rollback(ctx)
 		if _, err := tx.Exec(ctx, string(schemaSQL)); err != nil {
-			return fmt.Errorf("apply 00001: %w", err)
+			return fmt.Errorf("apply baseline schema: %w", err)
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO schema_migrations (version) VALUES ('00001'), ('00002')`); err != nil {
+		if _, err := tx.Exec(ctx, `INSERT INTO schema_migrations (version) VALUES ('00001'), ('00002'), ('00003'), ('00004'), ('00005')`); err != nil {
 			return fmt.Errorf("record baseline: %w", err)
 		}
 		return tx.Commit(ctx)
 	}
 
-	has00002, err := applied(ctx, pool, "00002")
+	if err := applyMigration(ctx, pool, "00002", "migrations/00002_friendships.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00004", "migrations/00004_bank_profiles.sql"); err != nil {
+		return err
+	}
+	return applyMigration(ctx, pool, "00005", "migrations/00005_repayments.sql")
+}
+
+func applyMigration(ctx context.Context, pool *pgxpool.Pool, version, path string) error {
+	ok, err := applied(ctx, pool, version)
 	if err != nil {
 		return err
 	}
-	if has00002 {
+	if ok {
 		return nil
 	}
-
-	sql00002, err := files.ReadFile("migrations/00002_friendships.sql")
+	sqlb, err := files.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("embed 00002: %w", err)
+		return fmt.Errorf("embed %s: %w", version, err)
 	}
 	tx, err := pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, string(sql00002)); err != nil {
-		return fmt.Errorf("apply 00002: %w", err)
+	if _, err := tx.Exec(ctx, string(sqlb)); err != nil {
+		return fmt.Errorf("apply %s: %w", version, err)
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO schema_migrations (version) VALUES ('00002')`); err != nil {
-		return fmt.Errorf("record 00002: %w", err)
+	if _, err := tx.Exec(ctx, `INSERT INTO schema_migrations (version) VALUES ($1)`, version); err != nil {
+		return fmt.Errorf("record %s: %w", version, err)
 	}
 	return tx.Commit(ctx)
 }

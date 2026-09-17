@@ -1,8 +1,8 @@
-# EquiLend — Build Roadmap
+# Lony — Build Roadmap
 
 Personal Loan Ledger mobile application: shared loan tracking, reminders, repayment confirmation, dashboard analytics, and bank-profile sharing.
 
-This file is the working plan for building the product. Behavior comes from the product PDFs. Look and layout come from the Stitch EquiLend screens.
+This file is the working plan for building the product. Behavior comes from the product PDFs. Look and layout come from the Stitch Lony screens.
 
 | Source | Role |
 |---|---|
@@ -10,7 +10,7 @@ This file is the working plan for building the product. Behavior comes from the 
 | `Loan_App_SDS.pdf` | How to implement it |
 | `Loan_App_Architectural_Design.pdf` | System boundaries and ADRs |
 | `Loan_App_Database_Design.pdf` | PostgreSQL schema and invariants |
-| `stitch_peer_loan_ledger_app.zip` | EquiLend visual system and screens |
+| `stitch_peer_loan_ledger_app.zip` | Lony visual system and screens |
 
 **Where they conflict, specs win for behavior; Stitch wins for look.**
 
@@ -18,7 +18,7 @@ This file is the working plan for building the product. Behavior comes from the 
 
 ## Product in one paragraph
 
-EquiLend is a **shared ledger and reminder app**, not a bank, wallet, or payment processor. Two users record a personal loan, both accept the terms, money moves **outside** the app (CBE, telebirr, bank transfer, etc.), the borrower claims repayment, and the lender confirms. The platform never holds funds, never initiates transfers, does not score credit, and does not collect debt.
+Lony is a **shared ledger and reminder app**, not a bank, wallet, or payment processor. Two users record a personal loan, both accept the terms, money moves **outside** the app (CBE, telebirr, bank transfer, etc.), the borrower claims repayment, and the lender confirms. The platform never holds funds, never initiates transfers, does not score credit, and does not collect debt.
 
 A user may be borrower on one loan and lender on another.
 
@@ -65,7 +65,7 @@ The database may reserve fields for later (partial repayments, attachments, futu
 
 ## Design vs spec (apply while building)
 
-Follow EquiLend screens for dark fintech UI (teal primary, amber pending, blue for bank/security, Manrope + JetBrains Mono, bottom nav).
+Follow Lony screens for dark fintech UI (teal primary, amber pending, blue for bank/security, Manrope + JetBrains Mono, bottom nav).
 
 Do **not** implement these mockup extras as MVP behavior:
 
@@ -266,7 +266,7 @@ Stand up the empty repo so everything else has a home.
 - Accessibility: not color-only status, 44pt targets, locale money/dates
 - Backups, alerts, runbooks (DB, queue, push, secret rotation)
 - Legal disclaimer in onboarding and loan accept
-- Pixel pass against EquiLend screens (tokens, type, spacing)
+- Pixel pass against Lony screens (tokens, type, spacing)
 - EAS / signed iOS and Android builds
 
 **Definition of done:** SRS section 25 acceptance list is true, and the app is ready for TestFlight / Play internal testing.
@@ -348,7 +348,7 @@ Money: `NUMERIC(20,4)`. Currency: `CHAR(3)`. Timestamps: `TIMESTAMPTZ` UTC. IDs:
 
 ---
 
-## EquiLend screens to implement
+## Lony screens to implement
 
 Build these Stitch screens as the primary UI, with spec-compliant copy and flows.
 
@@ -357,7 +357,7 @@ Build these Stitch screens as the primary UI, with spec-compliant copy and flows
 3. **Loan details** — status, terms, masked bank profile, reminder, event log
 4. **Repayment confirmation** — claimed amount, optional proof, confirm or reject, zero-custody notice
 5. **Bank profiles** — list, preferred, mask/reveal/copy, share/revoke
-6. **Auth / profile / friends / activity** — not in the zip; design to the same tokens in `equilend/DESIGN.md`
+6. **Auth / profile / friends / activity** — not in the zip; design to the same tokens in `Lony/DESIGN.md`
 
 Brand tokens (from Stitch): surface `#0b1326`, primary `#6bd8cb` / `#0D9488`, secondary `#ffb95f` / `#F59E0B`, tertiary `#93ccff` / `#0284C7`. Type: Manrope (UI), JetBrains Mono (ledger numbers).
 
@@ -382,6 +382,6 @@ Critical end-to-end path (from SDS testing strategy):
 
 Phase 0 is this document. After the frozen decisions above are accepted:
 
-**Start Phase 1** — scaffold the monorepo, SQL schema for users/sessions, Go auth API, OpenAPI spec, and an Expo shell with EquiLend splash + sign-in.
+**Start Phase 1** — scaffold the monorepo, SQL schema for users/sessions, Go auth API, OpenAPI spec, and an Expo shell with Lony splash + sign-in.
 
 Do not skip ahead to loans or dashboard until Phase 1 definition of done is met.

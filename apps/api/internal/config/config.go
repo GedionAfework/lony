@@ -1,8 +1,11 @@
 package config
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -17,6 +20,7 @@ type Config struct {
 	AccessTokenTTL      time.Duration
 	RefreshTokenTTL     time.Duration
 	VerificationCodeTTL time.Duration
+	BankKey             []byte
 }
 
 func Load() (Config, error) {
@@ -40,7 +44,28 @@ func Load() (Config, error) {
 	if len(cfg.JWTSecret) < 32 {
 		return Config{}, fmt.Errorf("JWT_SECRET must be at least 32 characters")
 	}
+	key, err := loadBankKey(os.Getenv("BANK_ENCRYPTION_KEY"), cfg.JWTSecret, cfg.Dev())
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.BankKey = key
 	return cfg, nil
+}
+
+func loadBankKey(hexKey, jwtSecret string, dev bool) ([]byte, error) {
+	hexKey = strings.TrimSpace(hexKey)
+	if hexKey != "" {
+		key, err := hex.DecodeString(hexKey)
+		if err != nil || len(key) != 32 {
+			return nil, fmt.Errorf("BANK_ENCRYPTION_KEY must be 64 hex characters")
+		}
+		return key, nil
+	}
+	if !dev {
+		return nil, fmt.Errorf("BANK_ENCRYPTION_KEY is required")
+	}
+	sum := sha256.Sum256([]byte("equilend-bank-profiles|" + jwtSecret))
+	return sum[:], nil
 }
 
 func (c Config) Dev() bool {

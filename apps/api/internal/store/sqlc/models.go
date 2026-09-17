@@ -75,3 +75,104 @@ type Friendship struct {
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
 }
+
+type Loan struct {
+	ID                  uuid.UUID  `json:"id"`
+	ReferenceCode       string     `json:"reference_code"`
+	BorrowerID          uuid.UUID  `json:"borrower_id"`
+	LenderID            uuid.UUID  `json:"lender_id"`
+	InitiatorID         uuid.UUID  `json:"initiator_id"`
+	Status              string     `json:"status"`
+	PrincipalAmount     *string    `json:"principal_amount"`
+	CurrencyCode        *string    `json:"currency_code"`
+	InterestRatePercent *string    `json:"interest_rate_percent"`
+	InterestAmount      *string    `json:"interest_amount"`
+	ExpectedTotal       *string    `json:"expected_total"`
+	OutstandingAmount   *string    `json:"outstanding_amount"`
+	DueAt               *time.Time `json:"due_at"`
+	Note                *string    `json:"note"`
+	CurrentTermsID      *uuid.UUID `json:"current_terms_id"`
+	AcceptedTermsID     *uuid.UUID `json:"accepted_terms_id"`
+	TermsVersion        *int32     `json:"terms_version"`
+	ProposedByUserID    *uuid.UUID `json:"proposed_by_user_id"`
+	AcceptedAt          *time.Time `json:"accepted_at"`
+	CreatedAt           time.Time  `json:"created_at"`
+	UpdatedAt           time.Time  `json:"updated_at"`
+}
+
+type LoanTerm struct {
+	ID                  uuid.UUID `json:"id"`
+	LoanID              uuid.UUID `json:"loan_id"`
+	Version             int32     `json:"version"`
+	PrincipalAmount     string    `json:"principal_amount"`
+	CurrencyCode        string    `json:"currency_code"`
+	InterestRatePercent string    `json:"interest_rate_percent"`
+	InterestAmount      string    `json:"interest_amount"`
+	ExpectedTotal       string    `json:"expected_total"`
+	DueAt               time.Time `json:"due_at"`
+	Note                *string   `json:"note"`
+	ProposedByUserID    uuid.UUID `json:"proposed_by_user_id"`
+	Status              string    `json:"status"`
+	CreatedAt           time.Time `json:"created_at"`
+}
+
+type LoanEvent struct {
+	ID        uuid.UUID  `json:"id"`
+	LoanID    uuid.UUID  `json:"loan_id"`
+	ActorID   *uuid.UUID `json:"actor_id"`
+	EventType string     `json:"event_type"`
+	Payload   []byte     `json:"payload"`
+	CreatedAt time.Time  `json:"created_at"`
+}
+
+type BankProfile struct {
+	ID                         uuid.UUID  `json:"id"`
+	UserID                     uuid.UUID  `json:"user_id"`
+	ProfileType                string     `json:"profile_type"`
+	Label                      string     `json:"label"`
+	InstitutionName            *string    `json:"institution_name"`
+	AccountIdentifierEncrypted []byte     `json:"account_identifier_encrypted"`
+	AccountLast4               string     `json:"account_last4"`
+	CurrencyCode               *string    `json:"currency_code"`
+	IsPreferred                bool       `json:"is_preferred"`
+	ArchivedAt                 *time.Time `json:"archived_at"`
+	CreatedAt                  time.Time  `json:"created_at"`
+	UpdatedAt                  time.Time  `json:"updated_at"`
+}
+
+type BankProfileShare struct {
+	ID            uuid.UUID  `json:"id"`
+	BankProfileID uuid.UUID  `json:"bank_profile_id"`
+	OwnerID       uuid.UUID  `json:"owner_id"`
+	RecipientID   uuid.UUID  `json:"recipient_id"`
+	LoanID        *uuid.UUID `json:"loan_id"`
+	CreatedAt     time.Time  `json:"created_at"`
+	RevokedAt     *time.Time `json:"revoked_at"`
+}
+
+type BankProfileEvent struct {
+	ID            uuid.UUID  `json:"id"`
+	BankProfileID uuid.UUID  `json:"bank_profile_id"`
+	ShareID       *uuid.UUID `json:"share_id"`
+	ActorID       *uuid.UUID `json:"actor_id"`
+	EventType     string     `json:"event_type"`
+	Payload       []byte     `json:"payload"`
+	CreatedAt     time.Time  `json:"created_at"`
+}
+
+type Repayment struct {
+	ID                 uuid.UUID  `json:"id"`
+	LoanID             uuid.UUID  `json:"loan_id"`
+	SubmittedByUserID  uuid.UUID  `json:"submitted_by_user_id"`
+	Amount             string     `json:"amount"`
+	Status             string     `json:"status"`
+	Note               *string    `json:"note"`
+	ProofAttachmentID  *uuid.UUID `json:"proof_attachment_id"`
+	SubmittedAt        time.Time  `json:"submitted_at"`
+	ConfirmedByUserID  *uuid.UUID `json:"confirmed_by_user_id"`
+	ConfirmedAt        *time.Time `json:"confirmed_at"`
+	RejectedAt         *time.Time `json:"rejected_at"`
+	RejectionReason    *string    `json:"rejection_reason"`
+	CreatedAt          time.Time  `json:"created_at"`
+	UpdatedAt          time.Time  `json:"updated_at"`
+}

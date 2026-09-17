@@ -12,11 +12,12 @@ import (
 )
 
 type SQLStore struct {
-	q *sqlc.Queries
+	pool *pgxpool.Pool
+	q    *sqlc.Queries
 }
 
 func New(pool *pgxpool.Pool) *SQLStore {
-	return &SQLStore{q: sqlc.New(pool)}
+	return &SQLStore{pool: pool, q: sqlc.New(pool)}
 }
 
 func (s *SQLStore) CreateUser(ctx context.Context, email, passwordHash, displayName, timezone, locale string) (auth.UserRecord, error) {

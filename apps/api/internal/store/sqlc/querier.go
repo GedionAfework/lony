@@ -3,6 +3,7 @@ package sqlc
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -33,6 +34,37 @@ type Querier interface {
 	ListAcceptedFriendships(ctx context.Context, userID uuid.UUID) ([]Friendship, error)
 	ListIncomingFriendRequests(ctx context.Context, addresseeID uuid.UUID) ([]Friendship, error)
 	ListOutgoingFriendRequests(ctx context.Context, requesterID uuid.UUID) ([]Friendship, error)
+	InsertLoan(ctx context.Context, arg InsertLoanParams) (Loan, error)
+	GetLoanByID(ctx context.Context, id uuid.UUID) (Loan, error)
+	ListLoansForUser(ctx context.Context, arg ListLoansForUserParams) ([]Loan, error)
+	UpdateLoan(ctx context.Context, arg UpdateLoanParams) (Loan, error)
+	InsertLoanTerms(ctx context.Context, arg InsertLoanTermsParams) (LoanTerm, error)
+	ListLoanTerms(ctx context.Context, loanID uuid.UUID) ([]LoanTerm, error)
+	SupersedeProposedLoanTerms(ctx context.Context, loanID uuid.UUID) error
+	AcceptLoanTerms(ctx context.Context, id uuid.UUID) (LoanTerm, error)
+	InsertLoanEvent(ctx context.Context, arg InsertLoanEventParams) (LoanEvent, error)
+	ListLoanEvents(ctx context.Context, loanID uuid.UUID) ([]LoanEvent, error)
+	MarkLoansOverdue(ctx context.Context, dueBefore time.Time) ([]Loan, error)
+	InsertBankProfile(ctx context.Context, arg InsertBankProfileParams) (BankProfile, error)
+	GetBankProfileByID(ctx context.Context, id uuid.UUID) (BankProfile, error)
+	ListBankProfilesForUser(ctx context.Context, arg ListBankProfilesForUserParams) ([]BankProfile, error)
+	UpdateBankProfile(ctx context.Context, arg UpdateBankProfileParams) (BankProfile, error)
+	ClearPreferredBankProfiles(ctx context.Context, userID uuid.UUID) error
+	InsertBankProfileShare(ctx context.Context, arg InsertBankProfileShareParams) (BankProfileShare, error)
+	GetBankProfileShareByID(ctx context.Context, id uuid.UUID) (BankProfileShare, error)
+	GetActiveBankProfileShare(ctx context.Context, arg GetActiveBankProfileShareParams) (BankProfileShare, error)
+	ListBankProfileSharesForOwner(ctx context.Context, ownerID uuid.UUID) ([]BankProfileShare, error)
+	ListBankProfileSharesForRecipient(ctx context.Context, recipientID uuid.UUID) ([]BankProfileShare, error)
+	ActiveBankProfileShareForLoan(ctx context.Context, arg ActiveBankProfileShareForLoanParams) (BankProfileShare, error)
+	RevokeBankProfileShare(ctx context.Context, id uuid.UUID) (BankProfileShare, error)
+	InsertBankProfileEvent(ctx context.Context, arg InsertBankProfileEventParams) (BankProfileEvent, error)
+	ListBankProfileEvents(ctx context.Context, bankProfileID uuid.UUID) ([]BankProfileEvent, error)
+	InsertRepayment(ctx context.Context, arg InsertRepaymentParams) (Repayment, error)
+	GetRepaymentByID(ctx context.Context, id uuid.UUID) (Repayment, error)
+	ListRepaymentsForLoan(ctx context.Context, loanID uuid.UUID) ([]Repayment, error)
+	GetPendingRepaymentForLoan(ctx context.Context, loanID uuid.UUID) (Repayment, error)
+	UpdateRepayment(ctx context.Context, arg UpdateRepaymentParams) (Repayment, error)
+	SumClaimedAgainstOutstanding(ctx context.Context, loanID uuid.UUID) (string, error)
 }
 
 var _ Querier = (*Queries)(nil)

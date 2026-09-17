@@ -6,9 +6,13 @@ import (
 	"time"
 
 	"equilend/api/internal/auth"
+	"equilend/api/internal/banks"
 	"equilend/api/internal/config"
+	"equilend/api/internal/dashboard"
 	"equilend/api/internal/friends"
 	"equilend/api/internal/httpx"
+	"equilend/api/internal/loans"
+	"equilend/api/internal/repayments"
 	"equilend/api/internal/store"
 
 	"github.com/go-chi/chi/v5"
@@ -19,7 +23,15 @@ import (
 
 func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.Handler {
 	authH := auth.NewHandler(auth.NewService(sqlStore, cfg))
-	friendsH := friends.NewHandler(friends.NewService(sqlStore))
+	friendsSvc := friends.NewService(sqlStore)
+	friendsH := friends.NewHandler(friendsSvc)
+	loansSvc := loans.NewService(sqlStore, friendsSvc)
+	loansH := loans.NewHandler(loansSvc)
+	dashH := dashboard.NewHandler(dashboard.NewService(loansSvc))
+	banksSvc := banks.NewService(sqlStore, loansSvc, friendsSvc, cfg.BankKey)
+	banksH := banks.NewHandler(banksSvc)
+	repaySvc := repayments.NewService(sqlStore, loansSvc)
+	repayH := repayments.NewHandler(repaySvc)
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -66,6 +78,31 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 			r.Post("/friend-requests/{id}/accept", friendsH.Accept)
 			r.Post("/friend-requests/{id}/reject", friendsH.Reject)
 			r.Post("/friendships/{id}/remove", friendsH.Remove)
+
+			r.Get("/dashboard", dashH.Get)
+			r.Post("/loans", loansH.Create)
+			r.Get("/loans", loansH.List)
+			r.Get("/loans/{id}", loansH.Get)
+			r.Get("/loans/{id}/payment-profile", banksH.LoanPaymentProfile)
+			r.Post("/loans/{id}/terms", loansH.ProposeTerms)
+			r.Post("/loans/{id}/accept", loansH.Accept)
+			r.Post("/loans/{id}/reject", loansH.Reject)
+			r.Post("/loans/{id}/cancel", loansH.Cancel)
+			r.Post("/loans/{id}/repayments", repayH.Claim)
+			r.Get("/loans/{id}/repayments", repayH.ListForLoan)
+			r.Post("/repayments/{id}/confirm", repayH.Confirm)
+			r.Post("/repayments/{id}/reject", repayH.Reject)
+
+			r.Get("/bank-profiles", banksH.List)
+			r.Post("/bank-profiles", banksH.Create)
+			r.Get("/bank-profiles/{id}", banksH.Get)
+			r.Patch("/bank-profiles/{id}", banksH.Patch)
+			r.Post("/bank-profiles/{id}/archive", banksH.Archive)
+			r.Post("/bank-profiles/{id}/preferred", banksH.Preferred)
+			r.Post("/bank-profiles/{id}/share", banksH.Share)
+			r.Get("/bank-profiles/{id}/events", banksH.Events)
+			r.Get("/bank-profile-shares", banksH.ListShares)
+			r.Post("/bank-profile-shares/{id}/revoke", banksH.Revoke)
 		})
 	})
 

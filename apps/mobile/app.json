@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "EquiLend",
-    "slug": "equilend",
+    "name": "Lony",
+    "slug": "lony",
     "version": "0.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
@@ -12,13 +12,13 @@
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "io.equilend.app"
+      "bundleIdentifier": "io.lony.app"
     },
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#0b1326"
       },
-      "package": "io.equilend.app"
+      "package": "io.lony.app"
     },
     "plugins": [
       "expo-secure-store"

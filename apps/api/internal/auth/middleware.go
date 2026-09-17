@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"equilend/api/internal/httpx"
 
@@ -15,11 +16,13 @@ type ctxKey int
 const (
 	userIDKey ctxKey = iota
 	sessionIDKey
+	issuedAtKey
 )
 
-func ContextWithIdentity(ctx context.Context, userID, sessionID uuid.UUID) context.Context {
+func ContextWithIdentity(ctx context.Context, userID, sessionID uuid.UUID, issuedAt time.Time) context.Context {
 	ctx = context.WithValue(ctx, userIDKey, userID)
-	return context.WithValue(ctx, sessionIDKey, sessionID)
+	ctx = context.WithValue(ctx, sessionIDKey, sessionID)
+	return context.WithValue(ctx, issuedAtKey, issuedAt)
 }
 
 func UserIDFrom(ctx context.Context) uuid.UUID {
@@ -29,6 +32,11 @@ func UserIDFrom(ctx context.Context) uuid.UUID {
 
 func SessionIDFrom(ctx context.Context) uuid.UUID {
 	v, _ := ctx.Value(sessionIDKey).(uuid.UUID)
+	return v
+}
+
+func IssuedAtFrom(ctx context.Context) time.Time {
+	v, _ := ctx.Value(issuedAtKey).(time.Time)
 	return v
 }
 
@@ -51,7 +59,11 @@ func Middleware(secret string) func(http.Handler) http.Handler {
 				httpx.Error(w, httpx.E(http.StatusUnauthorized, "UNAUTHORIZED", "invalid access token"))
 				return
 			}
-			next.ServeHTTP(w, r.WithContext(ContextWithIdentity(r.Context(), userID, claims.SessionID)))
+			var issuedAt time.Time
+			if claims.IssuedAt != nil {
+				issuedAt = claims.IssuedAt.Time
+			}
+			next.ServeHTTP(w, r.WithContext(ContextWithIdentity(r.Context(), userID, claims.SessionID, issuedAt)))
 		})
 	}
 }
