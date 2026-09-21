@@ -153,10 +153,17 @@ export const api = {
   logout: (token: string) => request<void>('/auth/logout', { method: 'POST' }, token),
   searchUsers: (token: string, q: string) =>
     request<{ users: SearchHit[] }>(`/users/search?q=${encodeURIComponent(q)}`, { method: 'GET' }, token),
+  lookupPhone: (token: string, phone: string) =>
+    request<{
+      found: boolean;
+      phone: string;
+      friendship_status?: string;
+      user?: SearchHit;
+    }>(`/users/lookup-phone?phone=${encodeURIComponent(phone)}`, { method: 'GET' }, token),
   listFriends: (token: string) => request<{ friends: Friendship[] }>('/friends', { method: 'GET' }, token),
   listIncoming: (token: string) =>
     request<{ requests: Friendship[] }>('/friend-requests', { method: 'GET' }, token),
-  sendRequest: (token: string, body: { email?: string; username?: string; user_id?: string }) =>
+  sendRequest: (token: string, body: { email?: string; username?: string; phone?: string; user_id?: string }) =>
     request<{ friendship: Friendship }>('/friend-requests', {
       method: 'POST',
       headers: { 'Idempotency-Key': idemKey('friend-request') },
@@ -534,8 +541,16 @@ export type Conversation = {
   id: string;
   peer: { id: string; display_name: string };
   loan_id?: string | null;
+  active_loan_id?: string | null;
+  money_role?: 'lent' | 'borrowed' | null;
+  money_amount?: string | null;
+  money_currency?: string | null;
+  money_due_at?: string | null;
+  money_ref?: string | null;
   last_message_preview?: string;
   last_message_at?: string | null;
+  last_message_mine?: boolean;
+  last_message_read?: boolean;
   unread_count: number;
   created_at: string;
 };
@@ -551,6 +566,7 @@ export type ChatMessage = {
   conversation_id: string;
   sender_id: string;
   mine: boolean;
+  read?: boolean;
   body?: string | null;
   reply_to?: ChatMessage | null;
   attachment_kind: string;

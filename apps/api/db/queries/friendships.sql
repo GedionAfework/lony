@@ -2,6 +2,10 @@
 SELECT * FROM users
 WHERE username = $1 AND deleted_at IS NULL;
 
+-- name: GetUserByPhone :one
+SELECT * FROM users
+WHERE phone_e164 = $1 AND deleted_at IS NULL;
+
 -- name: SearchUsers :many
 SELECT id, username, display_name
 FROM users
@@ -12,6 +16,7 @@ WHERE deleted_at IS NULL
   AND (
     email = sqlc.arg('query')
     OR username = sqlc.arg('query')
+    OR phone_e164 = sqlc.arg('query')
     OR (
       char_length(sqlc.arg('query')::text) >= 2
       AND (

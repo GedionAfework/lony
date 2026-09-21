@@ -44,8 +44,44 @@ func (s *Service) Search(ctx context.Context, viewer uuid.UUID, query string) ([
 	return s.store.SearchUsers(ctx, viewer, strings.ToLower(q))
 }
 
-func (s *Service) Request(ctx context.Context, actor uuid.UUID, email, username string, userID *uuid.UUID) (FriendDTO, error) {
-	target, err := s.resolveTarget(ctx, actor, email, username, userID)
+func (s *Service) LookupPhone(ctx context.Context, viewer uuid.UUID, phone string) (map[string]any, error) {
+	phone = normalizePhoneE164(phone)
+	if phone == "" {
+		return nil, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"phone": "must be an E.164 phone number",
+		})
+	}
+	u, err := s.store.LookupByPhone(ctx, phone)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return map[string]any{"found": false, "phone": phone}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if u.ID == viewer || !u.Verified || u.Status != "active" {
+		return map[string]any{"found": false, "phone": phone}, nil
+	}
+	status := ""
+	low, high := CanonicalPair(viewer, u.ID)
+	if row, err := s.store.GetFriendshipByPair(ctx, low, high); err == nil {
+		status = row.Status
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, err
+	}
+	return map[string]any{
+		"found": true,
+		"phone": phone,
+		"friendship_status": status,
+		"user": SearchHit{
+			ID:          u.ID,
+			DisplayName: u.DisplayName,
+			Username:    u.Username,
+		},
+	}, nil
+}
+
+func (s *Service) Request(ctx context.Context, actor uuid.UUID, email, username, phone string, userID *uuid.UUID) (FriendDTO, error) {
+	target, err := s.resolveTarget(ctx, actor, email, username, phone, userID)
 	if err != nil {
 		return FriendDTO{}, err
 	}
@@ -252,9 +288,10 @@ func (s *Service) CanCreateLoan(ctx context.Context, a, b uuid.UUID) (bool, erro
 	return row.Status == StatusAccepted, nil
 }
 
-func (s *Service) resolveTarget(ctx context.Context, actor uuid.UUID, email, username string, userID *uuid.UUID) (UserRef, error) {
+func (s *Service) resolveTarget(ctx context.Context, actor uuid.UUID, email, username, phone string, userID *uuid.UUID) (UserRef, error) {
 	email = strings.TrimSpace(strings.ToLower(email))
 	username = strings.TrimSpace(strings.ToLower(username))
+	phone = normalizePhoneE164(phone)
 	switch {
 	case userID != nil:
 		u, err := s.store.LookupUser(ctx, *userID)
@@ -273,6 +310,12 @@ func (s *Service) resolveTarget(ctx context.Context, actor uuid.UUID, email, use
 			return UserRef{}, httpx.E(http.StatusNotFound, "NOT_FOUND", "user not found")
 		}
 		return u, err
+	case phone != "":
+		u, err := s.store.LookupByPhone(ctx, phone)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return UserRef{}, httpx.E(http.StatusNotFound, "NOT_FOUND", "user not found")
+		}
+		return u, err
 	case username != "":
 		u, err := s.store.LookupByUsername(ctx, username)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -282,9 +325,38 @@ func (s *Service) resolveTarget(ctx context.Context, actor uuid.UUID, email, use
 	default:
 		_ = actor
 		return UserRef{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
-			"email": "provide email, username, or user_id",
+			"email": "provide email, username, phone, or user_id",
 		})
 	}
+}
+
+func normalizePhoneE164(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	var b strings.Builder
+	if strings.HasPrefix(raw, "+") {
+		b.WriteByte('+')
+		raw = raw[1:]
+	}
+	for _, r := range raw {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	out := b.String()
+	if !strings.HasPrefix(out, "+") {
+		if len(out) < 8 {
+			return ""
+		}
+		out = "+" + out
+	}
+	digits := strings.TrimPrefix(out, "+")
+	if len(digits) < 8 || len(digits) > 15 {
+		return ""
+	}
+	return out
 }
 
 func (s *Service) mustGet(ctx context.Context, id uuid.UUID) (Record, error) {

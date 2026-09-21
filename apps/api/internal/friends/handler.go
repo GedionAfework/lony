@@ -21,6 +21,7 @@ func NewHandler(svc *Service) *Handler {
 type requestBody struct {
 	Email    string     `json:"email"`
 	Username string     `json:"username"`
+	Phone    string     `json:"phone"`
 	UserID   *uuid.UUID `json:"user_id"`
 }
 
@@ -33,13 +34,23 @@ func (h *Handler) Search(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"users": hits})
 }
 
+func (h *Handler) LookupPhone(w http.ResponseWriter, r *http.Request) {
+	phone := r.URL.Query().Get("phone")
+	out, err := h.svc.LookupPhone(r.Context(), auth.UserIDFrom(r.Context()), phone)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, out)
+}
+
 func (h *Handler) Request(w http.ResponseWriter, r *http.Request) {
 	var body requestBody
 	if err := httpx.Decode(r, &body); err != nil {
 		httpx.Error(w, err)
 		return
 	}
-	out, err := h.svc.Request(r.Context(), auth.UserIDFrom(r.Context()), body.Email, body.Username, body.UserID)
+	out, err := h.svc.Request(r.Context(), auth.UserIDFrom(r.Context()), body.Email, body.Username, body.Phone, body.UserID)
 	if err != nil {
 		httpx.Error(w, err)
 		return

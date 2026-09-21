@@ -61,6 +61,7 @@ func (s *SQLStore) ListConversations(ctx context.Context, userID uuid.UUID) ([]c
 SELECT
   c.id, c.user_low_id, c.user_high_id, c.loan_id, c.last_message_at, c.created_at,
   m.body, m.attachment_kind, m.sender_id, m.created_at,
+  peer_cm.last_read_at,
   (
     SELECT COUNT(*)::int FROM messages msg
     WHERE msg.conversation_id = c.id
@@ -70,6 +71,10 @@ SELECT
   ) AS unread_count
 FROM conversations c
 JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = $1
+LEFT JOIN conversation_members peer_cm
+  ON peer_cm.conversation_id = c.id
+ AND peer_cm.user_id = CASE WHEN c.user_low_id = $1 THEN c.user_high_id ELSE c.user_low_id END
+ AND c.user_low_id <> c.user_high_id
 LEFT JOIN LATERAL (
   SELECT body, attachment_kind, sender_id, created_at
   FROM messages
@@ -88,7 +93,8 @@ ORDER BY COALESCE(c.last_message_at, c.created_at) DESC`
 		var row chat.ConversationListRow
 		if err := rows.Scan(
 			&row.ID, &row.UserLowID, &row.UserHighID, &row.LoanID, &row.LastMessageAt, &row.CreatedAt,
-			&row.LastBody, &row.LastAttachmentKind, &row.LastSenderID, &row.LastCreatedAt, &row.UnreadCount,
+			&row.LastBody, &row.LastAttachmentKind, &row.LastSenderID, &row.LastCreatedAt,
+			&row.PeerLastReadAt, &row.UnreadCount,
 		); err != nil {
 			return nil, err
 		}
@@ -105,6 +111,16 @@ func (s *SQLStore) TouchConversation(ctx context.Context, id uuid.UUID, at time.
 func (s *SQLStore) MarkConversationRead(ctx context.Context, conversationID, userID uuid.UUID, at time.Time) error {
 	_, err := s.pool.Exec(ctx, `UPDATE conversation_members SET last_read_at=$3 WHERE conversation_id=$1 AND user_id=$2`, conversationID, userID, at)
 	return err
+}
+
+func (s *SQLStore) GetMemberLastRead(ctx context.Context, conversationID, userID uuid.UUID) (*time.Time, error) {
+	const q = `SELECT last_read_at FROM conversation_members WHERE conversation_id=$1 AND user_id=$2`
+	var at *time.Time
+	err := s.pool.QueryRow(ctx, q, conversationID, userID).Scan(&at)
+	if err != nil {
+		return nil, err
+	}
+	return at, nil
 }
 
 func (s *SQLStore) CanAccessMediaKey(ctx context.Context, userID uuid.UUID, objectKey string) (bool, error) {

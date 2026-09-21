@@ -116,6 +116,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 			r.With(idem.Handler("auth.avatar")).Post("/me/avatar", authH.UploadAvatar)
 
 			r.Get("/users/search", friendsH.Search)
+			r.Get("/users/lookup-phone", friendsH.LookupPhone)
 			r.With(idem.Handler("friends.block")).Post("/users/{userID}/block", friendsH.Block)
 			r.Get("/friends", friendsH.ListFriends)
 			r.With(idem.Handler("friends.request")).Post("/friend-requests", friendsH.Request)

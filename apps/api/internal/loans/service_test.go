@@ -151,12 +151,15 @@ func TestRequestThenLenderSetsTerms(t *testing.T) {
 	}
 }
 
-func TestFriendshipRequired(t *testing.T) {
+func TestCreateWithoutFriendship(t *testing.T) {
 	a, b, _, _ := setup()
 	svc := NewService(newMemoryStore(a, b), staticGate{ok: false})
-	_, err := svc.Create(context.Background(), a.ID, CreateInput{CounterpartyID: b.ID, Role: RoleBorrower})
-	if err == nil {
-		t.Fatal("expected not friends")
+	created, err := svc.Create(context.Background(), a.ID, CreateInput{CounterpartyID: b.ID, Role: RoleBorrower})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Status != StatusPending {
+		t.Fatalf("status %s", created.Status)
 	}
 }
 

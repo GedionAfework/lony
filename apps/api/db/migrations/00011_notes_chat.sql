@@ -1,20 +1,17 @@
 -- Allow notes / private self-chat threads (same user on both sides).
-ALTER TABLE conversations DROP CONSTRAINT IF EXISTS conversations_user_low_id_check;
-ALTER TABLE conversations DROP CONSTRAINT IF EXISTS conversations_check;
+-- Drop any CHECK that requires user_low_id <> user_high_id on conversations.
 
 DO $$
+DECLARE
+  r record;
 BEGIN
-  IF EXISTS (
-    SELECT 1 FROM pg_constraint
-    WHERE conrelid = 'conversations'::regclass AND contype = 'c'
-      AND pg_get_constraintdef(oid) LIKE '%user_low_id%user_high_id%'
-  ) THEN
-    EXECUTE (
-      SELECT 'ALTER TABLE conversations DROP CONSTRAINT ' || quote_ident(conname)
-      FROM pg_constraint
-      WHERE conrelid = 'conversations'::regclass AND contype = 'c'
-        AND pg_get_constraintdef(oid) LIKE '%user_low_id%<>%user_high_id%'
-      LIMIT 1
-    );
-  END IF;
+  FOR r IN
+    SELECT c.conname
+    FROM pg_constraint c
+    WHERE c.conrelid = 'conversations'::regclass
+      AND c.contype = 'c'
+      AND pg_get_constraintdef(c.oid) ILIKE '%user_low_id%user_high_id%'
+  LOOP
+    EXECUTE format('ALTER TABLE conversations DROP CONSTRAINT %I', r.conname);
+  END LOOP;
 END $$;

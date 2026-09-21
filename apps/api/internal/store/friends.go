@@ -25,6 +25,19 @@ func (s *SQLStore) LookupByEmail(ctx context.Context, email string) (friends.Use
 	return mapUserRef(row), nil
 }
 
+func (s *SQLStore) LookupByPhone(ctx context.Context, phoneE164 string) (friends.UserRef, error) {
+	const q = `SELECT id, email, username, display_name, status, email_verified_at IS NOT NULL
+		FROM users WHERE phone_e164 = $1 AND deleted_at IS NULL`
+	var u friends.UserRef
+	var verified bool
+	err := s.pool.QueryRow(ctx, q, phoneE164).Scan(&u.ID, &u.Email, &u.Username, &u.DisplayName, &u.Status, &verified)
+	if err != nil {
+		return friends.UserRef{}, err
+	}
+	u.Verified = verified
+	return u, nil
+}
+
 func (s *SQLStore) LookupByUsername(ctx context.Context, username string) (friends.UserRef, error) {
 	row, err := s.q.GetUserByUsername(ctx, username)
 	if err != nil {
@@ -34,15 +47,41 @@ func (s *SQLStore) LookupByUsername(ctx context.Context, username string) (frien
 }
 
 func (s *SQLStore) SearchUsers(ctx context.Context, viewer uuid.UUID, query string) ([]friends.SearchHit, error) {
-	rows, err := s.q.SearchUsers(ctx, sqlc.SearchUsersParams{ViewerID: viewer, Query: query})
+	const q = `
+SELECT id, username, display_name
+FROM users
+WHERE deleted_at IS NULL
+  AND email_verified_at IS NOT NULL
+  AND status = 'active'
+  AND id <> $1
+  AND (
+    email = $2
+    OR username = $2
+    OR phone_e164 = $2
+    OR (
+      char_length($2) >= 2
+      AND (
+        username ILIKE $2 || '%'
+        OR display_name ILIKE '%' || $2 || '%'
+      )
+    )
+  )
+ORDER BY display_name
+LIMIT 20`
+	rows, err := s.pool.Query(ctx, q, viewer, query)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]friends.SearchHit, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, friends.SearchHit{ID: row.ID, DisplayName: row.DisplayName, Username: row.Username})
+	defer rows.Close()
+	out := make([]friends.SearchHit, 0)
+	for rows.Next() {
+		var hit friends.SearchHit
+		if err := rows.Scan(&hit.ID, &hit.Username, &hit.DisplayName); err != nil {
+			return nil, err
+		}
+		out = append(out, hit)
 	}
-	return out, nil
+	return out, rows.Err()
 }
 
 func (s *SQLStore) InsertFriendship(ctx context.Context, rec friends.Record) (friends.Record, error) {

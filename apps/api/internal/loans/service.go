@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"equilend/api/internal/chat"
 	"equilend/api/internal/httpx"
 	"equilend/api/internal/legal"
 
@@ -50,14 +51,13 @@ func (s *Service) Create(ctx context.Context, actor uuid.UUID, in CreateInput) (
 		})
 	}
 	if in.CounterpartyID == uuid.Nil || in.CounterpartyID == actor {
-		return LoanDTO{}, httpx.E(http.StatusUnprocessableEntity, "VALIDATION", "choose a friend as the other party")
+		return LoanDTO{}, httpx.E(http.StatusUnprocessableEntity, "VALIDATION", "choose someone as the other party")
 	}
-	ok, err := s.gate.CanCreateLoan(ctx, actor, in.CounterpartyID)
-	if err != nil {
+	if _, err := s.store.GetParty(ctx, in.CounterpartyID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return LoanDTO{}, httpx.E(http.StatusNotFound, "NOT_FOUND", "user not found")
+		}
 		return LoanDTO{}, err
-	}
-	if !ok {
-		return LoanDTO{}, httpx.E(http.StatusForbidden, "NOT_FRIENDS", "you can only start a loan with an accepted friend")
 	}
 
 	rec := Record{
@@ -291,6 +291,72 @@ func (s *Service) LoanPeer(ctx context.Context, actor, loanID uuid.UUID) (peerID
 		return uuid.Nil, "", err
 	}
 	return rec.OtherParty(actor), rec.ReferenceCode, nil
+}
+
+// MoneyForLoan returns money involvement for a specific loan when still open.
+func (s *Service) MoneyForLoan(ctx context.Context, actor, loanID uuid.UUID) (*chat.MoneyLink, error) {
+	rec, err := s.mustGet(ctx, actor, loanID)
+	if err != nil {
+		return nil, err
+	}
+	return moneyLinkFromRecord(actor, rec), nil
+}
+
+// ActiveMoneyBetween finds the most recently updated open loan between actor and peer.
+func (s *Service) ActiveMoneyBetween(ctx context.Context, actor, peerID uuid.UUID) (*chat.MoneyLink, error) {
+	rows, err := s.store.ListLoans(ctx, actor, "", "")
+	if err != nil {
+		return nil, err
+	}
+	var best *Record
+	for i := range rows {
+		rec := &rows[i]
+		if rec.OtherParty(actor) != peerID {
+			continue
+		}
+		if !isOpenMoneyStatus(rec.Status) {
+			continue
+		}
+		if best == nil || rec.UpdatedAt.After(best.UpdatedAt) {
+			best = rec
+		}
+	}
+	if best == nil {
+		return nil, nil
+	}
+	return moneyLinkFromRecord(actor, *best), nil
+}
+
+func isOpenMoneyStatus(status string) bool {
+	switch status {
+	case StatusActive, StatusOverdue, StatusRepaymentPending:
+		return true
+	default:
+		return false
+	}
+}
+
+func moneyLinkFromRecord(actor uuid.UUID, rec Record) *chat.MoneyLink {
+	if !isOpenMoneyStatus(rec.Status) {
+		return nil
+	}
+	role := "borrowed"
+	if rec.RoleOf(actor) == RoleLender {
+		role = "lent"
+	}
+	link := &chat.MoneyLink{
+		LoanID:        rec.ID,
+		Role:          role,
+		Status:        rec.Status,
+		ReferenceCode: rec.ReferenceCode,
+		CurrencyCode:  rec.CurrencyCode,
+		DueAt:         rec.DueAt,
+	}
+	if rec.Principal != nil {
+		v := rec.Principal.StringFixed(2)
+		link.Amount = &v
+	}
+	return link
 }
 
 func (s *Service) MarkOverdue(ctx context.Context) (int, error) {

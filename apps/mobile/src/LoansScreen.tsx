@@ -1,24 +1,12 @@
 import { Pressable, Text, View } from 'react-native';
-import type { Friendship, Loan, SearchHit, User } from './api';
+import type { Loan, User } from './api';
 import { fonts, radii, space, useTheme } from './theme';
-import { Card, EmptyState, Field, Money, PrimaryButton, SecondaryButton, StatusPill } from './ui';
+import { Card, EmptyState, Money, PrimaryButton, StatusPill } from './ui';
 
 type Props = {
   user: User;
   loans: Loan[];
-  friends: Friendship[];
-  incoming: Friendship[];
-  hits: SearchHit[];
-  query: string;
   loanFilter: string;
-  busy: boolean;
-  onQuery: (v: string) => void;
-  onSearch: () => void;
-  onAdd: (hit: SearchHit) => void;
-  onAccept: (id: string) => void;
-  onReject: (id: string) => void;
-  onRemove: (id: string) => void;
-  onBlock: (userId: string) => void;
   onFilter: (filter: string) => void;
   onOpenLoan: (id: string) => void;
   onNewLoan: () => void;
@@ -28,19 +16,7 @@ type Props = {
 export function LoansScreen({
   user,
   loans,
-  friends,
-  incoming,
-  hits,
-  query,
   loanFilter,
-  busy,
-  onQuery,
-  onSearch,
-  onAdd,
-  onAccept,
-  onReject,
-  onRemove,
-  onBlock,
   onFilter,
   onOpenLoan,
   onNewLoan,
@@ -54,12 +30,14 @@ export function LoansScreen({
         <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>Loans</Text>
         {loanFilter ? (
           <Pressable onPress={() => onFilter('')}>
-            <Text style={{ color: colors.tertiary, fontFamily: fonts.uiSemi, fontSize: 13 }}>Clear filter</Text>
+            <Text style={{ color: colors.tertiary, fontFamily: fonts.uiSemi, fontSize: 13 }}>Clear</Text>
           </Pressable>
         ) : null}
       </View>
 
-      <View style={{ flexDirection: 'row', gap: 8 }}>
+      <PrimaryButton label="New loan" onPress={onNewLoan} />
+
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
         {[
           { id: '', label: 'All' },
           { id: 'pending_action', label: 'Requests' },
@@ -98,9 +76,8 @@ export function LoansScreen({
         <Card>
           <EmptyState
             title="No loans in sight"
-            body="Add a friend, then create a shared ledger entry. Quiet is good — until it isn’t."
+            body="Start with a friend — or invite someone from your contacts. They’ll need to approve before it goes live."
           />
-          <PrimaryButton label="Create loan" onPress={onNewLoan} />
         </Card>
       ) : (
         loans.map((loan) => {
@@ -158,42 +135,6 @@ export function LoansScreen({
           );
         })
       )}
-
-      <Card>
-        <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>Friends</Text>
-        <Field label="Search email or name" value={query} onChange={onQuery} />
-        <PrimaryButton label={busy ? 'Working…' : 'Search'} onPress={onSearch} disabled={busy} />
-        {hits.map((hit) => (
-          <View key={hit.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <View style={{ flex: 1 }}>
-              <Text style={{ color: colors.text, fontFamily: fonts.uiSemi }}>{hit.display_name}</Text>
-              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
-                {hit.username ?? hit.id.slice(0, 8)}
-              </Text>
-            </View>
-            <SecondaryButton label="Add" onPress={() => onAdd(hit)} disabled={busy} />
-          </View>
-        ))}
-        {incoming.map((req) => (
-          <View key={req.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <View style={{ flex: 1 }}>
-              <Text style={{ color: colors.text, fontFamily: fonts.uiSemi }}>{req.peer.display_name}</Text>
-              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>Incoming request</Text>
-            </View>
-            <SecondaryButton label="Accept" onPress={() => onAccept(req.id)} disabled={busy} />
-            <SecondaryButton label="Reject" onPress={() => onReject(req.id)} disabled={busy} />
-          </View>
-        ))}
-        {friends.map((friend) => (
-          <View key={friend.id} style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <View style={{ flex: 1 }}>
-              <Text style={{ color: colors.text, fontFamily: fonts.uiSemi }}>{friend.peer.display_name}</Text>
-            </View>
-            <SecondaryButton label="Remove" onPress={() => onRemove(friend.id)} disabled={busy} />
-            <SecondaryButton label="Block" onPress={() => onBlock(friend.peer.id)} disabled={busy} />
-          </View>
-        ))}
-      </Card>
     </View>
   );
 }

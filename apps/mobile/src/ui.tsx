@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Image, Pressable, StyleSheet, Text, TextInput, View, type TextInputProps, type ViewStyle } from 'react-native';
+import { Pressable, StyleSheet, Text, TextInput, View, type TextInputProps, type ViewStyle } from 'react-native';
 import { IconMoon, IconSun } from './icons';
 import { fonts, radii, space, useTheme, type ThemeColors } from './theme';
 
@@ -9,14 +9,22 @@ export function Screen({ children, style }: { children: React.ReactNode; style?:
 }
 
 export function BrandMark({ compact = false, hero = false }: { compact?: boolean; hero?: boolean }) {
-  const size = hero ? 72 : compact ? 32 : 48;
+  const { colors } = useTheme();
+  const fontSize = hero ? 42 : compact ? 20 : 28;
   return (
     <View style={{ alignItems: 'center', justifyContent: 'center' }}>
-      <Image
-        source={require('../assets/logo.png')}
-        style={{ width: size, height: size, resizeMode: 'contain' }}
+      <Text
+        style={{
+          color: colors.text,
+          fontFamily: fonts.uiSemi,
+          fontSize,
+          letterSpacing: hero ? 0.5 : 0.2,
+        }}
+        accessibilityRole="header"
         accessibilityLabel="Lony"
-      />
+      >
+        Lony
+      </Text>
     </View>
   );
 }

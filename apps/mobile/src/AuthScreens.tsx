@@ -1,6 +1,6 @@
 import { Pressable, Text, View } from 'react-native';
 import { fonts, radii, space, useTheme } from './theme';
-import { BrandMark, Card, CheckRow, Field, PrimaryButton, ThemeToggle } from './ui';
+import { BrandMark, Card, CheckRow, Field, PrimaryButton } from './ui';
 import { IconGoogle, IconTelegram } from './icons';
 
 type Mode = 'login' | 'register' | 'verify';
@@ -55,9 +55,6 @@ export function AuthScreens({
   return (
     <View style={{ gap: space.lg, paddingTop: space.md }}>
       <View style={{ alignItems: 'center', gap: space.md }}>
-        <View style={{ alignSelf: 'flex-end' }}>
-          <ThemeToggle />
-        </View>
         <BrandMark hero />
       </View>
 

@@ -55,6 +55,7 @@ type Store interface {
 	LookupUser(ctx context.Context, id uuid.UUID) (UserRef, error)
 	LookupByEmail(ctx context.Context, email string) (UserRef, error)
 	LookupByUsername(ctx context.Context, username string) (UserRef, error)
+	LookupByPhone(ctx context.Context, phoneE164 string) (UserRef, error)
 	SearchUsers(ctx context.Context, viewer uuid.UUID, query string) ([]SearchHit, error)
 
 	InsertFriendship(ctx context.Context, rec Record) (Record, error)

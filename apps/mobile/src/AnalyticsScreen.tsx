@@ -20,10 +20,13 @@ function convert(amount: number, from: string, to: string, rates: Record<string,
 
 export function AnalyticsScreen({ user, dashboard, formatMoney }: Props) {
   const { colors } = useTheme();
-  const preferred = (user.default_currency_code || '').toUpperCase() || 'USD';
-  const [rates, setRates] = useState<Record<string, number>>({ [preferred]: 1 });
+  const preferred = (user.default_currency_code || '').toUpperCase();
+  const [rates, setRates] = useState<Record<string, number>>(() =>
+    preferred ? { [preferred]: 1 } : {},
+  );
 
   useEffect(() => {
+    if (!preferred) return;
     api
       .fxRates(preferred)
       .then((res) => {
@@ -93,6 +96,15 @@ export function AnalyticsScreen({ user, dashboard, formatMoney }: Props) {
   return (
     <View style={{ gap: space.md }}>
       <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>Analytics</Text>
+      {!preferred ? (
+        <Card>
+          <EmptyState
+            title="Pick your currency"
+            body="Set a default currency in Settings so analytics use your unit of choice."
+          />
+        </Card>
+      ) : (
+        <>
       <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
         Everything converted to {preferred}. Original currencies stay in the breakdown.
       </Text>
@@ -204,6 +216,8 @@ export function AnalyticsScreen({ user, dashboard, formatMoney }: Props) {
               ))
             )}
           </Card>
+        </>
+      )}
         </>
       )}
     </View>

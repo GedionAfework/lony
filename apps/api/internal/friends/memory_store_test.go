@@ -68,6 +68,10 @@ func (m *memoryStore) LookupByUsername(_ context.Context, username string) (User
 	return m.users[id], nil
 }
 
+func (m *memoryStore) LookupByPhone(_ context.Context, phone string) (UserRef, error) {
+	return UserRef{}, pgx.ErrNoRows
+}
+
 func (m *memoryStore) SearchUsers(_ context.Context, viewer uuid.UUID, query string) ([]SearchHit, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -125,6 +125,16 @@ func (m *memoryStore) MarkConversationRead(_ context.Context, conversationID, us
 	m.readAt[conversationID.String()+"|"+userID.String()] = at
 	return nil
 }
+func (m *memoryStore) GetMemberLastRead(_ context.Context, conversationID, userID uuid.UUID) (*time.Time, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	at, ok := m.readAt[conversationID.String()+"|"+userID.String()]
+	if !ok {
+		return nil, nil
+	}
+	cp := at
+	return &cp, nil
+}
 func (m *memoryStore) InsertMessage(_ context.Context, msg Message) (Message, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -255,6 +265,94 @@ func TestSendReplyReact(t *testing.T) {
 	})
 	if err != nil || voice.AttachmentKind != KindVoice {
 		t.Fatalf("%+v %v", voice, err)
+	}
+}
+
+func TestOpenOrCreateWithoutFriendship(t *testing.T) {
+	a, b := uuid.New(), uuid.New()
+	store := newMem(a, b)
+	// Gate always denies — chat must still open.
+	svc := NewService(store, memMedia{}, memGate{ok: false})
+	ctx := context.Background()
+
+	conv, err := svc.OpenOrCreate(ctx, a, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conv.Peer.ID != b {
+		t.Fatalf("peer %+v", conv.Peer)
+	}
+}
+
+func TestOpenOrCreateSelf(t *testing.T) {
+	a := uuid.New()
+	store := newMem(a, a)
+	svc := NewService(store, memMedia{}, memGate{ok: false})
+	ctx := context.Background()
+
+	conv, err := svc.OpenOrCreate(ctx, a, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conv.Peer.ID != a || conv.Peer.DisplayName != "Self" {
+		t.Fatalf("want Self peer %+v", conv.Peer)
+	}
+	again, err := svc.OpenOrCreate(ctx, a, a)
+	if err != nil || again.ID != conv.ID {
+		t.Fatalf("idempotent self chat %+v %v", again, err)
+	}
+}
+
+type memLoans struct {
+	peer uuid.UUID
+	ref  string
+}
+
+func (m memLoans) LoanPeer(context.Context, uuid.UUID, uuid.UUID) (uuid.UUID, string, error) {
+	return m.peer, m.ref, nil
+}
+func (m memLoans) MoneyForLoan(context.Context, uuid.UUID, uuid.UUID) (*MoneyLink, error) {
+	return nil, nil
+}
+func (m memLoans) ActiveMoneyBetween(context.Context, uuid.UUID, uuid.UUID) (*MoneyLink, error) {
+	return nil, nil
+}
+
+func TestOpenForLoanReusesPairChat(t *testing.T) {
+	a, b := uuid.New(), uuid.New()
+	store := newMem(a, b)
+	svc := NewService(store, memMedia{}, memGate{ok: true})
+	svc.SetLoans(memLoans{peer: b, ref: "LN-1"})
+	ctx := context.Background()
+
+	dm, err := svc.OpenOrCreate(ctx, a, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loanID := uuid.New()
+	opened, err := svc.OpenForLoan(ctx, a, loanID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opened.ID != dm.ID {
+		t.Fatalf("expected existing DM %s, got %s", dm.ID, opened.ID)
+	}
+}
+
+func TestOpenForLoanCreatesPairWhenMissing(t *testing.T) {
+	a, b := uuid.New(), uuid.New()
+	store := newMem(a, b)
+	svc := NewService(store, memMedia{}, memGate{ok: true})
+	svc.SetLoans(memLoans{peer: b, ref: "LN-2"})
+	ctx := context.Background()
+
+	opened, err := svc.OpenForLoan(ctx, a, uuid.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := svc.OpenOrCreate(ctx, a, b)
+	if err != nil || again.ID != opened.ID {
+		t.Fatalf("loan open should create reusable pair DM %+v %+v %v", opened, again, err)
 	}
 }
 

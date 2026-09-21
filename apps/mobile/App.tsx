@@ -34,10 +34,14 @@ import { AuthScreens } from './src/AuthScreens';
 import { BottomNav, type TabId } from './src/BottomNav';
 import { COUNTRIES, CURRENCIES } from './src/catalogs';
 import { ChatScreen } from './src/ChatScreen';
+import { ChatSearchScreen } from './src/ChatSearchScreen';
 import { DashboardHome } from './src/DashboardHome';
 import { DateField } from './src/DateField';
 import { DrawerMenu, type DrawerItem } from './src/DrawerMenu';
+import { IconSearch } from './src/icons';
 import { LoansScreen } from './src/LoansScreen';
+import { NewLoanScreen } from './src/NewLoanScreen';
+import { PeerProfileScreen } from './src/PeerProfileScreen';
 import {
   idTokenFromGoogleResponse,
   openTelegramLogin,
@@ -47,7 +51,7 @@ import {
 import { OnboardingScreen } from './src/OnboardingScreen';
 import { PlaceholderScreen } from './src/PlaceholderScreen';
 import { TermsScreen } from './src/TermsScreen';
-import { ThemeProvider, useTheme } from './src/theme';
+import { ThemeProvider, radii, useTheme } from './src/theme';
 import { registerPushToken } from './src/push';
 import { SearchSelect } from './src/SearchSelect';
 import { SettingsScreen } from './src/SettingsScreen';
@@ -105,6 +109,8 @@ type Screen =
   | 'expenses'
   | 'analytics'
   | 'plan'
+  | 'peer-profile'
+  | 'chat-search'
   | 'tos';
 
 export default function App() {
@@ -148,6 +154,8 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   const [loans, setLoans] = useState<Loan[]>([]);
   const [selectedLoan, setSelectedLoan] = useState<Loan | null>(null);
   const [loanFriendId, setLoanFriendId] = useState<string>('');
+  const [loanLockedPeer, setLoanLockedPeer] = useState<{ id: string; display_name: string } | null>(null);
+  const [chatThreadOpen, setChatThreadOpen] = useState(false);
   const [loanRole, setLoanRole] = useState<'borrower' | 'lender'>('borrower');
   const [principal, setPrincipal] = useState('');
   const [interest, setInterest] = useState('0');
@@ -188,6 +196,8 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   const [profileTimezone, setProfileTimezone] = useState('UTC');
   const [onboardingTos, setOnboardingTos] = useState(false);
   const [chatLoanId, setChatLoanId] = useState<string | null>(null);
+  const [chatPeerId, setChatPeerId] = useState<string | null>(null);
+  const [peerProfile, setPeerProfile] = useState<{ id: string; display_name: string; username?: string | null } | null>(null);
   const [editingBankId, setEditingBankId] = useState<string | null>(null);
   const [editBankLabel, setEditBankLabel] = useState('');
   const [email, setEmail] = useState('');
@@ -1045,16 +1055,26 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   const showNav =
     authed &&
     user?.profile_complete &&
-    (screen === 'home' || screen === 'loans' || screen === 'chats');
+    !chatThreadOpen &&
+    (screen === 'home' || screen === 'loans' || screen === 'chats' || screen === 'chat-search');
 
   const showChrome =
     authed &&
     user?.profile_complete &&
+    !chatThreadOpen &&
     !['login', 'register', 'verify', 'onboarding', 'tos'].includes(screen);
 
   function drawerActive(): DrawerItem | null {
     if (screen === 'expenses') return 'expenses';
-    if (screen === 'loans' || screen === 'home' || screen === 'chats' || screen === 'loan' || screen === 'new-loan') {
+    if (
+      screen === 'loans' ||
+      screen === 'home' ||
+      screen === 'chats' ||
+      screen === 'chat-search' ||
+      screen === 'loan' ||
+      screen === 'new-loan' ||
+      screen === 'peer-profile'
+    ) {
       return 'loans';
     }
     if (screen === 'analytics') return 'analytics';
@@ -1065,7 +1085,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
 
   function tabFromScreen(s: Screen): TabId {
     if (s === 'loans') return 'loans';
-    if (s === 'chats') return 'chats';
+    if (s === 'chats' || s === 'chat-search' || s === 'peer-profile') return 'chats';
     return 'home';
   }
 
@@ -1092,6 +1112,40 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     }
   }
 
+  const loansModule =
+    screen === 'home' ||
+    screen === 'loans' ||
+    screen === 'chats' ||
+    screen === 'chat-search' ||
+    screen === 'loan' ||
+    screen === 'new-loan' ||
+    screen === 'peer-profile';
+
+  const selfInitial = user
+    ? ((user.first_name || user.display_name || user.username || '?').trim().slice(0, 1).toUpperCase() || '?')
+    : '?';
+
+  const headerSearch =
+    showChrome && loansModule ? (
+      <Pressable
+        onPress={() => setScreen('chat-search')}
+        accessibilityRole="button"
+        accessibilityLabel="Search people"
+        style={{
+          width: 40,
+          height: 40,
+          borderRadius: radii.md,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: colors.surfaceMuted,
+          borderWidth: 1,
+          borderColor: colors.border,
+        }}
+      >
+        <IconSearch size={18} color={colors.text} />
+      </Pressable>
+    ) : undefined;
+
   return (
     <SafeAreaView style={styles.safe}>
       <StatusBar style={resolved === 'dark' ? 'light' : 'dark'} />
@@ -1106,32 +1160,53 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
           onSelect={onDrawerSelect}
         />
         {screen === 'chats' && user && token ? (
-          <View style={[styles.flex, { paddingHorizontal: 16, paddingTop: 8 }]}>
-            {showChrome ? <AppHeader onMenu={() => setDrawerOpen(true)} /> : null}
+          <View style={[styles.flex, { paddingHorizontal: chatThreadOpen ? 12 : 16, paddingTop: chatThreadOpen ? 4 : 8 }]}>
+            {showChrome ? <AppHeader onMenu={() => setDrawerOpen(true)} right={headerSearch} /> : null}
             {error ? <Text style={[styles.error, { paddingTop: 8 }]}>{error}</Text> : null}
             <ChatScreen
               token={token}
               userId={user.id}
+              selfInitial={selfInitial}
               friends={friends}
               openLoanId={chatLoanId}
+              openPeerId={chatPeerId}
               onLoanOpened={() => setChatLoanId(null)}
-              onBack={() => setScreen('loans')}
+              onPeerOpened={() => setChatPeerId(null)}
               onError={(message) => setError(message)}
-              notifications={notifications}
-              unreadCount={unreadCount}
-              onMarkAllRead={onMarkAllNotificationsRead}
-              onMarkRead={onMarkNotificationRead}
+              onActiveChange={setChatThreadOpen}
               onOpenLoan={openLoan}
-              locale={user.locale}
+              onOpenProfile={(peer) => {
+                setPeerProfile(peer);
+                setScreen('peer-profile');
+              }}
+              onCreateLoanWith={(peer) => {
+                setLoanFriendId(peer.id);
+                setLoanLockedPeer({ id: peer.id, display_name: peer.display_name });
+                setCurrency(user.default_currency_code ?? '');
+                setScreen('new-loan');
+              }}
             />
           </View>
+        ) : screen === 'chat-search' && user && token ? (
+          <ScrollView contentContainerStyle={[styles.container, showNav ? { paddingBottom: 96 } : null]} keyboardShouldPersistTaps="handled">
+            {error ? <Text style={styles.error}>{error}</Text> : null}
+            {showChrome ? <AppHeader onMenu={() => setDrawerOpen(true)} right={headerSearch} /> : null}
+            <ChatSearchScreen
+              token={token}
+              onError={(message) => setError(message)}
+              onOpenChat={(peer) => {
+                setChatPeerId(peer.id);
+                setScreen('chats');
+              }}
+            />
+          </ScrollView>
         ) : (
         <ScrollView
           contentContainerStyle={[styles.container, showNav ? { paddingBottom: 96 } : null]}
           keyboardShouldPersistTaps="handled"
         >
           {error ? <Text style={styles.error}>{error}</Text> : null}
-          {showChrome ? <AppHeader onMenu={() => setDrawerOpen(true)} /> : null}
+          {showChrome ? <AppHeader onMenu={() => setDrawerOpen(true)} right={headerSearch} /> : null}
 
           {!authed && (screen === 'login' || screen === 'register' || screen === 'verify') ? (
             <AuthScreens
@@ -1194,23 +1269,12 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
             <LoansScreen
               user={user}
               loans={loans}
-              friends={friends}
-              incoming={incoming}
-              hits={hits}
-              query={query}
               loanFilter={loanFilter}
-              busy={busy}
-              onQuery={setQuery}
-              onSearch={onSearch}
-              onAdd={onAdd}
-              onAccept={onAccept}
-              onReject={onReject}
-              onRemove={onRemove}
-              onBlock={onBlock}
               onFilter={applyLoanFilter}
               onOpenLoan={openLoan}
               onNewLoan={() => {
                 setLoanFriendId(friends[0]?.peer.id ?? '');
+                setLoanLockedPeer(null);
                 setCurrency(user.default_currency_code ?? '');
                 setScreen('new-loan');
               }}
@@ -1296,47 +1360,72 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
             />
           ) : null}
 
-          {screen === 'new-loan' ? (
-            <View style={{ gap: 14 }}>
-              <ScreenHeader title="New loan" onBack={() => setScreen('loans')} />
-              <Card>
-                <Text style={styles.muted}>Shared record only. Money still moves outside the app.</Text>
-                <SectionLabel>Friend</SectionLabel>
-                {friends.length === 0 ? (
-                  <EmptyState title="No friends yet" body="Add a friend from Loans before creating a loan." />
-                ) : (
-                  friends.map((friend) => (
-                    <Pressable
-                      key={friend.id}
-                      style={[styles.row, loanFriendId === friend.peer.id ? styles.selectedRow : null]}
-                      onPress={() => setLoanFriendId(friend.peer.id)}
-                    >
-                      <Text style={styles.rowTitle}>{friend.peer.display_name}</Text>
-                    </Pressable>
-                  ))
-                )}
-                <SectionLabel>Your role</SectionLabel>
-                <View style={styles.row}>
-                  <Pressable style={loanRole === 'borrower' ? styles.smallButton : styles.ghostButton} onPress={() => setLoanRole('borrower')}>
-                    <Text style={loanRole === 'borrower' ? styles.smallButtonText : styles.ghostButtonText}>I borrow</Text>
-                  </Pressable>
-                  <Pressable style={loanRole === 'lender' ? styles.smallButton : styles.ghostButton} onPress={() => setLoanRole('lender')}>
-                    <Text style={loanRole === 'lender' ? styles.smallButtonText : styles.ghostButtonText}>I lend</Text>
-                  </Pressable>
-                </View>
-                <SectionLabel>Terms</SectionLabel>
-                <Field label="Principal" value={principal} onChange={setPrincipal} keyboardType="decimal-pad" />
-                <Field label="Flat interest %" value={interest} onChange={setInterest} keyboardType="decimal-pad" />
-                <SearchSelect label="Currency" value={currency} onChange={setCurrency} options={CURRENCIES} placeholder="Select currency" />
-                <DateField label="Due date" value={dueDate} onChange={setDueDate} />
-                <Field label="Note" value={note} onChange={setNote} />
-                <PrimaryButton
-                  label={busy ? 'Working…' : 'Send for acceptance'}
-                  onPress={onCreateLoan}
-                  disabled={busy || !loanFriendId || !currency || !principal}
-                />
-              </Card>
-            </View>
+          {screen === 'new-loan' && user && token ? (
+            <NewLoanScreen
+              friends={friends}
+              loanFriendId={loanFriendId}
+              loanRole={loanRole}
+              principal={principal}
+              interest={interest}
+              currency={currency}
+              dueDate={dueDate}
+              note={note}
+              busy={busy}
+              countryCode={profileCountry || user.country_code || 'ET'}
+              lockedPeer={loanLockedPeer}
+              onSelectFriend={setLoanFriendId}
+              onRole={setLoanRole}
+              onPrincipal={setPrincipal}
+              onInterest={setInterest}
+              onCurrency={setCurrency}
+              onDueDate={setDueDate}
+              onNote={setNote}
+              onBack={() => setScreen(loanLockedPeer ? 'chats' : 'loans')}
+              onCreate={onCreateLoan}
+              onError={(message) => setError(message)}
+              onLookupPhone={async (e164) => {
+                if (!token) return 'error';
+                setBusy(true);
+                setError(null);
+                try {
+                  const res = await api.lookupPhone(token, e164);
+                  if (!res.found || !res.user) {
+                    return 'invited';
+                  }
+                  setLoanFriendId(res.user.id);
+                  await refreshFriends(token);
+                  return 'selected';
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : 'Could not look up phone');
+                  return 'error';
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            />
+          ) : null}
+
+          {screen === 'peer-profile' && peerProfile && user ? (
+            <PeerProfileScreen
+              peer={peerProfile}
+              isSelf={peerProfile.id === user.id}
+              selfInitial={selfInitial}
+              onBack={() => setScreen('chats')}
+              onMessage={() => {
+                setChatPeerId(peerProfile.id);
+                setScreen('chats');
+              }}
+              onCreateLoan={
+                peerProfile.id === user.id
+                  ? undefined
+                  : () => {
+                      setLoanFriendId(peerProfile.id);
+                      setLoanLockedPeer({ id: peerProfile.id, display_name: peerProfile.display_name });
+                      setCurrency(user.default_currency_code ?? '');
+                      setScreen('new-loan');
+                    }
+              }
+            />
           ) : null}
 
           {screen === 'loan' && selectedLoan ? (
@@ -1680,20 +1769,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         </ScrollView>
         )}
         {showNav ? (
-          <BottomNav
-            active={tabFromScreen(screen)}
-            unread={unreadCount}
-            onChange={goTab}
-            onCreate={
-              screen === 'loans'
-                ? () => {
-                    setLoanFriendId(friends[0]?.peer.id ?? '');
-                    setCurrency(user?.default_currency_code ?? '');
-                    setScreen('new-loan');
-                  }
-                : undefined
-            }
-          />
+          <BottomNav active={tabFromScreen(screen)} unread={unreadCount} onChange={goTab} />
         ) : null}
       </KeyboardAvoidingView>
     </SafeAreaView>

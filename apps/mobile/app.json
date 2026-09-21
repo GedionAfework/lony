@@ -13,25 +13,22 @@
     },
     "ios": {
       "supportsTablet": false,
-      "bundleIdentifier": "io.lony.app"
+      "bundleIdentifier": "io.lony.app",
+      "infoPlist": {
+        "NSContactsUsageDescription": "Lony uses contacts so you can find friends by phone and invite them to a loan."
+      }
     },
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#FFFFFF"
       },
       "package": "io.lony.app",
+      "permissions": ["READ_CONTACTS"],
       "intentFilters": [
         {
           "action": "VIEW",
-          "category": [
-            "BROWSABLE",
-            "DEFAULT"
-          ],
-          "data": [
-            {
-              "scheme": "lony"
-            }
-          ]
+          "category": ["BROWSABLE", "DEFAULT"],
+          "data": [{ "scheme": "lony" }]
         }
       ]
     },
@@ -43,6 +40,12 @@
         "expo-image-picker",
         {
           "photosPermission": "Allow Lony to access photos for your profile picture and repayment proofs."
+        }
+      ],
+      [
+        "expo-contacts",
+        {
+          "contactsPermission": "Allow Lony to access contacts so you can find friends by phone."
         }
       ],
       "expo-web-browser"

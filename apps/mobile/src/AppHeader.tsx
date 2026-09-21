@@ -1,14 +1,16 @@
+import type { ReactNode } from 'react';
 import { Pressable, View } from 'react-native';
 import { IconMenu } from './icons';
 import { radii, useTheme } from './theme';
-import { BrandMark, ThemeToggle } from './ui';
+import { BrandMark } from './ui';
 
 type Props = {
   onMenu: () => void;
+  /** Optional right-side control (e.g. chat search). Theme lives in Settings. */
+  right?: ReactNode;
 };
 
-/** Shared top chrome: hamburger · logo · theme — used on every signed-in screen. */
-export function AppHeader({ onMenu }: Props) {
+export function AppHeader({ onMenu, right }: Props) {
   const { colors } = useTheme();
   return (
     <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
@@ -30,7 +32,7 @@ export function AppHeader({ onMenu }: Props) {
         <IconMenu size={18} color={colors.text} />
       </Pressable>
       <BrandMark compact />
-      <ThemeToggle />
+      {right ?? <View style={{ width: 40 }} />}
     </View>
   );
 }

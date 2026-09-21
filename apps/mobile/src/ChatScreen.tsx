@@ -23,6 +23,7 @@ import {
   type Conversation,
 } from './api';
 import { apiBaseUrl, fonts, useTheme, type ThemeColors } from './theme';
+import { IconAttach, IconBack, IconEmoji, IconLoans, IconMic, IconSend } from './icons';
 
 const REACTION_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏', '🔥', '👏'];
 const COMPOSER_EMOJIS = [
@@ -34,40 +35,33 @@ const COMPOSER_EMOJIS = [
 type Props = {
   token: string;
   userId: string;
-  friends: { peer: { id: string; display_name: string } }[];
+  selfInitial: string;
+  friends: { peer: { id: string; display_name: string; username?: string | null } }[];
   openLoanId?: string | null;
+  openPeerId?: string | null;
   onLoanOpened?: () => void;
-  onBack: () => void;
+  onPeerOpened?: () => void;
   onError: (message: string) => void;
-  notifications?: {
-    id: string;
-    title: string;
-    body: string;
-    loan_id?: string | null;
-    read_at?: string | null;
-    created_at: string;
-  }[];
-  unreadCount?: number;
-  onMarkAllRead?: () => void;
-  onMarkRead?: (id: string) => void;
+  onOpenProfile?: (peer: { id: string; display_name: string; username?: string | null }) => void;
+  onCreateLoanWith?: (peer: { id: string; display_name: string }) => void;
   onOpenLoan?: (loanId: string) => void;
-  locale?: string;
+  onActiveChange?: (active: boolean) => void;
 };
 
 export function ChatScreen({
   token,
   userId,
+  selfInitial,
   friends,
   openLoanId,
+  openPeerId,
   onLoanOpened,
-  onBack,
+  onPeerOpened,
   onError,
-  notifications = [],
-  unreadCount = 0,
-  onMarkAllRead,
-  onMarkRead,
+  onOpenProfile,
+  onCreateLoanWith,
   onOpenLoan,
-  locale = 'en',
+  onActiveChange,
 }: Props) {
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -87,7 +81,14 @@ export function ChatScreen({
 
   async function loadConversations() {
     const res = await api.listConversations(token);
-    setConversations(res.conversations ?? []);
+    const list = res.conversations ?? [];
+    setConversations(list);
+    setActive((prev) => {
+      if (!prev) {
+        return prev;
+      }
+      return list.find((c) => c.id === prev.id) ?? prev;
+    });
   }
 
   async function openPeer(peerId: string) {
@@ -171,14 +172,31 @@ export function ChatScreen({
   }, [openLoanId, token]);
 
   useEffect(() => {
+    if (openPeerId) {
+      openPeer(openPeerId)
+        .catch(() => undefined)
+        .finally(() => onPeerOpened?.());
+    }
+  }, [openPeerId, token]);
+
+  useEffect(() => {
     if (!active) {
-      return;
+      const listPoll = setInterval(() => {
+        loadConversations().catch(() => undefined);
+      }, 5000);
+      return () => clearInterval(listPoll);
     }
     const t = setInterval(() => {
       refreshMessages(false).catch(() => undefined);
+      loadConversations().catch(() => undefined);
     }, 2500);
     return () => clearInterval(t);
   }, [active?.id, token]);
+
+  useEffect(() => {
+    onActiveChange?.(Boolean(active));
+    return () => onActiveChange?.(false);
+  }, [active]);
 
   async function sendText(extra?: string) {
     if (!active) {
@@ -324,77 +342,50 @@ export function ChatScreen({
     }
   }
 
+  async function openSelfChat() {
+    await openPeer(userId);
+  }
+
   if (!active) {
+    const peerIds = new Set(conversations.map((c) => c.peer.id));
+    const startRows = friends.filter((f) => !peerIds.has(f.peer.id));
+    const threadRows = conversations.filter((c) => c.peer.id !== userId);
+
     return (
       <View style={styles.shell}>
-        <View style={styles.header}>
-          <View style={{ width: 48 }} />
-          <Text style={styles.headerTitle}>Chats</Text>
-          <View style={{ width: 48 }} />
-        </View>
+        <Text
+          style={{
+            color: colors.text,
+            fontFamily: fonts.uiSemi,
+            fontSize: 22,
+            paddingHorizontal: 16,
+            paddingTop: 4,
+            paddingBottom: 10,
+          }}
+        >
+          Chats
+        </Text>
 
-        <View style={{ paddingHorizontal: 14, gap: 8, marginBottom: 8 }}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Text style={styles.sectionTitle}>Inbox{unreadCount > 0 ? ` · ${unreadCount}` : ''}</Text>
-            {unreadCount > 0 && onMarkAllRead ? (
-              <Pressable onPress={onMarkAllRead}>
-                <Text style={styles.headerLink}>Mark all read</Text>
-              </Pressable>
-            ) : null}
-          </View>
-          {notifications.length === 0 ? (
-            <Text style={styles.muted}>No notifications</Text>
-          ) : (
-            notifications.slice(0, 8).map((n) => (
-              <Pressable
-                key={n.id}
-                style={styles.row}
-                onPress={() => {
-                  if (!n.read_at) onMarkRead?.(n.id);
-                  if (n.loan_id) onOpenLoan?.(n.loan_id);
-                }}
-              >
-                <View
-                  style={{
-                    width: 8,
-                    height: 8,
-                    borderRadius: 4,
-                    backgroundColor: n.read_at ? 'transparent' : colors.primary,
-                    marginTop: 6,
-                  }}
-                />
-                <View style={styles.flex}>
-                  <Text style={styles.rowTitle}>{n.title}</Text>
-                  <Text style={styles.muted} numberOfLines={2}>
-                    {n.body}
-                  </Text>
-                  <Text style={styles.muted}>{new Date(n.created_at).toLocaleString(locale)}</Text>
-                </View>
-              </Pressable>
-            ))
-          )}
-        </View>
-
-        <Text style={[styles.sectionTitle, { paddingHorizontal: 14 }]}>Messages</Text>
         <Pressable
           style={styles.row}
-          onPress={() => openPeer(userId)}
+          onPress={() => openSelfChat()}
+          onLongPress={() => onOpenProfile?.({ id: userId, display_name: 'Self' })}
           accessibilityRole="button"
-          accessibilityLabel="Private Messages"
+          accessibilityLabel="Self"
         >
           <View style={[styles.avatar, { backgroundColor: colors.primarySoft }]}>
-            <Text style={[styles.avatarText, { color: colors.primary }]}>P</Text>
+            <Text style={[styles.avatarText, { color: colors.primary }]}>{selfInitial}</Text>
           </View>
           <View style={styles.flex}>
-            <Text style={styles.rowTitle}>Private Messages</Text>
-            <Text style={styles.muted}>Notes to yourself</Text>
+            <Text style={styles.rowTitle}>Self</Text>
           </View>
         </Pressable>
-        {friends.map((f) => (
+        {startRows.map((f) => (
           <Pressable
             key={f.peer.id}
             style={styles.row}
             onPress={() => openPeer(f.peer.id)}
+            onLongPress={() => onOpenProfile?.(f.peer)}
             accessibilityRole="button"
             accessibilityLabel={`Chat with ${f.peer.display_name}`}
           >
@@ -403,52 +394,89 @@ export function ChatScreen({
             </View>
             <View style={styles.flex}>
               <Text style={styles.rowTitle}>{f.peer.display_name}</Text>
-              <Text style={styles.muted}>Start or continue chat</Text>
+              <Text style={styles.muted}>Start chat</Text>
             </View>
           </Pressable>
         ))}
-        {conversations.map((c) => (
-          <Pressable
-            key={c.id}
-            style={styles.row}
-            onPress={() => {
-              setActive(c);
-              lastCreated.current = undefined;
-              api.listMessages(token, c.id).then((res) => {
-                setMessages(res.messages ?? []);
-                if (res.messages?.length) {
-                  lastCreated.current = res.messages[res.messages.length - 1].created_at;
-                }
-              });
-            }}
-          >
-            <View style={styles.avatar}>
-              <Text style={styles.avatarText}>{c.peer.display_name.slice(0, 1).toUpperCase()}</Text>
-            </View>
-            <View style={styles.flex}>
-              <Text style={styles.rowTitle}>
-                {c.peer.display_name}
-                {c.loan_id ? ' · loan' : ''}
-                {c.unread_count > 0 ? ` · ${c.unread_count}` : ''}
-              </Text>
-              <Text style={styles.muted} numberOfLines={1}>
-                {c.last_message_preview || 'No messages yet'}
-              </Text>
-            </View>
-          </Pressable>
-        ))}
-        {friends.length === 0 && conversations.filter((c) => c.peer.id !== userId).length === 0 ? (
-          <Text style={[styles.muted, { paddingHorizontal: 14, paddingBottom: 16, lineHeight: 20 }]}>
-            No friend threads yet. Private Messages is ready whenever you are — friends appear here after you connect.
-          </Text>
-        ) : null}
+        {threadRows.map((c) => {
+          const name =
+            c.peer.id === userId || c.peer.display_name === 'Self' || c.peer.display_name === 'Saved Messages'
+              ? 'Self'
+              : c.peer.display_name;
+          const moneyLabel = formatMoneyLabel(c.money_amount, c.money_currency);
+          const lent = c.money_role === 'lent';
+          return (
+            <Pressable
+              key={c.id}
+              style={styles.row}
+              onPress={() => {
+                setActive(c);
+                lastCreated.current = undefined;
+                api.listMessages(token, c.id).then((res) => {
+                  setMessages(res.messages ?? []);
+                  if (res.messages?.length) {
+                    lastCreated.current = res.messages[res.messages.length - 1].created_at;
+                  }
+                });
+              }}
+              onLongPress={() => onOpenProfile?.(c.peer)}
+            >
+              <View style={styles.avatar}>
+                <Text style={styles.avatarText}>{c.peer.display_name.slice(0, 1).toUpperCase()}</Text>
+              </View>
+              <View style={styles.flex}>
+                <View style={styles.rowTop}>
+                  <View style={styles.nameRow}>
+                    <Text style={styles.rowTitle} numberOfLines={1}>
+                      {name}
+                    </Text>
+                    {moneyLabel && c.money_role ? (
+                      <View
+                        style={[
+                          styles.moneyChip,
+                          {
+                            backgroundColor: lent ? colors.successSoft : colors.warningSoft,
+                            borderColor: lent ? colors.success : colors.warning,
+                          },
+                        ]}
+                      >
+                        <Text style={[styles.moneyChipText, { color: lent ? colors.success : colors.warning }]}>
+                          {moneyLabel}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </View>
+                  <View style={styles.metaCol}>
+                    <Text style={styles.rowTime}>{formatChatListTime(c.last_message_at)}</Text>
+                    {c.last_message_mine ? (
+                      <Text style={[styles.ticks, c.last_message_read && { color: colors.tertiary }]}>
+                        {c.last_message_read ? '✓✓' : '✓'}
+                      </Text>
+                    ) : c.unread_count > 0 ? (
+                      <View style={styles.unreadBadge}>
+                        <Text style={styles.unreadBadgeText}>{c.unread_count > 99 ? '99+' : c.unread_count}</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                </View>
+                <Text style={styles.muted} numberOfLines={1}>
+                  {c.last_message_preview || ' '}
+                </Text>
+              </View>
+            </Pressable>
+          );
+        })}
       </View>
     );
   }
 
+  const isSelfChat = active.peer.id === userId || active.peer.display_name === 'Self' || active.peer.display_name === 'Saved Messages';
+  const peerTitle = isSelfChat ? 'Self' : active.peer.display_name;
+  const peerInitial = isSelfChat ? selfInitial : active.peer.display_name.slice(0, 1).toUpperCase();
+
   return (
-    <View style={styles.shell}>
-      <View style={styles.header}>
+    <View style={[styles.shell, styles.threadShell]}>
+      <View style={styles.threadHeader}>
         <Pressable
           onPress={() => {
             setActive(null);
@@ -456,16 +484,79 @@ export function ChatScreen({
             setReplyTo(null);
             loadConversations();
           }}
+          style={styles.headerBubble}
+          accessibilityRole="button"
+          accessibilityLabel="Back to chats"
         >
-          <Text style={styles.headerLink}>Chats</Text>
+          <IconBack size={18} color={colors.text} />
         </Pressable>
-        <Text style={styles.headerTitle}>
-          {active.peer.id === userId || active.peer.display_name === 'Private Messages'
-            ? 'Private Messages'
-            : `${active.peer.display_name}${active.loan_id ? ' · loan' : ''}`}
-        </Text>
-        <View style={{ width: 48 }} />
+
+        <Pressable
+          onPress={() => onOpenProfile?.(active.peer)}
+          style={styles.peerBubble}
+          accessibilityRole="button"
+          accessibilityLabel={peerTitle}
+        >
+          <View style={[styles.headerAvatar, isSelfChat && { backgroundColor: colors.primarySoft }]}>
+            <Text style={[styles.headerAvatarText, isSelfChat && { color: colors.primary }]}>{peerInitial}</Text>
+          </View>
+          <Text style={styles.peerBubbleName} numberOfLines={1}>
+            {peerTitle}
+          </Text>
+        </Pressable>
+
+        {!isSelfChat && onCreateLoanWith ? (
+          <Pressable
+            onPress={() => onCreateLoanWith(active.peer)}
+            style={styles.headerBubble}
+            accessibilityRole="button"
+            accessibilityLabel="Create loan"
+          >
+            <IconLoans size={18} color={colors.text} />
+          </Pressable>
+        ) : (
+          <View style={styles.headerBubbleSpacer} />
+        )}
       </View>
+
+      {active.money_role ? (
+        <Pressable
+          style={[
+            styles.moneyBlock,
+            {
+              backgroundColor: active.money_role === 'lent' ? colors.successSoft : colors.warningSoft,
+              borderColor: active.money_role === 'lent' ? colors.success : colors.warning,
+            },
+          ]}
+          onPress={() => {
+            const loanId = active.active_loan_id || active.loan_id;
+            if (loanId && onOpenLoan) {
+              onOpenLoan(loanId);
+            }
+          }}
+          accessibilityRole="button"
+          accessibilityLabel={active.money_role === 'lent' ? 'Money you lent' : 'Money you borrowed'}
+        >
+          <Text
+            style={[
+              styles.moneyBlockAmount,
+              { color: active.money_role === 'lent' ? colors.success : colors.warning },
+            ]}
+            numberOfLines={1}
+          >
+            {formatMoneyLabel(active.money_amount, active.money_currency) || 'Loan'}
+          </Text>
+          <Text
+            style={[
+              styles.moneyBlockDays,
+              { color: active.money_role === 'lent' ? colors.success : colors.warning },
+            ]}
+            numberOfLines={1}
+          >
+            {formatDaysLeft(active.money_due_at)}
+          </Text>
+        </Pressable>
+      ) : null}
 
       <FlatList
         ref={listRef}
@@ -501,9 +592,16 @@ export function ChatScreen({
                 {item.attachment_kind === 'image' ? 'Image' : 'File'} · {item.attachment_name || 'Attachment'}
               </Text>
             ) : null}
-            <Text style={[styles.time, item.mine && styles.mineTime]}>
-              {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-            </Text>
+            <View style={styles.metaColEnd}>
+              <Text style={[styles.time, item.mine && styles.mineTime]}>
+                {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </Text>
+              {item.mine ? (
+                <Text style={[styles.ticksInline, item.mine && styles.mineTime, item.read && styles.ticksRead]}>
+                  {item.read ? '✓✓' : '✓'}
+                </Text>
+              ) : null}
+            </View>
             {item.reactions?.length ? (
               <View style={styles.reactionRow}>
                 {item.reactions.map((r) => (
@@ -553,33 +651,33 @@ export function ChatScreen({
       ) : null}
 
       <View style={styles.composer}>
-        <Pressable onPress={() => setShowEmoji((v) => !v)} accessibilityLabel="Emoji" style={styles.toolBtn}>
-          <Text style={styles.tool}>{showEmoji ? 'Close' : 'Emoji'}</Text>
+        <View style={styles.inputBubble}>
+          <Pressable onPress={() => setShowEmoji((v) => !v)} accessibilityLabel="Emoji" style={styles.iconBtn}>
+            <IconEmoji size={20} color={showEmoji ? colors.primary : colors.muted} />
+          </Pressable>
+          <TextInput
+            style={styles.input}
+            value={draft}
+            onChangeText={setDraft}
+            placeholder="Message"
+            placeholderTextColor={colors.muted}
+            multiline
+          />
+        </View>
+        <Pressable onPress={sendFile} accessibilityLabel="Attach file" style={styles.sideIconBtn}>
+          <IconAttach size={20} color={colors.muted} />
         </Pressable>
-        <Pressable onPress={sendFile} accessibilityLabel="Attach file" style={styles.toolBtn}>
-          <Text style={styles.tool}>File</Text>
-        </Pressable>
-        <TextInput
-          style={styles.input}
-          value={draft}
-          onChangeText={setDraft}
-          placeholder="Message"
-          placeholderTextColor={colors.muted}
-          multiline
-        />
         {draft.trim() ? (
-          <Pressable style={styles.send} onPress={() => sendText()} disabled={busy}>
-            <Text style={styles.sendText}>Send</Text>
+          <Pressable style={styles.sendIconBtn} onPress={() => sendText()} disabled={busy} accessibilityLabel="Send">
+            <IconSend size={18} color={colors.onPrimary} />
           </Pressable>
         ) : (
           <Pressable
             onPress={toggleRecord}
             accessibilityLabel={recorderState.isRecording ? 'Stop recording' : 'Record voice'}
-            style={styles.toolBtn}
+            style={styles.sideIconBtn}
           >
-            <Text style={[styles.tool, recorderState.isRecording && { color: colors.error }]}>
-              {recorderState.isRecording ? 'Stop' : 'Voice'}
-            </Text>
+            <IconMic size={20} color={recorderState.isRecording ? colors.error : colors.muted} />
           </Pressable>
         )}
       </View>
@@ -600,6 +698,72 @@ function attachmentLabel(msg: ChatMessage): string {
   return 'Message';
 }
 
+function formatMoneyLabel(amount?: string | null, currency?: string | null): string {
+  if (!amount) {
+    return '';
+  }
+  const trimmed = amount.replace(/\.00$/, '');
+  const code = (currency || '').toUpperCase();
+  if (code === 'USD' || code === '') {
+    return `$${trimmed}`;
+  }
+  if (code === 'EUR') {
+    return `€${trimmed}`;
+  }
+  if (code === 'GBP') {
+    return `£${trimmed}`;
+  }
+  return `${trimmed} ${code}`;
+}
+
+function formatDaysLeft(iso?: string | null): string {
+  if (!iso) {
+    return 'No due date';
+  }
+  const due = new Date(iso);
+  if (Number.isNaN(due.getTime())) {
+    return 'No due date';
+  }
+  const today = new Date();
+  const startToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const startDue = new Date(due.getFullYear(), due.getMonth(), due.getDate());
+  const days = Math.round((startDue.getTime() - startToday.getTime()) / 86400000);
+  if (days > 1) {
+    return `${days} days left`;
+  }
+  if (days === 1) {
+    return '1 day left';
+  }
+  if (days === 0) {
+    return 'Due today';
+  }
+  if (days === -1) {
+    return '1 day overdue';
+  }
+  return `${Math.abs(days)} days overdue`;
+}
+
+function formatChatListTime(iso?: string | null): string {
+  if (!iso) {
+    return '';
+  }
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) {
+    return '';
+  }
+  const now = new Date();
+  const startToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const startMsg = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const dayDiff = Math.round((startToday.getTime() - startMsg.getTime()) / 86400000);
+  if (dayDiff <= 0) {
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+  if (dayDiff < 7) {
+    return d.toLocaleDateString(undefined, { weekday: 'short' }).slice(0, 3);
+  }
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
 function makeStyles(colors: ThemeColors) {
   return StyleSheet.create({
     shell: {
@@ -607,6 +771,9 @@ function makeStyles(colors: ThemeColors) {
       backgroundColor: colors.background,
       overflow: 'hidden',
       paddingBottom: 72,
+    },
+    threadShell: {
+      paddingBottom: 8,
     },
     header: {
       flexDirection: 'row',
@@ -618,6 +785,49 @@ function makeStyles(colors: ThemeColors) {
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: colors.border,
     },
+    threadHeader: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 10,
+      paddingHorizontal: 4,
+      paddingTop: 4,
+      paddingBottom: 10,
+    },
+    headerBubble: {
+      width: 42,
+      height: 42,
+      borderRadius: 21,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.surface,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+    },
+    headerBubbleSpacer: { width: 42, height: 42 },
+    peerBubble: {
+      flex: 1,
+      minHeight: 42,
+      borderRadius: 21,
+      paddingHorizontal: 10,
+      paddingVertical: 6,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'center',
+      gap: 8,
+      backgroundColor: colors.surface,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+    },
+    headerAvatar: {
+      width: 28,
+      height: 28,
+      borderRadius: 14,
+      backgroundColor: colors.surfaceMuted,
+      alignItems: 'center',
+      justifyContent: 'center',
+    },
+    headerAvatarText: { color: colors.text, fontFamily: fonts.uiBold, fontSize: 13 },
+    peerBubbleName: { color: colors.text, fontSize: 15, fontFamily: fonts.uiSemi, maxWidth: '70%' },
     headerTitle: { color: colors.text, fontSize: 17, fontFamily: fonts.uiBold },
     headerLink: { color: colors.tertiary, fontFamily: fonts.uiSemi, fontSize: 15 },
     sectionTitle: { color: colors.text, fontSize: 15, fontFamily: fonts.uiSemi, marginBottom: 4 },
@@ -641,9 +851,48 @@ function makeStyles(colors: ThemeColors) {
     },
     avatarText: { color: colors.primary, fontFamily: fonts.uiBold, fontSize: 18 },
     flex: { flex: 1 },
-    rowTitle: { color: colors.text, fontSize: 16, fontFamily: fonts.uiSemi },
+    rowTop: { flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
+    nameRow: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
+    rowTitle: { color: colors.text, fontSize: 16, fontFamily: fonts.uiSemi, flexShrink: 1 },
+    metaCol: { alignItems: 'flex-end', gap: 4, minWidth: 44 },
+    metaColEnd: { alignItems: 'flex-end', marginTop: 4, gap: 1 },
+    rowTime: { color: colors.muted, fontSize: 12, fontFamily: fonts.ui },
+    ticks: { color: colors.muted, fontSize: 11, fontFamily: fonts.ui, lineHeight: 12 },
+    ticksInline: { color: colors.muted, fontSize: 10, fontFamily: fonts.ui, lineHeight: 12 },
+    ticksRead: { opacity: 1 },
+    unreadBadge: {
+      minWidth: 18,
+      height: 18,
+      borderRadius: 9,
+      paddingHorizontal: 5,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.tertiary,
+    },
+    unreadBadgeText: { color: '#FFFFFF', fontSize: 11, fontFamily: fonts.uiBold },
+    moneyChip: {
+      borderRadius: 999,
+      borderWidth: StyleSheet.hairlineWidth,
+      paddingHorizontal: 8,
+      paddingVertical: 2,
+    },
+    moneyChipText: { fontSize: 11, fontFamily: fonts.uiBold },
     muted: { color: colors.muted, fontSize: 13, fontFamily: fonts.ui },
-    thread: { paddingHorizontal: 12, paddingTop: 14, paddingBottom: 20, gap: 2 },
+    moneyBlock: {
+      marginHorizontal: 12,
+      marginBottom: 8,
+      borderRadius: 12,
+      borderWidth: StyleSheet.hairlineWidth,
+      paddingHorizontal: 14,
+      paddingVertical: 12,
+      flexDirection: 'row',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: 12,
+    },
+    moneyBlockAmount: { fontSize: 15, fontFamily: fonts.uiBold, flexShrink: 1 },
+    moneyBlockDays: { fontSize: 13, fontFamily: fonts.uiSemi },
+    thread: { paddingHorizontal: 12, paddingTop: 8, paddingBottom: 20, gap: 2 },
     bubbleWrap: {
       maxWidth: '78%',
       paddingHorizontal: 12,
@@ -671,7 +920,7 @@ function makeStyles(colors: ThemeColors) {
     },
     bubbleText: { color: colors.text, fontSize: 15, lineHeight: 21, fontFamily: fonts.ui },
     mineText: { color: colors.onPrimary },
-    time: { color: colors.muted, fontSize: 10, marginTop: 4, alignSelf: 'flex-end', fontFamily: fonts.ui },
+    time: { color: colors.muted, fontSize: 10, alignSelf: 'flex-end', fontFamily: fonts.ui },
     mineTime: { color: colors.onPrimary, opacity: 0.72 },
     replyBox: {
       borderLeftWidth: 2,
@@ -733,12 +982,48 @@ function makeStyles(colors: ThemeColors) {
     composer: {
       flexDirection: 'row',
       alignItems: 'flex-end',
-      gap: 6,
-      paddingHorizontal: 10,
-      paddingVertical: 10,
+      gap: 8,
+      paddingHorizontal: 4,
+      paddingVertical: 8,
+    },
+    inputBubble: {
+      flex: 1,
+      flexDirection: 'row',
+      alignItems: 'flex-end',
+      gap: 4,
+      minHeight: 44,
       backgroundColor: colors.surface,
-      borderTopWidth: StyleSheet.hairlineWidth,
-      borderTopColor: colors.border,
+      borderRadius: 22,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      paddingLeft: 6,
+      paddingRight: 12,
+      paddingVertical: 4,
+    },
+    iconBtn: {
+      width: 36,
+      height: 36,
+      alignItems: 'center',
+      justifyContent: 'center',
+      marginBottom: 2,
+    },
+    sideIconBtn: {
+      width: 42,
+      height: 42,
+      borderRadius: 21,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.surface,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+    },
+    sendIconBtn: {
+      width: 42,
+      height: 42,
+      borderRadius: 21,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.primary,
     },
     toolBtn: {
       minHeight: 40,
@@ -749,12 +1034,9 @@ function makeStyles(colors: ThemeColors) {
     tool: { color: colors.muted, fontSize: 13, fontFamily: fonts.uiSemi },
     input: {
       flex: 1,
-      minHeight: 40,
+      minHeight: 36,
       maxHeight: 120,
-      backgroundColor: colors.surfaceMuted,
-      borderRadius: 20,
-      paddingHorizontal: 14,
-      paddingVertical: 10,
+      paddingVertical: 8,
       color: colors.text,
       fontSize: 15,
       fontFamily: fonts.ui,
