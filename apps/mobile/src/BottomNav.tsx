@@ -1,4 +1,5 @@
 import { Pressable, Text, View } from 'react-native';
+import { IconChat, IconHome, IconLoans, IconPlus } from './icons';
 import { fonts, radii, useTheme } from './theme';
 
 export type TabId = 'home' | 'loans' | 'chats';
@@ -10,99 +11,111 @@ type Props = {
   onCreate?: () => void;
 };
 
-const TABS: { id: TabId; icon: string; label: string }[] = [
-  { id: 'home', icon: '⌂', label: 'Home' },
-  { id: 'loans', icon: '⇄', label: 'Loans' },
-  { id: 'chats', icon: '💬', label: 'Chat' },
+const TABS: { id: TabId; label: string }[] = [
+  { id: 'home', label: 'Home' },
+  { id: 'loans', label: 'Loans' },
+  { id: 'chats', label: 'Chat' },
 ];
 
 export function BottomNav({ active, unread = 0, onChange, onCreate }: Props) {
-  const { colors } = useTheme();
+  const { colors, resolved } = useTheme();
+  const glassBg = resolved === 'dark' ? 'rgba(18, 26, 43, 0.72)' : 'rgba(255, 255, 255, 0.72)';
+  const glassBorder = resolved === 'dark' ? 'rgba(255, 255, 255, 0.14)' : 'rgba(15, 23, 42, 0.08)';
 
   return (
     <View
+      pointerEvents="box-none"
       style={{
-        borderTopWidth: 1,
-        borderTopColor: colors.border,
-        backgroundColor: colors.nav,
-        paddingBottom: 10,
-        paddingTop: 8,
+        position: 'absolute',
+        left: 16,
+        right: 16,
+        bottom: 12,
+        alignItems: 'center',
       }}
     >
-      <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8 }}>
-        {TABS.map((tab) => (
-          <TabButton
-            key={tab.id}
-            tab={tab}
-            active={active === tab.id}
-            badge={tab.id === 'chats' && unread > 0 ? unread : undefined}
-            onPress={() => onChange(tab.id)}
-            colors={colors}
-          />
-        ))}
+      <View
+        style={{
+          flexDirection: 'row',
+          alignItems: 'center',
+          paddingHorizontal: 10,
+          paddingVertical: 8,
+          borderRadius: radii.full,
+          backgroundColor: glassBg,
+          borderWidth: 1,
+          borderColor: glassBorder,
+          shadowColor: '#0F172A',
+          shadowOpacity: resolved === 'dark' ? 0.35 : 0.12,
+          shadowRadius: 24,
+          shadowOffset: { width: 0, height: 8 },
+          elevation: 10,
+          gap: 4,
+        }}
+      >
+        {TABS.map((tab) => {
+          const isActive = active === tab.id;
+          const tint = isActive ? colors.primary : colors.muted;
+          return (
+            <Pressable
+              key={tab.id}
+              onPress={() => onChange(tab.id)}
+              accessibilityRole="button"
+              accessibilityLabel={tab.label}
+              accessibilityState={{ selected: isActive }}
+              style={{
+                width: 52,
+                height: 44,
+                borderRadius: radii.full,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: isActive ? colors.primarySoft : 'transparent',
+                position: 'relative',
+              }}
+            >
+              {tab.id === 'home' ? <IconHome size={20} color={tint} /> : null}
+              {tab.id === 'loans' ? <IconLoans size={20} color={tint} /> : null}
+              {tab.id === 'chats' ? <IconChat size={20} color={tint} /> : null}
+              {tab.id === 'chats' && unread > 0 ? (
+                <View
+                  style={{
+                    position: 'absolute',
+                    top: 6,
+                    right: 10,
+                    backgroundColor: colors.secondary,
+                    borderRadius: radii.full,
+                    minWidth: 14,
+                    height: 14,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    paddingHorizontal: 3,
+                  }}
+                >
+                  <Text style={{ color: '#111', fontSize: 8, fontFamily: fonts.uiBold }}>
+                    {unread > 9 ? '9+' : String(unread)}
+                  </Text>
+                </View>
+              ) : null}
+            </Pressable>
+          );
+        })}
         {onCreate ? (
           <Pressable
+            onPress={onCreate}
+            accessibilityRole="button"
+            accessibilityLabel="New loan"
             style={{
-              width: 48,
-              height: 48,
+              width: 44,
+              height: 44,
               borderRadius: radii.full,
               backgroundColor: colors.primary,
               alignItems: 'center',
               justifyContent: 'center',
-              marginHorizontal: 6,
+              marginLeft: 4,
             }}
-            onPress={onCreate}
-            accessibilityRole="button"
-            accessibilityLabel="New loan"
           >
-            <Text style={{ color: colors.onPrimary, fontSize: 24, fontFamily: fonts.uiBold, marginTop: -2 }}>+</Text>
+            <IconPlus size={18} color={colors.onPrimary} />
           </Pressable>
         ) : null}
       </View>
     </View>
-  );
-}
-
-function TabButton({
-  tab,
-  active,
-  badge,
-  onPress,
-  colors,
-}: {
-  tab: { id: TabId; icon: string; label: string };
-  active: boolean;
-  badge?: number;
-  onPress: () => void;
-  colors: ReturnType<typeof useTheme>['colors'];
-}) {
-  return (
-    <Pressable
-      style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 2, minHeight: 48, position: 'relative' }}
-      onPress={onPress}
-      accessibilityRole="button"
-      accessibilityLabel={tab.label}
-      accessibilityState={{ selected: active }}
-    >
-      <Text style={{ fontSize: 22, opacity: active ? 1 : 0.55 }}>{tab.icon}</Text>
-      {badge ? (
-        <View
-          style={{
-            position: 'absolute',
-            top: 2,
-            right: '22%',
-            backgroundColor: colors.secondary,
-            borderRadius: radii.full,
-            minWidth: 16,
-            height: 16,
-            alignItems: 'center',
-            justifyContent: 'center',
-            paddingHorizontal: 3,
-          }}
-        >
-          <Text style={{ color: '#111', fontSize: 9, fontFamily: fonts.uiBold }}>{badge > 9 ? '9+' : String(badge)}</Text>
-        </View>
-      ) : null}
-    </Pressable>
   );
 }

@@ -7,7 +7,6 @@ import {
   Card,
   Field,
   PrimaryButton,
-  ScreenHeader,
   SecondaryButton,
   SectionLabel,
   ThemeToggle,
@@ -46,7 +45,6 @@ type Props = {
   onTos: () => void;
   onBanks: () => void;
   onLogout: () => void;
-  onBack: () => void;
 };
 
 export function SettingsScreen(props: Props) {
@@ -54,7 +52,7 @@ export function SettingsScreen(props: Props) {
 
   return (
     <View style={{ gap: space.md }}>
-      <ScreenHeader title="Settings" onBack={props.onBack} />
+      <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>Settings</Text>
       {!props.profileComplete ? (
         <Text style={{ color: colors.error, fontFamily: fonts.ui, fontSize: 14 }}>
           Finish your account details to use Lony fully.

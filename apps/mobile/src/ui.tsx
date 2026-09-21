@@ -1,5 +1,6 @@
 import { useMemo } from 'react';
 import { Image, Pressable, StyleSheet, Text, TextInput, View, type TextInputProps, type ViewStyle } from 'react-native';
+import { IconMoon, IconSun } from './icons';
 import { fonts, radii, space, useTheme, type ThemeColors } from './theme';
 
 export function Screen({ children, style }: { children: React.ReactNode; style?: ViewStyle }) {
@@ -400,9 +401,59 @@ export function ScreenHeader({
 export function EmptyState({ title, body }: { title: string; body: string }) {
   const { colors } = useTheme();
   return (
-    <View style={{ gap: 6, paddingVertical: 8 }}>
-      <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>{title}</Text>
-      <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 14, lineHeight: 20 }}>{body}</Text>
+    <View
+      style={{
+        gap: 10,
+        paddingVertical: 28,
+        paddingHorizontal: 12,
+        alignItems: 'center',
+      }}
+    >
+      <View
+        style={{
+          width: 56,
+          height: 56,
+          borderRadius: radii.full,
+          backgroundColor: colors.surfaceMuted,
+          borderWidth: 1,
+          borderColor: colors.border,
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <View
+          style={{
+            width: 18,
+            height: 2,
+            backgroundColor: colors.muted,
+            borderRadius: 2,
+            opacity: 0.7,
+          }}
+        />
+      </View>
+      <Text
+        style={{
+          color: colors.text,
+          fontFamily: fonts.uiSemi,
+          fontSize: 18,
+          textAlign: 'center',
+          letterSpacing: -0.2,
+        }}
+      >
+        {title}
+      </Text>
+      <Text
+        style={{
+          color: colors.muted,
+          fontFamily: fonts.ui,
+          fontSize: 14,
+          lineHeight: 21,
+          textAlign: 'center',
+          maxWidth: 280,
+        }}
+      >
+        {body}
+      </Text>
     </View>
   );
 }
@@ -444,7 +495,7 @@ export function ThemeToggle() {
         borderColor: colors.border,
       }}
     >
-      <Text style={{ fontSize: 18 }}>{isDark ? '☀' : '☾'}</Text>
+      {isDark ? <IconSun size={18} color={colors.text} /> : <IconMoon size={18} color={colors.text} />}
     </Pressable>
   );
 }

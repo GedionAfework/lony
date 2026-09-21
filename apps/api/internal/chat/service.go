@@ -168,15 +168,18 @@ func CanonicalPair(a, b uuid.UUID) (uuid.UUID, uuid.UUID) {
 }
 
 func (s *Service) OpenOrCreate(ctx context.Context, actor, peerID uuid.UUID) (ConversationDTO, error) {
-	if peerID == uuid.Nil || peerID == actor {
+	if peerID == uuid.Nil {
 		return ConversationDTO{}, httpx.E(422, "VALIDATION", "choose a friend to chat with")
 	}
-	ok, err := s.gate.CanCreateLoan(ctx, actor, peerID)
-	if err != nil {
-		return ConversationDTO{}, err
-	}
-	if !ok {
-		return ConversationDTO{}, httpx.E(403, "NOT_FRIENDS", "you can only chat with accepted friends")
+	selfNotes := peerID == actor
+	if !selfNotes {
+		ok, err := s.gate.CanCreateLoan(ctx, actor, peerID)
+		if err != nil {
+			return ConversationDTO{}, err
+		}
+		if !ok {
+			return ConversationDTO{}, httpx.E(403, "NOT_FRIENDS", "you can only chat with accepted friends")
+		}
 	}
 	low, high := CanonicalPair(actor, peerID)
 	conv, err := s.store.GetConversationByPair(ctx, low, high)
@@ -408,6 +411,9 @@ func (s *Service) toConversationDTO(ctx context.Context, actor uuid.UUID, row Co
 	peer, err := s.store.GetUserPeer(ctx, peerID)
 	if err != nil {
 		return ConversationDTO{}, err
+	}
+	if row.UserLowID == row.UserHighID {
+		peer.DisplayName = "Private Messages"
 	}
 	preview := ""
 	if row.LastBody != nil {

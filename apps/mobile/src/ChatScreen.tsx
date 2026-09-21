@@ -33,6 +33,7 @@ const COMPOSER_EMOJIS = [
 
 type Props = {
   token: string;
+  userId: string;
   friends: { peer: { id: string; display_name: string } }[];
   openLoanId?: string | null;
   onLoanOpened?: () => void;
@@ -55,6 +56,7 @@ type Props = {
 
 export function ChatScreen({
   token,
+  userId,
   friends,
   openLoanId,
   onLoanOpened,
@@ -374,6 +376,20 @@ export function ChatScreen({
         </View>
 
         <Text style={[styles.sectionTitle, { paddingHorizontal: 14 }]}>Messages</Text>
+        <Pressable
+          style={styles.row}
+          onPress={() => openPeer(userId)}
+          accessibilityRole="button"
+          accessibilityLabel="Private Messages"
+        >
+          <View style={[styles.avatar, { backgroundColor: colors.primarySoft }]}>
+            <Text style={[styles.avatarText, { color: colors.primary }]}>P</Text>
+          </View>
+          <View style={styles.flex}>
+            <Text style={styles.rowTitle}>Private Messages</Text>
+            <Text style={styles.muted}>Notes to yourself</Text>
+          </View>
+        </Pressable>
         {friends.map((f) => (
           <Pressable
             key={f.peer.id}
@@ -421,8 +437,10 @@ export function ChatScreen({
             </View>
           </Pressable>
         ))}
-        {friends.length === 0 && conversations.length === 0 ? (
-          <Text style={[styles.muted, { paddingHorizontal: 14 }]}>Add a friend first, then open a chat.</Text>
+        {friends.length === 0 && conversations.filter((c) => c.peer.id !== userId).length === 0 ? (
+          <Text style={[styles.muted, { paddingHorizontal: 14, paddingBottom: 16, lineHeight: 20 }]}>
+            No friend threads yet. Private Messages is ready whenever you are — friends appear here after you connect.
+          </Text>
         ) : null}
       </View>
     );
@@ -441,7 +459,11 @@ export function ChatScreen({
         >
           <Text style={styles.headerLink}>Chats</Text>
         </Pressable>
-        <Text style={styles.headerTitle}>{active.peer.display_name}{active.loan_id ? ' · loan' : ''}</Text>
+        <Text style={styles.headerTitle}>
+          {active.peer.id === userId || active.peer.display_name === 'Private Messages'
+            ? 'Private Messages'
+            : `${active.peer.display_name}${active.loan_id ? ' · loan' : ''}`}
+        </Text>
         <View style={{ width: 48 }} />
       </View>
 
@@ -584,6 +606,7 @@ function makeStyles(colors: ThemeColors) {
       flex: 1,
       backgroundColor: colors.background,
       overflow: 'hidden',
+      paddingBottom: 72,
     },
     header: {
       flexDirection: 'row',

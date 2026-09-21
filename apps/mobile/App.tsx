@@ -29,6 +29,7 @@ import {
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { api, DISCLAIMER, type AppNotification, type BankProfile, type BankProfileShare, type Dashboard, type Friendship, type Loan, type Repayment, type SearchHit, type User } from './src/api';
 import { AnalyticsScreen } from './src/AnalyticsScreen';
+import { AppHeader } from './src/AppHeader';
 import { AuthScreens } from './src/AuthScreens';
 import { BottomNav, type TabId } from './src/BottomNav';
 import { COUNTRIES, CURRENCIES } from './src/catalogs';
@@ -1044,7 +1045,23 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   const showNav =
     authed &&
     user?.profile_complete &&
-    !['login', 'register', 'verify', 'onboarding', 'loan', 'new-loan', 'settings', 'tos', 'banks', 'expenses', 'analytics', 'plan'].includes(screen);
+    (screen === 'home' || screen === 'loans' || screen === 'chats');
+
+  const showChrome =
+    authed &&
+    user?.profile_complete &&
+    !['login', 'register', 'verify', 'onboarding', 'tos'].includes(screen);
+
+  function drawerActive(): DrawerItem | null {
+    if (screen === 'expenses') return 'expenses';
+    if (screen === 'loans' || screen === 'home' || screen === 'chats' || screen === 'loan' || screen === 'new-loan') {
+      return 'loans';
+    }
+    if (screen === 'analytics') return 'analytics';
+    if (screen === 'plan') return 'plan';
+    if (screen === 'settings' || screen === 'banks') return 'settings';
+    return null;
+  }
 
   function tabFromScreen(s: Screen): TabId {
     if (s === 'loans') return 'loans';
@@ -1082,16 +1099,23 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.flex}
       >
-        <DrawerMenu open={drawerOpen} onClose={() => setDrawerOpen(false)} onSelect={onDrawerSelect} />
+        <DrawerMenu
+          open={drawerOpen}
+          active={drawerActive()}
+          onClose={() => setDrawerOpen(false)}
+          onSelect={onDrawerSelect}
+        />
         {screen === 'chats' && user && token ? (
-          <View style={styles.flex}>
-            {error ? <Text style={[styles.error, { paddingHorizontal: 16, paddingTop: 8 }]}>{error}</Text> : null}
+          <View style={[styles.flex, { paddingHorizontal: 16, paddingTop: 8 }]}>
+            {showChrome ? <AppHeader onMenu={() => setDrawerOpen(true)} /> : null}
+            {error ? <Text style={[styles.error, { paddingTop: 8 }]}>{error}</Text> : null}
             <ChatScreen
               token={token}
+              userId={user.id}
               friends={friends}
               openLoanId={chatLoanId}
               onLoanOpened={() => setChatLoanId(null)}
-              onBack={() => setScreen('home')}
+              onBack={() => setScreen('loans')}
               onError={(message) => setError(message)}
               notifications={notifications}
               unreadCount={unreadCount}
@@ -1102,8 +1126,12 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
             />
           </View>
         ) : (
-        <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
+        <ScrollView
+          contentContainerStyle={[styles.container, showNav ? { paddingBottom: 96 } : null]}
+          keyboardShouldPersistTaps="handled"
+        >
           {error ? <Text style={styles.error}>{error}</Text> : null}
+          {showChrome ? <AppHeader onMenu={() => setDrawerOpen(true)} /> : null}
 
           {!authed && (screen === 'login' || screen === 'register' || screen === 'verify') ? (
             <AuthScreens
@@ -1157,7 +1185,6 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               user={user}
               dashboard={dashboard}
               token={token}
-              onMenu={() => setDrawerOpen(true)}
               onOpenAnalytics={() => setScreen('analytics')}
               formatMoney={formatMoney}
             />
@@ -1194,25 +1221,20 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
           {screen === 'expenses' ? (
             <PlaceholderScreen
               title="Expenses"
-              body="Full expense tracker is coming next. Use the menu to get back anytime."
-              onBack={() => setScreen('home')}
+              emptyTitle="Nothing spent here"
+              emptyBody="Expenses — including loan-related cash — will land in this tracker. Still empty, still calm."
             />
           ) : null}
 
           {screen === 'analytics' && user ? (
-            <AnalyticsScreen
-              user={user}
-              dashboard={dashboard}
-              onBack={() => setScreen('home')}
-              formatMoney={formatMoney}
-            />
+            <AnalyticsScreen user={user} dashboard={dashboard} formatMoney={formatMoney} />
           ) : null}
 
           {screen === 'plan' ? (
             <PlaceholderScreen
               title="Plan"
-              body="Budgets and savings plans will live here."
-              onBack={() => setScreen('home')}
+              emptyTitle="No plan yet"
+              emptyBody="Budgets and goals will live here. For now it’s a blank page with good intentions."
             />
           ) : null}
 
@@ -1271,7 +1293,6 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                 api.listPaymentRails().then((res) => setPaymentRails(res.rails ?? [])).catch(() => undefined);
               }}
               onLogout={onLogout}
-              onBack={() => setScreen(user.profile_complete ? 'home' : 'onboarding')}
             />
           ) : null}
 

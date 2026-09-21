@@ -1,6 +1,7 @@
 import { Pressable, Text, View } from 'react-native';
 import { fonts, radii, space, useTheme } from './theme';
 import { BrandMark, Card, CheckRow, Field, PrimaryButton, ThemeToggle } from './ui';
+import { IconGoogle, IconTelegram } from './icons';
 
 type Mode = 'login' | 'register' | 'verify';
 
@@ -68,8 +69,12 @@ export function AuthScreens({
           <PrimaryButton label={busy ? 'Working…' : 'Sign in'} onPress={onLogin} disabled={busy} />
           <View style={{ height: 1, backgroundColor: colors.border, marginVertical: 4 }} />
           <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 16 }}>
-            <OAuthIcon label="G" onPress={onGoogle} disabled={busy || !acceptedDisclaimer} colors={colors} />
-            <OAuthIcon label="✈" onPress={onTelegram} disabled={busy || !acceptedDisclaimer} colors={colors} />
+            <OAuthIcon onPress={onGoogle} disabled={busy || !acceptedDisclaimer} label="Google">
+              <IconGoogle size={22} color={colors.text} />
+            </OAuthIcon>
+            <OAuthIcon onPress={onTelegram} disabled={busy || !acceptedDisclaimer} label="Telegram">
+              <IconTelegram size={22} color={colors.text} />
+            </OAuthIcon>
           </View>
           <CheckRow
             checked={acceptedDisclaimer}
@@ -101,8 +106,12 @@ export function AuthScreens({
             disabled={busy || !acceptedDisclaimer}
           />
           <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 16, marginTop: 4 }}>
-            <OAuthIcon label="G" onPress={onGoogle} disabled={busy || !acceptedDisclaimer} colors={colors} />
-            <OAuthIcon label="✈" onPress={onTelegram} disabled={busy || !acceptedDisclaimer} colors={colors} />
+            <OAuthIcon onPress={onGoogle} disabled={busy || !acceptedDisclaimer} label="Google">
+              <IconGoogle size={22} color={colors.text} />
+            </OAuthIcon>
+            <OAuthIcon onPress={onTelegram} disabled={busy || !acceptedDisclaimer} label="Telegram">
+              <IconTelegram size={22} color={colors.text} />
+            </OAuthIcon>
           </View>
           <Pressable onPress={onGoLogin}>
             <Text style={{ color: colors.tertiary, fontFamily: fonts.uiSemi, textAlign: 'center', paddingVertical: 8 }}>
@@ -135,21 +144,23 @@ export function AuthScreens({
 }
 
 function OAuthIcon({
-  label,
+  children,
   onPress,
   disabled,
-  colors,
+  label,
 }: {
-  label: string;
+  children: React.ReactNode;
   onPress: () => void;
   disabled?: boolean;
-  colors: ReturnType<typeof useTheme>['colors'];
+  label: string;
 }) {
+  const { colors } = useTheme();
   return (
     <Pressable
       onPress={onPress}
       disabled={disabled}
       accessibilityRole="button"
+      accessibilityLabel={label}
       style={{
         width: 52,
         height: 52,
@@ -162,7 +173,7 @@ function OAuthIcon({
         opacity: disabled ? 0.45 : 1,
       }}
     >
-      <Text style={{ color: colors.text, fontFamily: fonts.uiBold, fontSize: 20 }}>{label}</Text>
+      {children}
     </Pressable>
   );
 }

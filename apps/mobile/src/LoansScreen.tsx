@@ -1,7 +1,7 @@
 import { Pressable, Text, View } from 'react-native';
 import type { Friendship, Loan, SearchHit, User } from './api';
 import { fonts, radii, space, useTheme } from './theme';
-import { Card, Field, Money, PrimaryButton, SecondaryButton, StatusPill } from './ui';
+import { Card, EmptyState, Field, Money, PrimaryButton, SecondaryButton, StatusPill } from './ui';
 
 type Props = {
   user: User;
@@ -96,9 +96,10 @@ export function LoansScreen({
 
       {loans.length === 0 ? (
         <Card>
-          <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 14, lineHeight: 20 }}>
-            No loans yet. Add a friend, then create a shared ledger entry.
-          </Text>
+          <EmptyState
+            title="No loans in sight"
+            body="Add a friend, then create a shared ledger entry. Quiet is good — until it isn’t."
+          />
           <PrimaryButton label="Create loan" onPress={onNewLoan} />
         </Card>
       ) : (

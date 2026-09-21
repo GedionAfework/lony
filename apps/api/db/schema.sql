@@ -332,8 +332,7 @@ CREATE TABLE conversations (
   user_high_id uuid NOT NULL REFERENCES users(id),
   loan_id uuid REFERENCES loans(id),
   last_message_at timestamptz,
-  created_at timestamptz NOT NULL DEFAULT now(),
-  CHECK (user_low_id <> user_high_id)
+  created_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE UNIQUE INDEX conversations_pair_key
