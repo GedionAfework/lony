@@ -1,4 +1,5 @@
 import { StatusBar } from 'expo-status-bar';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
@@ -259,6 +260,11 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   }
 
   async function registerDevDeviceToken(access: string) {
+    // Remote push was removed from Expo Go (SDK 53+). In-app inbox still works.
+    // Push tokens need a development/production build (eas build).
+    if (Constants.executionEnvironment === ExecutionEnvironment.StoreClient) {
+      return;
+    }
     try {
       const { status } = await Notifications.requestPermissionsAsync();
       if (status !== 'granted') {
@@ -273,7 +279,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
       }
       await api.registerDeviceToken(access, Platform.OS === 'ios' ? 'ios' : 'android', push.data);
     } catch {
-      /* Expo Go needs EAS projectId for push; skip fake tokens so worker does not log-spam. */
+      /* Skip when push is unavailable; worker should not get fake tokens. */
     }
   }
 

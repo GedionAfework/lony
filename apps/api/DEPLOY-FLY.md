@@ -1,99 +1,186 @@
-# Deploy Lony API to Fly.io (free allowance)
+# Host Lony on Fly.io — step by step
 
-Goal: friends can hit a public HTTPS API from Expo Go. Later you move the same Docker image to a VPS.
+You will host the **API** on Fly. Friends use **Expo Go** on their phones. Postgres is free on **Neon**. Redis/worker can wait.
 
-## 0. Install Fly CLI
+---
 
-https://fly.io/docs/hands-on/install-flyctl/
+## Step 1 — Install Fly CLI and log in
+
+1. Install: https://fly.io/docs/hands-on/install-flyctl/
+2. Open PowerShell:
 
 ```powershell
 fly auth login
 ```
 
-## 1. Free Postgres (Neon — recommended)
+Browser opens → sign in / create a Fly account.
 
-Fly’s own Postgres is usually paid. For free:
+---
 
-1. Create a project at https://neon.tech
-2. Copy the connection string (require SSL)
-3. It looks like: `postgres://...@ep-....neon.tech/neondb?sslmode=require`
+## Step 2 — Create a free Postgres database (Neon)
 
-## 2. Create the Fly app
+1. Go to https://neon.tech → sign up
+2. Create a project (any name, e.g. `lony`)
+3. Open **Connection details** → copy the URI  
+   It should look like:
 
-From `apps/api`:
+```
+postgres://neondb_owner:xxxx@ep-xxxx.eu-central-1.aws.neon.tech/neondb?sslmode=require
+```
+
+Keep this secret. You will paste it into Fly in Step 4.
+
+---
+
+## Step 3 — Create the Fly app + media volume
 
 ```powershell
-cd apps/api
+cd C:\Users\Gedion\Documents\lony\apps\api
+```
+
+If the name `lony-api` is free:
+
+```powershell
 fly apps create lony-api
 fly volumes create lony_media --region fra --size 1
 ```
 
-If `lony-api` is taken, change `app` in `fly.toml` and recreate.
+If the name is taken:
 
-## 3. Secrets (never commit these)
+1. Edit `fly.toml` → change `app = "lony-api"` to something unique, e.g. `lony-api-gedion`
+2. Run:
 
-Generate a long JWT and bank key, then:
+```powershell
+fly apps create lony-api-gedion
+fly volumes create lony_media --region fra --size 1
+```
+
+Remember your app name — the URL will be `https://YOUR-APP-NAME.fly.dev`.
+
+---
+
+## Step 4 — Generate secrets and set them on Fly
+
+In PowerShell (same `apps\api` folder):
+
+```powershell
+# JWT (long random string)
+$jwt = -join ((48..57) + (65..90) + (97..122) | Get-Random -Count 48 | ForEach-Object { [char]$_ })
+
+# Bank encryption key (64 hex chars = 32 bytes)
+$bank = -join ((0..63) | ForEach-Object { "{0:x}" -f (Get-Random -Max 16) })
+
+Write-Host "JWT_SECRET=$jwt"
+Write-Host "BANK_ENCRYPTION_KEY=$bank"
+```
+
+Then set secrets (replace the Neon URL and use the values printed above):
 
 ```powershell
 fly secrets set `
-  DATABASE_URL="postgres://USER:PASS@HOST/neondb?sslmode=require" `
-  JWT_SECRET="paste-at-least-32-random-chars-here" `
-  BANK_ENCRYPTION_KEY="64-hex-chars-32-bytes" `
+  DATABASE_URL="PASTE_NEON_URI_HERE" `
+  JWT_SECRET="PASTE_JWT_HERE" `
+  BANK_ENCRYPTION_KEY="PASTE_BANK_KEY_HERE" `
   REDIS_URL="redis://127.0.0.1:6379"
 ```
 
-Optional later:
+Do **not** commit these. Do **not** paste them into chat.
+
+---
+
+## Step 5 — Deploy
 
 ```powershell
-fly secrets set RESEND_API_KEY="re_..." MAIL_FROM="Lony <onboarding@resend.dev>"
-fly secrets set GOOGLE_CLIENT_ID="..." TELEGRAM_BOT_TOKEN="..." TELEGRAM_BOT_USERNAME="..."
-```
-
-Notes:
-
-- `APP_ENV=development` in `fly.toml` so verification codes still appear in the API response until you add Resend/SMTP.
-- Redis is unused by the API process; reminders need a worker later. Fine to skip for the friend test.
-- After email is configured: set `APP_ENV=production` via `fly secrets set APP_ENV=production` (or change `fly.toml` and redeploy).
-
-## 4. Deploy
-
-```powershell
-cd apps/api
+cd C:\Users\Gedion\Documents\lony\apps\api
 fly deploy
 ```
 
-Check:
+First build can take a few minutes. When it finishes:
 
 ```powershell
 fly status
-fly open
-# or
-curl https://lony-api.fly.dev/health
+curl https://YOUR-APP-NAME.fly.dev/health
 ```
 
-## 5. Point the mobile app at Fly
+You want: `{"status":"ok"}` (or similar). If health fails, check logs:
 
-In `apps/mobile/.env`:
-
-```
-EXPO_PUBLIC_API_URL=https://lony-api.fly.dev/api/v1
+```powershell
+fly logs
 ```
 
-Restart Expo (`npx expo start -c`). Friends use Expo Go with the same URL baked in (or you distribute a preview build later).
+---
 
-## 6. Friend-test tip (less cold start)
+## Step 6 — Point the mobile app at Fly
 
-While testing with people, keep one machine awake (uses free allowance faster):
+Create or edit `apps\mobile\.env`:
 
-Edit `fly.toml`:
+```
+EXPO_PUBLIC_API_URL=https://YOUR-APP-NAME.fly.dev/api/v1
+```
+
+Restart Expo with a clean cache:
+
+```powershell
+cd C:\Users\Gedion\Documents\lony\apps\mobile
+npx expo start -c
+```
+
+Open Expo Go on your phone → scan the QR. Register an account. In **development** mode, the API returns `verification_code` in the register response (and in logs) until you add real email.
+
+---
+
+## Step 7 — Share with friends
+
+1. They install **Expo Go**
+2. You either:
+   - Start Expo and share the **tunnel** QR (`npx expo start --tunnel`), or
+   - Later: build a preview APK with EAS that has the Fly URL baked in
+
+Everyone hits the **same** Fly API, so accounts/friends/loans are shared.
+
+---
+
+## Step 8 (optional) — Fewer cold starts while testing
+
+Edit `apps/api/fly.toml`:
 
 ```toml
 auto_stop_machines = false
 min_machines_running = 1
 ```
 
-Then `fly deploy`. When idle, set them back to sleep to save credits.
+```powershell
+fly deploy
+```
 
-## 7. Later: VPS
+This keeps one machine awake (uses free allowance faster). When idle for days, set them back to sleep and redeploy.
 
-Same Dockerfile. On the VPS: Docker Compose with `api` + Postgres (+ Redis/worker). Point DNS + TLS (Caddy/nginx) at the API and change `EXPO_PUBLIC_API_URL`.
+---
+
+## Step 9 (optional later) — Real email
+
+1. Resend.com → API key + from address  
+2. On Fly:
+
+```powershell
+fly secrets set RESEND_API_KEY="re_..." MAIL_FROM="Lony <you@yourdomain.com>"
+fly secrets set APP_ENV=production
+```
+
+Or set `APP_ENV=production` in `fly.toml` and `fly deploy`.
+
+---
+
+## Checklist
+
+- [ ] `fly auth login`
+- [ ] Neon database created
+- [ ] `fly apps create` + volume
+- [ ] `fly secrets set` (DATABASE_URL, JWT, BANK key)
+- [ ] `fly deploy` → `/health` OK
+- [ ] Mobile `.env` → Fly URL
+- [ ] `npx expo start -c` → register works
+
+## Later: VPS
+
+Same `Dockerfile`. Run with Docker Compose on the VPS, put TLS in front, change `EXPO_PUBLIC_API_URL` once.
