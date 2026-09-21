@@ -79,7 +79,25 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     }),
+  refresh: (refreshToken: string) =>
+    request<TokenResponse>('/auth/refresh', {
+      method: 'POST',
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    }),
   me: (token: string) => request<{ user: User }>('/me', { method: 'GET' }, token),
+  patchMe: (
+    token: string,
+    body: {
+      display_name?: string;
+      timezone?: string;
+      locale?: string;
+      default_currency_code?: string;
+    },
+  ) =>
+    request<{ user: User }>('/me', {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }, token),
   logout: (token: string) => request<void>('/auth/logout', { method: 'POST' }, token),
   searchUsers: (token: string, q: string) =>
     request<{ users: SearchHit[] }>(`/users/search?q=${encodeURIComponent(q)}`, { method: 'GET' }, token),
@@ -180,6 +198,21 @@ export const api = {
     }, token),
   getBankProfile: (token: string, id: string, reveal = false) =>
     request<{ bank_profile: BankProfile }>(`/bank-profiles/${id}${reveal ? '?reveal=1' : ''}`, { method: 'GET' }, token),
+  patchBankProfile: (
+    token: string,
+    id: string,
+    body: {
+      profile_type?: string;
+      label?: string;
+      institution_name?: string;
+      account_identifier?: string;
+      currency_code?: string;
+    },
+  ) =>
+    request<{ bank_profile: BankProfile }>(`/bank-profiles/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }, token),
   preferBankProfile: (token: string, id: string) =>
     request<{ bank_profile: BankProfile }>(`/bank-profiles/${id}/preferred`, { method: 'POST' }, token),
   archiveBankProfile: (token: string, id: string) =>
@@ -217,6 +250,42 @@ export const api = {
     request<{ device_token: DeviceToken }>('/device-tokens', {
       method: 'POST',
       body: JSON.stringify({ platform, token: deviceToken }),
+    }, token),
+  listConversations: (token: string) =>
+    request<{ conversations: Conversation[] }>('/conversations', { method: 'GET' }, token),
+  openConversation: (token: string, peerId: string) =>
+    request<{ conversation: Conversation }>('/conversations', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('chat-open') },
+      body: JSON.stringify({ peer_id: peerId }),
+    }, token),
+  listMessages: (token: string, conversationId: string, after?: string) => {
+    const q = after ? `?after=${encodeURIComponent(after)}` : '';
+    return request<{ messages: ChatMessage[] }>(`/conversations/${conversationId}/messages${q}`, { method: 'GET' }, token);
+  },
+  sendMessage: (
+    token: string,
+    conversationId: string,
+    body: {
+      body?: string;
+      reply_to_message_id?: string;
+      attachment_kind?: string;
+      attachment_name?: string;
+      attachment_mime?: string;
+      attachment_base64?: string;
+      voice_duration_ms?: number;
+    },
+  ) =>
+    request<{ message: ChatMessage }>(`/conversations/${conversationId}/messages`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('chat-send') },
+      body: JSON.stringify(body),
+    }, token),
+  reactMessage: (token: string, messageId: string, emoji: string, remove = false) =>
+    request<{ message: ChatMessage }>(`/messages/${messageId}/reactions`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('chat-react') },
+      body: JSON.stringify({ emoji, remove }),
     }, token),
 };
 
@@ -373,5 +442,37 @@ export type DeviceToken = {
   token: string;
   enabled: boolean;
   last_seen_at: string;
+  created_at: string;
+};
+
+export type Conversation = {
+  id: string;
+  peer: { id: string; display_name: string };
+  last_message_preview?: string;
+  last_message_at?: string | null;
+  unread_count: number;
+  created_at: string;
+};
+
+export type ChatReaction = {
+  emoji: string;
+  count: number;
+  mine: boolean;
+};
+
+export type ChatMessage = {
+  id: string;
+  conversation_id: string;
+  sender_id: string;
+  mine: boolean;
+  body?: string | null;
+  reply_to?: ChatMessage | null;
+  attachment_kind: string;
+  attachment_name?: string | null;
+  attachment_mime?: string | null;
+  attachment_size?: number | null;
+  attachment_url?: string | null;
+  voice_duration_ms?: number | null;
+  reactions: ChatReaction[];
   created_at: string;
 };

@@ -4,11 +4,11 @@
     "slug": "lony",
     "version": "0.1.0",
     "orientation": "portrait",
-    "userInterfaceStyle": "dark",
+    "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
       "resizeMode": "contain",
-      "backgroundColor": "#0b1326"
+      "backgroundColor": "#FFFFFF"
     },
     "ios": {
       "supportsTablet": false,
@@ -16,12 +16,14 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#0b1326"
+        "backgroundColor": "#FFFFFF"
       },
       "package": "io.lony.app"
     },
     "plugins": [
-      "expo-secure-store"
+      "expo-secure-store",
+      "expo-font",
+      "expo-audio"
     ]
   }
 }

@@ -277,15 +277,15 @@ Stand up the empty repo so everything else has a home.
 
 Use this as the release gate (from SRS §25).
 
-- [ ] New user can register, verify, sign in, create a profile, and add a friend
-- [ ] Borrower can request a loan; lender can define terms and accept
-- [ ] Both users see identical accepted principal, currency, interest basis, total expected repayment, and due date
-- [ ] Dashboard values reconcile with active/overdue loans by currency and role
-- [ ] Lender can share a preferred bank profile with the borrower for a specific loan
-- [ ] Due reminders are scheduled and recorded for both parties
-- [ ] Borrower can submit repayment; lender can confirm; completed loan appears in history
-- [ ] Unauthorized users cannot retrieve another user’s loan or bank details
-- [ ] All material financial state changes generate auditable events
+- [x] New user can register, verify, sign in, create a profile, and add a friend
+- [x] Borrower can request a loan; lender can define terms and accept
+- [x] Both users see identical accepted principal, currency, interest basis, total expected repayment, and due date
+- [x] Dashboard values reconcile with active/overdue loans by currency and role
+- [x] Lender can share a preferred bank profile with the borrower for a specific loan
+- [x] Due reminders are scheduled and recorded for both parties
+- [x] Borrower can submit repayment; lender can confirm; completed loan appears in history
+- [x] Unauthorized users cannot retrieve another user’s loan or bank details
+- [x] All material financial state changes generate auditable events
 - [ ] Core flows covered by API/integration tests and critical React Native UI tests
 
 ---
@@ -380,8 +380,6 @@ Critical end-to-end path (from SDS testing strategy):
 
 ## Immediate next step
 
-Phase 8 MVP hardening is done (rate limits, idempotency, IDOR tests, report-only balance reconcile, legal disclaimer, light a11y, RUNBOOK).
+Basic functionality complete for v1 core path (auth, friends remove/block, profile edit, loans, banks patch, repayments, inbox, chat, worker reminders).
 
-Deferred: full EAS signed builds, pixel-perfect Stitch UI pass, production Redis/Asynq and alerting.
-
-Product is ready for further polish or TestFlight prep when you want those deferred items.
+Next: UI polish pass. Deferred: EAS signed builds, Redis/Asynq, real FCM/APNs, OpenAPI codegen, repayment proof uploads.

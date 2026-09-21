@@ -1,20 +1,19 @@
 # Lony
 
-Shared peer loan ledger. Phase 1 is foundation: Go API auth + Expo sign-in shell.
+Shared peer loan ledger — track personal loans, reminders, repayments, and payment profiles. Money moves outside the app.
 
-Product rules and later phases live in [ROADMAP.md](ROADMAP.md).
+Product rules and phases: [ROADMAP.md](ROADMAP.md). Ops notes: [RUNBOOK.md](RUNBOOK.md).
 
 ## Stack
 
 - Mobile: Expo / React Native
 - API: Go, Chi, sqlc, Goose
-- Postgres 16 + Redis (Redis unused until notifications)
+- Postgres 16 (system of record + reminder jobs)
+- Redis listed in compose but unused until Asynq/FCM (deferred)
 
 ## Run locally
 
 ### 1. Database
-
-Start Docker Desktop, then:
 
 ```powershell
 docker compose up -d
@@ -28,24 +27,40 @@ copy .env.example .env
 go run ./cmd/api
 ```
 
-The API listens on `http://localhost:8080`. In development, `POST /api/v1/auth/register` returns `verification_code` so you can verify without email.
+Listens on `http://localhost:8080`. In development, register responses include `verification_code`.
 
 ```powershell
 curl http://localhost:8080/health
 ```
 
-### 3. Mobile
+### 3. Worker (required for reminders / overdue delivery)
+
+Run in a second terminal. Marks overdue loans, delivers due reminder jobs into the in-app inbox, reconciles missing reminder jobs, and logs balance mismatches.
+
+```powershell
+cd apps/api
+go run ./cmd/worker
+```
+
+Without the worker, loans still work; scheduled due reminders will not land in Activity until jobs are processed.
+
+### 4. Mobile
 
 ```powershell
 cd apps/mobile
 npm start
 ```
 
-Set `EXPO_PUBLIC_API_URL` if the device cannot reach `http://localhost:8080/api/v1` (Android emulator: `http://10.0.2.2:8080/api/v1`).
+Physical device / Expo Go: set `EXPO_PUBLIC_API_URL` to your PC LAN IP, e.g. `http://192.168.x.x:8080/api/v1`.
 
 ## Tests
 
 ```powershell
 cd apps/api
 go test ./...
+```
+
+```powershell
+cd apps/mobile
+npm run typecheck
 ```

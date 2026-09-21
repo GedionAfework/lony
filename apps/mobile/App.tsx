@@ -1,20 +1,34 @@
 import { StatusBar } from 'expo-status-bar';
 import * as SecureStore from 'expo-secure-store';
+import {
+  JetBrainsMono_500Medium,
+  JetBrainsMono_600SemiBold,
+  useFonts as useMono,
+} from '@expo-google-fonts/jetbrains-mono';
+import {
+  Manrope_400Regular,
+  Manrope_500Medium,
+  Manrope_600SemiBold,
+  Manrope_700Bold,
+  useFonts as useManrope,
+} from '@expo-google-fonts/manrope';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   Pressable,
-  SafeAreaView,
   ScrollView,
-  StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
-import { api, DISCLAIMER, type BankProfile, type BankProfileShare, type Dashboard, type Friendship, type Loan, type SearchHit, type User } from './src/api';
-import { colors } from './src/theme';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import { api, DISCLAIMER, type AppNotification, type BankProfile, type BankProfileShare, type Dashboard, type Friendship, type Loan, type Repayment, type SearchHit, type User } from './src/api';
+import { BottomNav, type TabId } from './src/BottomNav';
+import { ChatScreen } from './src/ChatScreen';
+import { DashboardHome } from './src/DashboardHome';
+import { ThemeProvider, useTheme } from './src/theme';
+import { BrandMark, Card, Field, Money, PrimaryButton, SecondaryButton, StatusPill, ThemeToggle, useAppStyles } from './src/ui';
 
 const ACCESS_KEY = 'lony.access_token';
 const REFRESH_KEY = 'lony.refresh_token';
@@ -53,9 +67,34 @@ function formatMoney(amount: string | null | undefined, currency: string | null 
   return currency ? `${amount} ${currency}` : amount;
 }
 
-type Screen = 'login' | 'register' | 'verify' | 'home' | 'new-loan' | 'loan' | 'banks';
+type Screen = 'login' | 'register' | 'verify' | 'home' | 'new-loan' | 'loan' | 'banks' | 'activity' | 'chats' | 'profile';
 
 export default function App() {
+  const [manropeLoaded] = useManrope({
+    Manrope_400Regular,
+    Manrope_500Medium,
+    Manrope_600SemiBold,
+    Manrope_700Bold,
+  });
+  const [monoLoaded] = useMono({
+    JetBrainsMono_500Medium,
+    JetBrainsMono_600SemiBold,
+  });
+  const fontsReady = manropeLoaded && monoLoaded;
+
+  return (
+    <SafeAreaProvider>
+      <ThemeProvider>
+        <AppShell fontsReady={fontsReady} />
+      </ThemeProvider>
+    </SafeAreaProvider>
+  );
+}
+
+function AppShell({ fontsReady }: { fontsReady: boolean }) {
+  const styles = useAppStyles();
+  const { colors, resolved } = useTheme();
+
   const [screen, setScreen] = useState<Screen>('login');
   const [booting, setBooting] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -88,6 +127,16 @@ export default function App() {
   const [bankInstitution, setBankInstitution] = useState('');
   const [bankIdentifier, setBankIdentifier] = useState('');
   const [shareFriendId, setShareFriendId] = useState('');
+  const [repayments, setRepayments] = useState<Repayment[]>([]);
+  const [rejectReason, setRejectReason] = useState('');
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const [profileName, setProfileName] = useState('');
+  const [profileLocale, setProfileLocale] = useState('en');
+  const [profileCurrency, setProfileCurrency] = useState('ETB');
+  const [profileTimezone, setProfileTimezone] = useState('Africa/Addis_Ababa');
+  const [editingBankId, setEditingBankId] = useState<string | null>(null);
+  const [editBankLabel, setEditBankLabel] = useState('');
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -99,14 +148,43 @@ export default function App() {
   useEffect(() => {
     (async () => {
       try {
-        const token = await SecureStore.getItemAsync(ACCESS_KEY);
-        if (!token) {
+        const access = await SecureStore.getItemAsync(ACCESS_KEY);
+        const refresh = await SecureStore.getItemAsync(REFRESH_KEY);
+        if (!access && !refresh) {
           return;
         }
-        const me = await api.me(token);
-        setToken(token);
-        setUser(me.user);
-        setScreen('home');
+        try {
+          if (access) {
+            const me = await api.me(access);
+            setToken(access);
+            setUser(me.user);
+            setProfileName(me.user.display_name);
+            setProfileLocale(me.user.locale || 'en');
+            setProfileCurrency(me.user.default_currency_code || 'ETB');
+            setProfileTimezone(me.user.timezone || 'Africa/Addis_Ababa');
+            setScreen('home');
+            registerDevDeviceToken(access).catch(() => undefined);
+            return;
+          }
+        } catch {
+          /* try refresh */
+        }
+        if (refresh) {
+          const tokens = await api.refresh(refresh);
+          await SecureStore.setItemAsync(ACCESS_KEY, tokens.access_token);
+          await SecureStore.setItemAsync(REFRESH_KEY, tokens.refresh_token);
+          setToken(tokens.access_token);
+          setUser(tokens.user);
+          setProfileName(tokens.user.display_name);
+          setProfileLocale(tokens.user.locale || 'en');
+          setProfileCurrency(tokens.user.default_currency_code || 'ETB');
+          setProfileTimezone(tokens.user.timezone || 'Africa/Addis_Ababa');
+          setScreen('home');
+          registerDevDeviceToken(tokens.access_token).catch(() => undefined);
+          return;
+        }
+        await SecureStore.deleteItemAsync(ACCESS_KEY);
+        await SecureStore.deleteItemAsync(REFRESH_KEY);
       } catch {
         await SecureStore.deleteItemAsync(ACCESS_KEY);
         await SecureStore.deleteItemAsync(REFRESH_KEY);
@@ -121,7 +199,21 @@ export default function App() {
     await SecureStore.setItemAsync(REFRESH_KEY, refresh);
     setToken(access);
     setUser(nextUser);
+    setProfileName(nextUser.display_name);
+    setProfileLocale(nextUser.locale || 'en');
+    setProfileCurrency(nextUser.default_currency_code || 'ETB');
+    setProfileTimezone(nextUser.timezone || 'Africa/Addis_Ababa');
     setScreen('home');
+    registerDevDeviceToken(access).catch(() => undefined);
+  }
+
+  async function registerDevDeviceToken(access: string) {
+    let deviceId = await SecureStore.getItemAsync('lony.device_id');
+    if (!deviceId) {
+      deviceId = `dev-${Platform.OS}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      await SecureStore.setItemAsync('lony.device_id', deviceId);
+    }
+    await api.registerDeviceToken(access, Platform.OS === 'ios' ? 'ios' : 'android', deviceId);
   }
 
   async function onRegister() {
@@ -189,6 +281,9 @@ export default function App() {
     setDashboard(null);
     setLoanFilter('');
     setSelectedLoan(null);
+    setRepayments([]);
+    setNotifications([]);
+    setUnreadCount(0);
     setPassword('');
     setScreen('login');
   }
@@ -197,7 +292,7 @@ export default function App() {
     if (!access) {
       return;
     }
-    const [friendRes, incomingRes, loanRes, dashRes, bankRes, shareRes, inShareRes] = await Promise.all([
+    const [friendRes, incomingRes, loanRes, dashRes, bankRes, shareRes, inShareRes, notifyRes] = await Promise.all([
       api.listFriends(access),
       api.listIncoming(access),
       api.listLoans(access, loanFilter ? { currency: dashCurrency, filter: loanFilter } : {}),
@@ -205,6 +300,7 @@ export default function App() {
       api.listBankProfiles(access),
       api.listBankShares(access, false),
       api.listBankShares(access, true),
+      api.listNotifications(access),
     ]);
     setFriends(friendRes.friends ?? []);
     setIncoming(incomingRes.requests ?? []);
@@ -213,6 +309,8 @@ export default function App() {
     setBankProfiles(bankRes.bank_profiles ?? []);
     setOutgoingShares(shareRes.shares ?? []);
     setIncomingShares(inShareRes.shares ?? []);
+    setNotifications(notifyRes.notifications ?? []);
+    setUnreadCount(notifyRes.unread_count ?? 0);
   }
 
   async function applyLoanFilter(filter: string) {
@@ -335,6 +433,63 @@ export default function App() {
     }
   }
 
+  async function onBlock(peerId: string) {
+    if (!token) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.blockUser(token, peerId);
+      await refreshFriends();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not block');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onSaveProfile() {
+    if (!token) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api.patchMe(token, {
+        display_name: profileName.trim(),
+        locale: profileLocale.trim() || 'en',
+        timezone: profileTimezone.trim() || 'Africa/Addis_Ababa',
+        default_currency_code: profileCurrency.trim().toUpperCase() || 'ETB',
+      });
+      setUser(res.user);
+      setDashCurrency(res.user.default_currency_code || dashCurrency);
+      setScreen('home');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not update profile');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onPatchBank(id: string) {
+    if (!token || !editBankLabel.trim()) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.patchBankProfile(token, id, { label: editBankLabel.trim() });
+      setEditingBankId(null);
+      const banks = await api.listBankProfiles(token);
+      setBankProfiles(banks.bank_profiles ?? []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not update profile');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function onCreateLoan() {
     if (!token || !loanFriendId) {
       return;
@@ -377,6 +532,13 @@ export default function App() {
       setSelectedLoan(res.loan);
       setRevealedNumber(null);
       setPaymentProfile(null);
+      setRejectReason('');
+      try {
+        const repay = await api.listRepayments(token, id);
+        setRepayments(repay.repayments ?? []);
+      } catch {
+        setRepayments([]);
+      }
       if (res.loan.your_role === 'borrower') {
         try {
           const pay = await api.loanPaymentProfile(token, id);
@@ -388,6 +550,134 @@ export default function App() {
       setScreen('loan');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not load loan');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onProposeTerms() {
+    if (!token || !selectedLoan || !principal.trim() || !dueDate.trim()) {
+      setError('Principal and due date are required to propose terms');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api.proposeTerms(token, selectedLoan.id, {
+        principal: principal.trim(),
+        currency_code: currency.trim().toUpperCase(),
+        interest_rate_percent: interest.trim() || '0',
+        due_at: new Date(`${dueDate.trim()}T12:00:00.000Z`).toISOString(),
+        note: note.trim() || undefined,
+      });
+      setSelectedLoan(res.loan);
+      await refreshFriends();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not propose terms');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onClaimRepayment() {
+    if (!token || !selectedLoan) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.claimRepayment(token, selectedLoan.id, {});
+      const [loanRes, repayRes] = await Promise.all([
+        api.getLoan(token, selectedLoan.id),
+        api.listRepayments(token, selectedLoan.id),
+      ]);
+      setSelectedLoan(loanRes.loan);
+      setRepayments(repayRes.repayments ?? []);
+      await refreshFriends();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not claim repayment');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onConfirmRepayment(id: string) {
+    if (!token || !selectedLoan) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.confirmRepayment(token, id);
+      const [loanRes, repayRes] = await Promise.all([
+        api.getLoan(token, selectedLoan.id),
+        api.listRepayments(token, selectedLoan.id),
+      ]);
+      setSelectedLoan(loanRes.loan);
+      setRepayments(repayRes.repayments ?? []);
+      await refreshFriends();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not confirm repayment');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onRejectRepayment(id: string) {
+    if (!token || !selectedLoan) {
+      return;
+    }
+    const reason = rejectReason.trim() || 'Amount or proof does not match';
+    setBusy(true);
+    setError(null);
+    try {
+      await api.rejectRepayment(token, id, reason);
+      setRejectReason('');
+      const [loanRes, repayRes] = await Promise.all([
+        api.getLoan(token, selectedLoan.id),
+        api.listRepayments(token, selectedLoan.id),
+      ]);
+      setSelectedLoan(loanRes.loan);
+      setRepayments(repayRes.repayments ?? []);
+      await refreshFriends();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not reject repayment');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onMarkNotificationRead(id: string) {
+    if (!token) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.markNotificationRead(token, id);
+      const res = await api.listNotifications(token);
+      setNotifications(res.notifications ?? []);
+      setUnreadCount(res.unread_count ?? 0);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not mark read');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onMarkAllNotificationsRead() {
+    if (!token) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await api.markAllNotificationsRead(token);
+      const res = await api.listNotifications(token);
+      setNotifications(res.notifications ?? []);
+      setUnreadCount(res.unread_count ?? 0);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not mark all read');
     } finally {
       setBusy(false);
     }
@@ -526,7 +816,7 @@ export default function App() {
     }
   }
 
-  if (booting) {
+  if (booting || !fontsReady) {
     return (
       <SafeAreaView style={styles.safe}>
         <View style={styles.center}>
@@ -536,225 +826,156 @@ export default function App() {
     );
   }
 
+  const authed = Boolean(user && token);
+  const showNav = authed && !['login', 'register', 'verify', 'loan', 'new-loan', 'profile'].includes(screen);
+
+  function tabFromScreen(s: Screen): TabId {
+    if (s === 'banks') return 'banks';
+    if (s === 'activity') return 'activity';
+    if (s === 'chats') return 'chats';
+    return 'dashboard';
+  }
+
+  function goTab(tab: TabId) {
+    if (tab === 'dashboard' || tab === 'loans') {
+      setScreen('home');
+      if (tab === 'loans') {
+        applyLoanFilter(loanFilter || '');
+      }
+      return;
+    }
+    if (tab === 'banks') setScreen('banks');
+    if (tab === 'activity') setScreen('activity');
+    if (tab === 'chats') setScreen('chats');
+  }
+
   return (
     <SafeAreaView style={styles.safe}>
-      <StatusBar style="light" />
+      <StatusBar style={resolved === 'dark' ? 'light' : 'dark'} />
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.flex}
       >
+        {screen === 'chats' && user && token ? (
+          <View style={[styles.flex, { paddingHorizontal: 12, paddingTop: 8 }]}>
+            {error ? <Text style={styles.error}>{error}</Text> : null}
+            <ChatScreen
+              token={token}
+              friends={friends}
+              onBack={() => setScreen('home')}
+              onError={(message) => setError(message)}
+            />
+          </View>
+        ) : (
         <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
-          <Text style={styles.brand}>Lony</Text>
-          <Text style={styles.kicker}>LEDGER</Text>
-          <Text style={styles.subtitle}>Shared loan records and reminders. Not a bank.</Text>
+          {!authed ? (
+            <View style={{ gap: 12, marginBottom: 8, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+              <View style={{ flex: 1, gap: 8 }}>
+                <BrandMark />
+                <Text style={styles.subtitle}>Shared loan records and reminders. Not a bank.</Text>
+              </View>
+              <ThemeToggle />
+            </View>
+          ) : null}
 
           {error ? <Text style={styles.error}>{error}</Text> : null}
 
           {screen === 'home' && user ? (
-            <View style={styles.card}>
-              <Text style={styles.label}>Signed in</Text>
-              <Text style={styles.hero}>{user.display_name}</Text>
-              <Text style={styles.muted}>{user.email}</Text>
-              <Pressable style={styles.secondaryButton} onPress={onLogout}>
-                <Text style={styles.secondaryButtonText}>Sign out</Text>
-              </Pressable>
-            </View>
-          ) : null}
-
-          {screen === 'home' && user && dashboard ? (
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>Dashboard</Text>
-              <View style={styles.row}>
-                {dashboard.by_currency.map((slice) => (
-                  <Pressable
-                    key={slice.currency_code}
-                    style={dashCurrency === slice.currency_code ? styles.smallButton : styles.ghostButton}
-                    onPress={() => onDashCurrency(slice.currency_code)}
-                  >
-                    <Text
-                      style={dashCurrency === slice.currency_code ? styles.smallButtonText : styles.ghostButtonText}
-                    >
-                      {slice.currency_code}
-                    </Text>
-                  </Pressable>
-                ))}
-              </View>
-              {(() => {
-                const slice = dashboard.by_currency.find((c) => c.currency_code === dashCurrency);
-                if (!slice) {
-                  return null;
+            <DashboardHome
+              user={user}
+              dashboard={dashboard}
+              dashCurrency={dashCurrency}
+              loans={loans}
+              friends={friends}
+              loanFilter={loanFilter}
+              onCurrency={onDashCurrency}
+              onFilter={applyLoanFilter}
+              onOpenLoan={openLoan}
+              onNewLoan={() => {
+                setLoanFriendId(friends[0]?.peer.id ?? '');
+                setScreen('new-loan');
+              }}
+              onBanks={() => setScreen('banks')}
+              onLogout={onLogout}
+              onProfile={() => {
+                if (user) {
+                  setProfileName(user.display_name);
+                  setProfileLocale(user.locale || 'en');
+                  setProfileCurrency(user.default_currency_code || 'ETB');
+                  setProfileTimezone(user.timezone || 'Africa/Addis_Ababa');
                 }
-                return (
-                  <View style={{ gap: 10 }}>
-                    <Text style={styles.hero}>
-                      {slice.net} {slice.currency_code}
-                    </Text>
-                    <Text style={styles.muted}>Net in this currency only. No blended total.</Text>
-                    <Pressable style={styles.row} onPress={() => applyLoanFilter('receivables')}>
-                      <Text style={styles.rowTitle}>Others owe me</Text>
-                      <Text style={styles.muted}>
-                        {slice.receivables} {slice.currency_code}
-                      </Text>
+                setScreen('profile');
+              }}
+              formatMoney={formatMoney}
+            />
+          ) : null}
+
+          {screen === 'home' && user ? (
+            <View style={{ gap: 12, marginTop: 8 }}>
+              <Card>
+                <Text style={styles.cardTitle}>Friends</Text>
+                <Text style={styles.muted}>Connect before you create a loan.</Text>
+                <Field label="Search email or name" value={query} onChange={setQuery} />
+                <PrimaryButton label={busy ? 'Working…' : 'Search'} onPress={onSearch} disabled={busy} />
+                {hits.map((hit) => (
+                  <View key={hit.id} style={styles.row}>
+                    <View style={styles.flex}>
+                      <Text style={styles.rowTitle}>{hit.display_name}</Text>
+                      <Text style={styles.muted}>{hit.username ?? hit.id.slice(0, 8)}</Text>
+                    </View>
+                    <SecondaryButton label="Add" onPress={() => onAdd(hit)} disabled={busy} />
+                  </View>
+                ))}
+                {incoming.map((req) => (
+                  <View key={req.id} style={styles.row}>
+                    <View style={styles.flex}>
+                      <Text style={styles.rowTitle}>{req.peer.display_name}</Text>
+                      <Text style={styles.muted}>Incoming request</Text>
+                    </View>
+                    <Pressable style={styles.smallButton} onPress={() => onAccept(req.id)} disabled={busy}>
+                      <Text style={styles.smallButtonText}>Accept</Text>
                     </Pressable>
-                    <Pressable style={styles.row} onPress={() => applyLoanFilter('payables')}>
-                      <Text style={styles.rowTitle}>I owe others</Text>
-                      <Text style={styles.muted}>
-                        {slice.payables} {slice.currency_code}
-                      </Text>
+                    <Pressable style={styles.ghostButton} onPress={() => onReject(req.id)} disabled={busy}>
+                      <Text style={styles.ghostButtonText}>Reject</Text>
                     </Pressable>
-                    <Pressable style={styles.row} onPress={() => applyLoanFilter('due_soon')}>
-                      <Text style={styles.rowTitle}>Due soon</Text>
-                      <Text style={styles.muted}>
-                        {slice.due_soon_count} · {slice.due_soon} {slice.currency_code}
-                      </Text>
-                    </Pressable>
-                    <Pressable style={styles.row} onPress={() => applyLoanFilter('pending_action')}>
-                      <Text style={styles.rowTitle}>Pending requests</Text>
-                      <Text style={styles.muted}>{String(dashboard.pending_requests)}</Text>
-                    </Pressable>
-                    <Pressable style={styles.row} onPress={() => applyLoanFilter('pending_confirmations')}>
-                      <Text style={styles.rowTitle}>Pending confirmations</Text>
-                      <Text style={styles.muted}>{String(dashboard.pending_confirmations)}</Text>
-                    </Pressable>
-                    {slice.friends.length > 0 ? <Text style={styles.label}>Per friend</Text> : null}
-                    {slice.friends.map((fb) => (
-                      <View key={fb.peer.id} style={styles.row}>
-                        <View style={styles.flex}>
-                          <Text style={styles.rowTitle}>{fb.peer.display_name}</Text>
-                          <Text style={styles.muted}>
-                            net {fb.net} {slice.currency_code}
-                          </Text>
-                        </View>
+                  </View>
+                ))}
+                {friends.map((friend) => (
+                  <View key={friend.id} style={{ gap: 8 }}>
+                    <View style={styles.row}>
+                      <View style={styles.flex}>
+                        <Text style={styles.rowTitle}>{friend.peer.display_name}</Text>
+                        <Text style={styles.muted}>Friend</Text>
                       </View>
-                    ))}
-                    {loanFilter ? (
-                      <Pressable onPress={() => applyLoanFilter(loanFilter)}>
-                        <Text style={styles.link}>Clear loan filter</Text>
+                    </View>
+                    <View style={styles.row}>
+                      <Pressable style={styles.ghostButton} onPress={() => onRemove(friend.id)} disabled={busy}>
+                        <Text style={styles.ghostButtonText}>Remove</Text>
                       </Pressable>
-                    ) : null}
-                  </View>
-                );
-              })()}
-            </View>
-          ) : null}
-
-            </View>
-          ) : null}
-
-          {screen === 'home' && user ? (
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>Payment profiles</Text>
-              <Text style={styles.muted}>Encrypted destinations. Lony never moves money.</Text>
-              {bankProfiles.slice(0, 2).map((profile) => (
-                <View key={profile.id} style={styles.row}>
-                  <View style={styles.flex}>
-                    <Text style={styles.rowTitle}>
-                      {profile.label}
-                      {profile.is_preferred ? ' · preferred' : ''}
-                    </Text>
-                    <Text style={styles.muted}>•••• {profile.account_last4}</Text>
-                  </View>
-                </View>
-              ))}
-              <Pressable style={styles.button} onPress={() => { setShareFriendId(friends[0]?.peer.id ?? ''); setScreen('banks'); }}>
-                <Text style={styles.buttonText}>Manage profiles</Text>
-              </Pressable>
-            </View>
-          ) : null}
-
-          {screen === 'home' && user ? (
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>Find people</Text>
-              <Field label="Email or name" value={query} onChange={setQuery} />
-              <Pressable style={styles.button} onPress={onSearch} disabled={busy}>
-                <Text style={styles.buttonText}>{busy ? 'Working…' : 'Search'}</Text>
-              </Pressable>
-              {hits.map((hit) => (
-                <View key={hit.id} style={styles.row}>
-                  <View style={styles.flex}>
-                    <Text style={styles.rowTitle}>{hit.display_name}</Text>
-                    <Text style={styles.muted}>{hit.username ?? 'No username'}</Text>
-                  </View>
-                  <Pressable style={styles.smallButton} onPress={() => onAdd(hit)} disabled={busy}>
-                    <Text style={styles.smallButtonText}>Add</Text>
-                  </Pressable>
-                </View>
-              ))}
-            </View>
-          ) : null}
-
-          {screen === 'home' && incoming.length > 0 ? (
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>Requests</Text>
-              {incoming.map((req) => (
-                <View key={req.id} style={styles.row}>
-                  <View style={styles.flex}>
-                    <Text style={styles.rowTitle}>{req.peer.display_name}</Text>
-                    <Text style={styles.muted}>Wants to connect</Text>
-                  </View>
-                  <Pressable style={styles.smallButton} onPress={() => onAccept(req.id)} disabled={busy}>
-                    <Text style={styles.smallButtonText}>Accept</Text>
-                  </Pressable>
-                  <Pressable style={styles.ghostButton} onPress={() => onReject(req.id)} disabled={busy}>
-                    <Text style={styles.ghostButtonText}>Reject</Text>
-                  </Pressable>
-                </View>
-              ))}
-            </View>
-          ) : null}
-
-          {screen === 'home' && user ? (
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>Friends</Text>
-              {friends.length === 0 ? (
-                <Text style={styles.muted}>No connections yet. Search by email to add someone.</Text>
-              ) : (
-                friends.map((friend) => (
-                  <View key={friend.id} style={styles.row}>
-                    <View style={styles.flex}>
-                      <Text style={styles.rowTitle}>{friend.peer.display_name}</Text>
-                      <Text style={styles.muted}>{friend.peer.username ?? friend.status}</Text>
+                      <Pressable style={styles.ghostButton} onPress={() => onBlock(friend.peer.id)} disabled={busy}>
+                        <Text style={styles.ghostButtonText}>Block</Text>
+                      </Pressable>
                     </View>
-                    <Pressable style={styles.ghostButton} onPress={() => onRemove(friend.id)} disabled={busy}>
-                      <Text style={styles.ghostButtonText}>Remove</Text>
-                    </Pressable>
                   </View>
-                ))
-              )}
+                ))}
+              </Card>
             </View>
           ) : null}
 
-          {screen === 'home' && user ? (
+          {screen === 'profile' && user ? (
             <View style={styles.card}>
-              <Text style={styles.cardTitle}>{loanFilter ? `Loans · ${loanFilter}` : 'Loans'}</Text>
-              <Pressable
-                style={styles.button}
-                onPress={() => {
-                  setLoanFriendId(friends[0]?.peer.id ?? '');
-                  setScreen('new-loan');
-                }}
-                disabled={friends.length === 0}
-              >
-                <Text style={styles.buttonText}>New loan</Text>
+              <Text style={styles.cardTitle}>Profile</Text>
+              <Text style={styles.muted}>{user.email}</Text>
+              <Field label="Display name" value={profileName} onChange={setProfileName} />
+              <Field label="Locale" value={profileLocale} onChange={setProfileLocale} />
+              <Field label="Timezone" value={profileTimezone} onChange={setProfileTimezone} />
+              <Field label="Default currency" value={profileCurrency} onChange={setProfileCurrency} />
+              <Pressable style={styles.button} onPress={onSaveProfile} disabled={busy || !profileName.trim()}>
+                <Text style={styles.buttonText}>{busy ? 'Saving…' : 'Save profile'}</Text>
               </Pressable>
-              {loans.length === 0 ? (
-                <Text style={styles.muted}>No loans yet. Add a friend, then record a shared ledger entry.</Text>
-              ) : (
-                loans.map((loan) => (
-                  <Pressable key={loan.id} style={styles.row} onPress={() => openLoan(loan.id)}>
-                    <View style={styles.flex}>
-                      <Text style={styles.rowTitle}>
-                        {loan.reference_code} · {loan.your_role}
-                      </Text>
-                      <Text style={styles.muted}>
-                        {loan.expected_total
-                          ? `${formatMoney(loan.expected_total, loan.currency_code, user?.locale)} · ${statusLabel(loan.status)}`
-                          : `Waiting for terms · ${statusLabel(loan.status)}`}
-                      </Text>
-                    </View>
-                  </Pressable>
-                ))
-              )}
+              <Pressable onPress={() => setScreen('home')}>
+                <Text style={styles.link}>Back</Text>
+              </Pressable>
             </View>
           ) : null}
 
@@ -797,20 +1018,21 @@ export default function App() {
           {screen === 'loan' && selectedLoan ? (
             <View style={styles.card}>
               <Text style={styles.cardTitle}>{selectedLoan.reference_code}</Text>
-              <Text style={styles.hero}>
-                {selectedLoan.expected_total
-                  ? formatMoney(selectedLoan.expected_total, selectedLoan.currency_code, user?.locale)
-                  : statusLabel(selectedLoan.status)}
-              </Text>
+              <StatusPill status={selectedLoan.status} />
+              <Money
+                value={
+                  selectedLoan.expected_total
+                    ? formatMoney(selectedLoan.expected_total, selectedLoan.currency_code, user?.locale)
+                    : statusLabel(selectedLoan.status)
+                }
+                size="xl"
+              />
               <Text style={styles.muted}>
                 {selectedLoan.your_role === 'borrower' ? `From ${selectedLoan.lender.display_name}` : `To ${selectedLoan.borrower.display_name}`}
               </Text>
-              <Text style={styles.muted} accessibilityRole="text">
-                Status: {statusLabel(selectedLoan.status)}
-              </Text>
               {selectedLoan.principal ? (
                 <Text style={styles.muted}>
-                  Principal {formatMoney(selectedLoan.principal, selectedLoan.currency_code, user?.locale)} · {selectedLoan.interest_basis}{' '}
+                  Principal {formatMoney(selectedLoan.principal, selectedLoan.currency_code, user?.locale)} · flat{' '}
                   {selectedLoan.interest_rate_percent}% · due{' '}
                   {selectedLoan.due_at
                     ? new Date(selectedLoan.due_at).toLocaleDateString(user?.locale || 'en', { year: 'numeric', month: 'short', day: 'numeric' })
@@ -831,6 +1053,25 @@ export default function App() {
                   </Pressable>
                 </>
               ) : null}
+              {selectedLoan.can_propose_terms ? (
+                <View style={{ gap: 8 }}>
+                  <Text style={styles.label}>Propose or update terms</Text>
+                  <Field label="Principal" value={principal} onChange={setPrincipal} keyboardType="decimal-pad" />
+                  <Field label="Flat interest %" value={interest} onChange={setInterest} keyboardType="decimal-pad" />
+                  <Field label="Currency ETB or USD" value={currency} onChange={setCurrency} />
+                  <Field label="Due date YYYY-MM-DD" value={dueDate} onChange={setDueDate} />
+                  <Field label="Note" value={note} onChange={setNote} />
+                  <Pressable
+                    style={styles.button}
+                    onPress={onProposeTerms}
+                    disabled={busy}
+                    accessibilityRole="button"
+                    accessibilityLabel="Propose loan terms"
+                  >
+                    <Text style={styles.buttonText}>{busy ? 'Working…' : 'Send terms'}</Text>
+                  </Pressable>
+                </View>
+              ) : null}
               {selectedLoan.can_reject ? (
                 <Pressable style={styles.secondaryButton} onPress={() => onLoanAction('reject')} disabled={busy}>
                   <Text style={styles.secondaryButtonText}>Reject</Text>
@@ -840,6 +1081,56 @@ export default function App() {
                 <Pressable style={styles.ghostButton} onPress={() => onLoanAction('cancel')} disabled={busy}>
                   <Text style={styles.ghostButtonText}>Cancel</Text>
                 </Pressable>
+              ) : null}
+              {selectedLoan.your_role === 'borrower' &&
+              (selectedLoan.status === 'active' || selectedLoan.status === 'overdue') ? (
+                <Pressable
+                  style={styles.button}
+                  onPress={onClaimRepayment}
+                  disabled={busy}
+                  accessibilityRole="button"
+                  accessibilityLabel="Claim full repayment"
+                >
+                  <Text style={styles.buttonText}>{busy ? 'Working…' : 'I paid the outstanding amount'}</Text>
+                </Pressable>
+              ) : null}
+              {repayments.length > 0 ? (
+                <View style={{ gap: 8 }}>
+                  <Text style={styles.label}>Repayments</Text>
+                  {repayments.map((rep) => (
+                    <View key={rep.id} style={{ gap: 6 }}>
+                      <Text style={styles.rowTitle}>
+                        {formatMoney(rep.amount, selectedLoan.currency_code, user?.locale)} · {statusLabel(rep.status)}
+                      </Text>
+                      {rep.note ? <Text style={styles.muted}>{rep.note}</Text> : null}
+                      {rep.can_confirm ? (
+                        <Pressable
+                          style={styles.button}
+                          onPress={() => onConfirmRepayment(rep.id)}
+                          disabled={busy}
+                          accessibilityRole="button"
+                          accessibilityLabel="Confirm repayment received"
+                        >
+                          <Text style={styles.buttonText}>Confirm received</Text>
+                        </Pressable>
+                      ) : null}
+                      {rep.can_reject ? (
+                        <>
+                          <Field label="Reject reason" value={rejectReason} onChange={setRejectReason} />
+                          <Pressable
+                            style={styles.secondaryButton}
+                            onPress={() => onRejectRepayment(rep.id)}
+                            disabled={busy}
+                            accessibilityRole="button"
+                            accessibilityLabel="Reject repayment claim"
+                          >
+                            <Text style={styles.secondaryButtonText}>Reject claim</Text>
+                          </Pressable>
+                        </>
+                      ) : null}
+                    </View>
+                  ))}
+                </View>
               ) : null}
               {selectedLoan.your_role === 'lender' && (selectedLoan.status === 'active' || selectedLoan.status === 'overdue') ? (
                 <View style={{ gap: 8 }}>
@@ -896,6 +1187,50 @@ export default function App() {
             </View>
           ) : null}
 
+          {screen === 'activity' && user ? (
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>Activity</Text>
+              <Text style={styles.muted}>In-app inbox for friends, loans, repayments, and due reminders.</Text>
+              {unreadCount > 0 ? (
+                <Pressable style={styles.secondaryButton} onPress={onMarkAllNotificationsRead} disabled={busy}>
+                  <Text style={styles.secondaryButtonText}>Mark all read</Text>
+                </Pressable>
+              ) : null}
+              {notifications.length === 0 ? (
+                <Text style={styles.muted}>No notifications yet.</Text>
+              ) : (
+                notifications.map((n) => (
+                  <Pressable
+                    key={n.id}
+                    style={styles.row}
+                    onPress={() => {
+                      if (!n.read_at) {
+                        onMarkNotificationRead(n.id);
+                      }
+                      if (n.loan_id) {
+                        openLoan(n.loan_id);
+                      }
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${n.title}. ${n.read_at ? 'Read' : 'Unread'}`}
+                  >
+                    <View style={styles.flex}>
+                      <Text style={styles.rowTitle}>
+                        {n.read_at ? '' : '• '}
+                        {n.title}
+                      </Text>
+                      <Text style={styles.muted}>{n.body}</Text>
+                      <Text style={styles.muted}>
+                        {new Date(n.created_at).toLocaleString(user.locale || 'en')}
+                      </Text>
+                    </View>
+                  </Pressable>
+                ))
+              )}
+              <Pressable onPress={() => setScreen('home')}>
+                <Text style={styles.link}>Back</Text>
+              </Pressable>
+            </View>
           ) : null}
 
           {screen === 'banks' && user ? (
@@ -924,10 +1259,28 @@ export default function App() {
                     <Pressable style={styles.ghostButton} onPress={() => onRevealProfile(profile.id)} disabled={busy}>
                       <Text style={styles.ghostButtonText}>Reveal</Text>
                     </Pressable>
+                    <Pressable
+                      style={styles.ghostButton}
+                      onPress={() => {
+                        setEditingBankId(profile.id);
+                        setEditBankLabel(profile.label);
+                      }}
+                      disabled={busy}
+                    >
+                      <Text style={styles.ghostButtonText}>Edit</Text>
+                    </Pressable>
                     <Pressable style={styles.ghostButton} onPress={() => onArchiveBank(profile.id)} disabled={busy}>
                       <Text style={styles.ghostButtonText}>Archive</Text>
                     </Pressable>
                   </View>
+                  {editingBankId === profile.id ? (
+                    <View style={{ gap: 8 }}>
+                      <Field label="Label" value={editBankLabel} onChange={setEditBankLabel} />
+                      <Pressable style={styles.smallButton} onPress={() => onPatchBank(profile.id)} disabled={busy}>
+                        <Text style={styles.smallButtonText}>{busy ? 'Saving…' : 'Save label'}</Text>
+                      </Pressable>
+                    </View>
+                  ) : null}
                   {friends.length > 0 ? (
                     <Pressable
                       style={styles.secondaryButton}
@@ -1039,9 +1392,7 @@ export default function App() {
               <Text style={styles.cardTitle}>Sign in</Text>
               <Field label="Email" value={email} onChange={setEmail} keyboardType="email-address" />
               <Field label="Password" value={password} onChange={setPassword} secure />
-              <Pressable style={styles.button} onPress={onLogin} disabled={busy}>
-                <Text style={styles.buttonText}>{busy ? 'Working…' : 'Sign in'}</Text>
-              </Pressable>
+              <PrimaryButton label={busy ? 'Working…' : 'Sign in'} onPress={onLogin} disabled={busy} />
               <Pressable onPress={() => setScreen('register')}>
                 <Text style={styles.link}>New here? Create an account</Text>
               </Pressable>
@@ -1065,110 +1416,19 @@ export default function App() {
             </View>
           ) : null}
         </ScrollView>
+        )}
+        {showNav ? (
+          <BottomNav
+            active={tabFromScreen(screen)}
+            unread={unreadCount}
+            onChange={goTab}
+            onCreate={() => {
+              setLoanFriendId(friends[0]?.peer.id ?? '');
+              setScreen('new-loan');
+            }}
+          />
+        ) : null}
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
-
-function Field({
-  label,
-  value,
-  onChange,
-  secure,
-  keyboardType,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  secure?: boolean;
-  keyboardType?: 'email-address' | 'number-pad' | 'decimal-pad' | 'default';
-}) {
-  return (
-    <View style={styles.field}>
-      <Text style={styles.label}>{label}</Text>
-      <TextInput
-        value={value}
-        onChangeText={onChange}
-        secureTextEntry={secure}
-        autoCapitalize="none"
-        autoCorrect={false}
-        keyboardType={keyboardType ?? 'default'}
-        placeholderTextColor={colors.muted}
-        style={styles.input}
-        accessibilityLabel={label}
-      />
-    </View>
-  );
-}
-
-const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: colors.background },
-  flex: { flex: 1 },
-  row: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  rowTitle: { color: colors.text, fontSize: 16, fontWeight: '600' },
-  smallButton: {
-    backgroundColor: colors.primary,
-    borderRadius: 10,
-    minHeight: 44,
-    paddingHorizontal: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  smallButtonText: { color: colors.onPrimary, fontWeight: '700' },
-  ghostButton: {
-    borderRadius: 10,
-    minHeight: 44,
-    paddingHorizontal: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  ghostButtonText: { color: colors.tertiary, fontWeight: '600' },
-  selectedRow: { backgroundColor: colors.surfaceHigh, borderRadius: 10, padding: 8 },
-  center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  container: { padding: 16, paddingTop: 48, gap: 16 },
-  brand: { color: colors.text, fontSize: 28, fontWeight: '700' },
-  kicker: { color: colors.primary, fontSize: 10, letterSpacing: 3, fontWeight: '600' },
-  subtitle: { color: colors.muted, fontSize: 14, lineHeight: 20, marginBottom: 8 },
-  card: {
-    backgroundColor: colors.surface,
-    borderRadius: 16,
-    padding: 16,
-    gap: 12,
-    borderWidth: 1,
-    borderColor: colors.outline,
-  },
-  cardTitle: { color: colors.text, fontSize: 20, fontWeight: '600' },
-  hero: { color: colors.primary, fontSize: 24, fontWeight: '700' },
-  field: { gap: 6 },
-  label: { color: colors.muted, fontSize: 12, fontWeight: '600', letterSpacing: 0.6, textTransform: 'uppercase' },
-  input: {
-    backgroundColor: colors.surfaceLowest,
-    color: colors.text,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    paddingVertical: 14,
-    fontSize: 16,
-  },
-  button: {
-    backgroundColor: colors.primary,
-    borderRadius: 12,
-    minHeight: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  buttonText: { color: colors.onPrimary, fontWeight: '700', fontSize: 16 },
-  secondaryButton: {
-    backgroundColor: colors.surfaceHigh,
-    borderRadius: 12,
-    minHeight: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  secondaryButtonText: { color: colors.text, fontWeight: '600' },
-  link: { color: colors.tertiary, textAlign: 'center', paddingVertical: 8 },
-  muted: { color: colors.muted, fontSize: 14 },
-  disclaimer: { color: colors.muted, fontSize: 13, lineHeight: 18 },
-  checkbox: { color: colors.primary, fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }), fontSize: 16 },
-  error: { color: colors.error, fontSize: 14 },
-  dev: { color: colors.secondary, fontSize: 13, fontFamily: Platform.select({ ios: 'Menlo', default: 'monospace' }) },
-});

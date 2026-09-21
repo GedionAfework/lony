@@ -21,6 +21,7 @@ type Config struct {
 	RefreshTokenTTL     time.Duration
 	VerificationCodeTTL time.Duration
 	BankKey             []byte
+	MediaDir            string
 }
 
 func Load() (Config, error) {
@@ -36,6 +37,7 @@ func Load() (Config, error) {
 		AccessTokenTTL:      durationEnv("ACCESS_TOKEN_TTL", 15*time.Minute),
 		RefreshTokenTTL:     durationEnv("REFRESH_TOKEN_TTL", 30*24*time.Hour),
 		VerificationCodeTTL: durationEnv("VERIFICATION_CODE_TTL", 10*time.Minute),
+		MediaDir:            getenv("MEDIA_DIR", ""),
 	}
 
 	if cfg.DatabaseURL == "" {

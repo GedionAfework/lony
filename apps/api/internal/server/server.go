@@ -7,6 +7,7 @@ import (
 
 	"equilend/api/internal/auth"
 	"equilend/api/internal/banks"
+	"equilend/api/internal/chat"
 	"equilend/api/internal/config"
 	"equilend/api/internal/dashboard"
 	"equilend/api/internal/friends"
@@ -40,6 +41,13 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 	loansSvc.SetHooks(notifications.LoanHooks{Svc: notifySvc})
 	friendsSvc.SetNotifier(notifications.FriendHooks{Svc: notifySvc})
 	repaySvc.SetNotifier(notifications.RepayHooks{Svc: notifySvc})
+
+	media, err := chat.NewDiskMedia(cfg.MediaDir)
+	if err != nil {
+		panic(err)
+	}
+	chatSvc := chat.NewService(sqlStore, media, friendsSvc)
+	chatH := chat.NewHandler(chatSvc, media)
 
 	authLimit := ratelimit.New(30, time.Minute)
 	apiLimit := ratelimit.New(180, time.Minute)
@@ -125,6 +133,14 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 			r.With(idem.Handler("notifications.read_all")).Post("/notifications/read-all", notifyH.MarkAllRead)
 			r.With(idem.Handler("notifications.read")).Post("/notifications/{id}/read", notifyH.MarkRead)
 			r.With(idem.Handler("notifications.device")).Post("/device-tokens", notifyH.RegisterDevice)
+
+			r.Get("/conversations", chatH.ListConversations)
+			r.With(idem.Handler("chat.open")).Post("/conversations", chatH.Open)
+			r.Get("/conversations/{id}/messages", chatH.ListMessages)
+			r.With(idem.Handler("chat.send")).Post("/conversations/{id}/messages", chatH.Send)
+			r.With(idem.Handler("chat.react")).Post("/messages/{id}/reactions", chatH.React)
+			r.Delete("/messages/{id}", chatH.DeleteMessage)
+			r.Get("/media/{key}", chatH.Media)
 		})
 	})
 
