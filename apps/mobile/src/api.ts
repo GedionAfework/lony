@@ -3,13 +3,24 @@ import { apiBaseUrl } from './theme';
 export type User = {
   id: string;
   email: string;
+  username?: string | null;
+  phone_e164?: string | null;
   display_name: string;
+  first_name?: string | null;
+  middle_name?: string | null;
+  last_name?: string | null;
+  country_code?: string | null;
+  preferred_auth_provider?: string | null;
+  tos_version?: string | null;
+  tos_accepted_at?: string | null;
+  avatar_url?: string | null;
   timezone: string;
   locale: string;
   default_currency_code: string | null;
   email_verified: boolean;
   status: string;
   created_at: string;
+  profile_complete?: boolean;
 };
 
 export type TokenResponse = {
@@ -79,6 +90,17 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     }),
+  oauth: (body: {
+    provider: 'google' | 'telegram';
+    id_token?: string;
+    telegram?: Record<string, string>;
+    accepted_disclaimer: boolean;
+  }) =>
+    request<TokenResponse>('/auth/oauth', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('oauth') },
+      body: JSON.stringify(body),
+    }),
   refresh: (refreshToken: string) =>
     request<TokenResponse>('/auth/refresh', {
       method: 'POST',
@@ -89,6 +111,13 @@ export const api = {
     token: string,
     body: {
       display_name?: string;
+      username?: string;
+      first_name?: string;
+      middle_name?: string;
+      last_name?: string;
+      phone_e164?: string;
+      country_code?: string;
+      preferred_auth_provider?: 'email' | 'google' | 'telegram';
       timezone?: string;
       locale?: string;
       default_currency_code?: string;
@@ -96,6 +125,29 @@ export const api = {
   ) =>
     request<{ user: User }>('/me', {
       method: 'PATCH',
+      body: JSON.stringify(body),
+    }, token),
+  acceptTOS: (token: string) =>
+    request<{ user: User; tos_version: string }>('/me/tos', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('tos') },
+      body: '{}',
+    }, token),
+  getTOS: () =>
+    request<{ version: string; disclaimer: string; document: string }>('/legal/tos', { method: 'GET' }),
+  listPaymentRails: (opts?: { country?: string; scope?: 'global' | 'country' }) => {
+    const params = new URLSearchParams();
+    if (opts?.scope === 'country' && opts.country) {
+      params.set('scope', 'country');
+      params.set('country', opts.country);
+    }
+    const q = params.toString() ? `?${params.toString()}` : '';
+    return request<{ rails: PaymentRail[]; country: string }>(`/payment-rails${q}`, { method: 'GET' });
+  },
+  uploadAvatar: (token: string, body: { filename: string; mime: string; attachment_base64: string }) =>
+    request<{ user: User }>('/me/avatar', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('avatar') },
       body: JSON.stringify(body),
     }, token),
   logout: (token: string) => request<void>('/auth/logout', { method: 'POST' }, token),
@@ -169,7 +221,17 @@ export const api = {
       method: 'POST',
       headers: { 'Idempotency-Key': idemKey('loan-cancel') },
     }, token),
-  claimRepayment: (token: string, loanId: string, body: { amount?: string; note?: string } = {}) =>
+  claimRepayment: (
+    token: string,
+    loanId: string,
+    body: {
+      amount?: string;
+      note?: string;
+      proof_filename?: string;
+      proof_mime?: string;
+      proof_base64?: string;
+    } = {},
+  ) =>
     request<{ repayment: Repayment }>(`/loans/${loanId}/repayments`, {
       method: 'POST',
       headers: { 'Idempotency-Key': idemKey('repay-claim') },
@@ -253,11 +315,11 @@ export const api = {
     }, token),
   listConversations: (token: string) =>
     request<{ conversations: Conversation[] }>('/conversations', { method: 'GET' }, token),
-  openConversation: (token: string, peerId: string) =>
+  openConversation: (token: string, opts: { peer_id?: string; loan_id?: string }) =>
     request<{ conversation: Conversation }>('/conversations', {
       method: 'POST',
       headers: { 'Idempotency-Key': idemKey('chat-open') },
-      body: JSON.stringify({ peer_id: peerId }),
+      body: JSON.stringify(opts),
     }, token),
   listMessages: (token: string, conversationId: string, after?: string) => {
     const q = after ? `?after=${encodeURIComponent(after)}` : '';
@@ -287,6 +349,8 @@ export const api = {
       headers: { 'Idempotency-Key': idemKey('chat-react') },
       body: JSON.stringify({ emoji, remove }),
     }, token),
+  deleteMessage: (token: string, messageId: string) =>
+    request<void>(`/messages/${messageId}`, { method: 'DELETE' }, token),
 };
 
 export type SearchHit = {
@@ -376,11 +440,13 @@ export type Dashboard = {
 
 export type BankProfile = {
   id: string;
-  profile_type: 'bank_account' | 'mobile_wallet' | 'other' | string;
+  profile_type: string;
   label: string;
   institution_name?: string | null;
   account_last4: string;
   currency_code?: string | null;
+  country_code?: string | null;
+  rail_code?: string | null;
   is_preferred: boolean;
   archived_at?: string | null;
   created_at: string;
@@ -398,12 +464,24 @@ export type BankProfileShare = {
   revoked_at?: string | null;
 };
 
+export type PaymentRail = {
+  code: string;
+  label: string;
+  profile_type: string;
+  category: string;
+  countries?: string[];
+  identifier_hint: string;
+  currency_hint?: string;
+};
+
 export type CreateBankProfileBody = {
   profile_type: string;
   label: string;
   institution_name?: string;
   account_identifier: string;
   currency_code?: string;
+  country_code?: string;
+  rail_code?: string;
   is_preferred?: boolean;
 };
 
@@ -414,6 +492,8 @@ export type Repayment = {
   amount: string;
   status: string;
   note?: string | null;
+  proof_url?: string | null;
+  proof_name?: string | null;
   submitted_at: string;
   confirmed_by_user_id?: string | null;
   confirmed_at?: string | null;
@@ -448,6 +528,7 @@ export type DeviceToken = {
 export type Conversation = {
   id: string;
   peer: { id: string; display_name: string };
+  loan_id?: string | null;
   last_message_preview?: string;
   last_message_at?: string | null;
   unread_count: number;

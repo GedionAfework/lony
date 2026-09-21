@@ -146,9 +146,9 @@ export function DashboardHome({
       ) : null}
 
       <View style={{ flexDirection: 'row', gap: 10 }}>
-        <QuickAction label="Requests" icon="↓" onPress={() => onFilter('pending_action')} />
-        <QuickAction label="New loan" icon="+" primary onPress={onNewLoan} />
-        <QuickAction label="Banks" icon="▤" onPress={onBanks} />
+        <QuickAction label="Requests" onPress={() => onFilter('pending_action')} />
+        <QuickAction label="New loan" primary onPress={onNewLoan} />
+        <QuickAction label="Banks" onPress={onBanks} />
       </View>
 
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -261,12 +261,10 @@ export function DashboardHome({
 
 function QuickAction({
   label,
-  icon,
   onPress,
   primary,
 }: {
   label: string;
-  icon: string;
   onPress: () => void;
   primary?: boolean;
 }) {
@@ -275,25 +273,25 @@ function QuickAction({
     <Pressable
       style={{
         flex: 1,
-        minHeight: 84,
-        borderRadius: radii.lg,
+        minHeight: 52,
+        borderRadius: radii.md,
         backgroundColor: primary ? colors.primary : colors.surfaceMuted,
         borderWidth: primary ? 0 : 1,
         borderColor: colors.border,
         alignItems: 'center',
         justifyContent: 'center',
-        gap: 6,
+        paddingHorizontal: 8,
       }}
       onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
     >
-      <Text style={{ color: primary ? colors.onPrimary : colors.primary, fontSize: 22, fontFamily: fonts.uiBold }}>
-        {icon}
-      </Text>
       <Text
         style={{
           color: primary ? colors.onPrimary : colors.text,
           fontFamily: fonts.uiSemi,
-          fontSize: 12,
+          fontSize: 13,
+          textAlign: 'center',
         }}
       >
         {label}

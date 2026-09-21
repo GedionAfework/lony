@@ -1,0 +1,37 @@
+# flyctl deploy from apps/api
+# Docs: https://fly.io/docs/
+
+app = "lony-api"
+primary_region = "fra"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  APP_ENV = "development"
+  HTTP_ADDR = ":8080"
+  MEDIA_DIR = "/data/media"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Free allowance: allow sleep when idle. Set auto_stop=false + min=1 when testing with friends.
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "20s"
+    method = "GET"
+    path = "/health"
+
+[[mounts]]
+  source = "lony_media"
+  destination = "/data"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

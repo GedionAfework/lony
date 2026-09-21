@@ -7,28 +7,36 @@ import (
 	"equilend/api/internal/chat"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 )
 
 func (s *SQLStore) GetConversationByPair(ctx context.Context, low, high uuid.UUID) (chat.Conversation, error) {
-	const q = `SELECT id, user_low_id, user_high_id, last_message_at, created_at FROM conversations WHERE user_low_id=$1 AND user_high_id=$2`
+	const q = `SELECT id, user_low_id, user_high_id, loan_id, last_message_at, created_at
+		FROM conversations WHERE user_low_id=$1 AND user_high_id=$2 AND loan_id IS NULL`
 	var c chat.Conversation
-	err := s.pool.QueryRow(ctx, q, low, high).Scan(&c.ID, &c.UserLowID, &c.UserHighID, &c.LastMessageAt, &c.CreatedAt)
+	err := s.pool.QueryRow(ctx, q, low, high).Scan(&c.ID, &c.UserLowID, &c.UserHighID, &c.LoanID, &c.LastMessageAt, &c.CreatedAt)
+	return c, err
+}
+
+func (s *SQLStore) GetConversationByLoan(ctx context.Context, loanID uuid.UUID) (chat.Conversation, error) {
+	const q = `SELECT id, user_low_id, user_high_id, loan_id, last_message_at, created_at
+		FROM conversations WHERE loan_id=$1`
+	var c chat.Conversation
+	err := s.pool.QueryRow(ctx, q, loanID).Scan(&c.ID, &c.UserLowID, &c.UserHighID, &c.LoanID, &c.LastMessageAt, &c.CreatedAt)
 	return c, err
 }
 
 func (s *SQLStore) GetConversationByID(ctx context.Context, id uuid.UUID) (chat.Conversation, error) {
-	const q = `SELECT id, user_low_id, user_high_id, last_message_at, created_at FROM conversations WHERE id=$1`
+	const q = `SELECT id, user_low_id, user_high_id, loan_id, last_message_at, created_at FROM conversations WHERE id=$1`
 	var c chat.Conversation
-	err := s.pool.QueryRow(ctx, q, id).Scan(&c.ID, &c.UserLowID, &c.UserHighID, &c.LastMessageAt, &c.CreatedAt)
+	err := s.pool.QueryRow(ctx, q, id).Scan(&c.ID, &c.UserLowID, &c.UserHighID, &c.LoanID, &c.LastMessageAt, &c.CreatedAt)
 	return c, err
 }
 
-func (s *SQLStore) InsertConversation(ctx context.Context, low, high uuid.UUID) (chat.Conversation, error) {
-	const q = `INSERT INTO conversations (user_low_id, user_high_id) VALUES ($1,$2)
-		RETURNING id, user_low_id, user_high_id, last_message_at, created_at`
+func (s *SQLStore) InsertConversation(ctx context.Context, low, high uuid.UUID, loanID *uuid.UUID) (chat.Conversation, error) {
+	const q = `INSERT INTO conversations (user_low_id, user_high_id, loan_id) VALUES ($1,$2,$3)
+		RETURNING id, user_low_id, user_high_id, loan_id, last_message_at, created_at`
 	var c chat.Conversation
-	err := s.pool.QueryRow(ctx, q, low, high).Scan(&c.ID, &c.UserLowID, &c.UserHighID, &c.LastMessageAt, &c.CreatedAt)
+	err := s.pool.QueryRow(ctx, q, low, high, loanID).Scan(&c.ID, &c.UserLowID, &c.UserHighID, &c.LoanID, &c.LastMessageAt, &c.CreatedAt)
 	return c, err
 }
 
@@ -51,7 +59,7 @@ func (s *SQLStore) IsMember(ctx context.Context, conversationID, userID uuid.UUI
 func (s *SQLStore) ListConversations(ctx context.Context, userID uuid.UUID) ([]chat.ConversationListRow, error) {
 	const q = `
 SELECT
-  c.id, c.user_low_id, c.user_high_id, c.last_message_at, c.created_at,
+  c.id, c.user_low_id, c.user_high_id, c.loan_id, c.last_message_at, c.created_at,
   m.body, m.attachment_kind, m.sender_id, m.created_at,
   (
     SELECT COUNT(*)::int FROM messages msg
@@ -79,7 +87,7 @@ ORDER BY COALESCE(c.last_message_at, c.created_at) DESC`
 	for rows.Next() {
 		var row chat.ConversationListRow
 		if err := rows.Scan(
-			&row.ID, &row.UserLowID, &row.UserHighID, &row.LastMessageAt, &row.CreatedAt,
+			&row.ID, &row.UserLowID, &row.UserHighID, &row.LoanID, &row.LastMessageAt, &row.CreatedAt,
 			&row.LastBody, &row.LastAttachmentKind, &row.LastSenderID, &row.LastCreatedAt, &row.UnreadCount,
 		); err != nil {
 			return nil, err
@@ -97,6 +105,30 @@ func (s *SQLStore) TouchConversation(ctx context.Context, id uuid.UUID, at time.
 func (s *SQLStore) MarkConversationRead(ctx context.Context, conversationID, userID uuid.UUID, at time.Time) error {
 	_, err := s.pool.Exec(ctx, `UPDATE conversation_members SET last_read_at=$3 WHERE conversation_id=$1 AND user_id=$2`, conversationID, userID, at)
 	return err
+}
+
+func (s *SQLStore) CanAccessMediaKey(ctx context.Context, userID uuid.UUID, objectKey string) (bool, error) {
+	const q = `
+SELECT EXISTS (
+  SELECT 1 FROM users u WHERE u.id = $1 AND u.avatar_object_key = $2 AND u.deleted_at IS NULL
+)
+OR EXISTS (
+  SELECT 1 FROM messages m
+  JOIN conversation_members cm ON cm.conversation_id = m.conversation_id AND cm.user_id = $1
+  WHERE m.attachment_object_key = $2 AND m.deleted_at IS NULL
+)
+OR EXISTS (
+  SELECT 1 FROM media_objects mo
+  JOIN repayments r ON r.proof_attachment_id = mo.id
+  JOIN loans l ON l.id = r.loan_id
+  WHERE mo.object_key = $2 AND (l.borrower_id = $1 OR l.lender_id = $1)
+)
+OR EXISTS (
+  SELECT 1 FROM media_objects mo WHERE mo.object_key = $2 AND mo.owner_user_id = $1
+)`
+	var ok bool
+	err := s.pool.QueryRow(ctx, q, userID, objectKey).Scan(&ok)
+	return ok, err
 }
 
 func (s *SQLStore) InsertMessage(ctx context.Context, msg chat.Message) (chat.Message, error) {
@@ -173,9 +205,6 @@ func (s *SQLStore) SoftDeleteMessage(ctx context.Context, id, senderID uuid.UUID
 		&out.AttachmentKind, &out.AttachmentName, &out.AttachmentMIME, &out.AttachmentSize,
 		&out.AttachmentObjectKey, &out.VoiceDurationMs, &out.CreatedAt,
 	)
-	if err == pgx.ErrNoRows {
-		return chat.Message{}, err
-	}
 	return out, err
 }
 
@@ -220,3 +249,4 @@ func (s *SQLStore) GetUserPeer(ctx context.Context, id uuid.UUID) (chat.Peer, er
 	err := s.pool.QueryRow(ctx, q, id).Scan(&p.ID, &p.DisplayName)
 	return p, err
 }
+

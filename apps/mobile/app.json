@@ -6,6 +6,7 @@
     "orientation": "portrait",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+    "scheme": "lony",
     "splash": {
       "resizeMode": "contain",
       "backgroundColor": "#FFFFFF"
@@ -18,12 +19,44 @@
       "adaptiveIcon": {
         "backgroundColor": "#FFFFFF"
       },
-      "package": "io.lony.app"
+      "package": "io.lony.app",
+      "intentFilters": [
+        {
+          "action": "VIEW",
+          "category": [
+            "BROWSABLE",
+            "DEFAULT"
+          ],
+          "data": [
+            {
+              "scheme": "lony"
+            }
+          ]
+        }
+      ]
     },
     "plugins": [
       "expo-secure-store",
       "expo-font",
-      "expo-audio"
-    ]
+      "expo-audio",
+      [
+        "expo-notifications",
+        {
+          "color": "#0D9488"
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Lony to access photos for your profile picture and repayment proofs."
+        }
+      ],
+      "expo-web-browser"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": ""
+      }
+    }
   }
 }

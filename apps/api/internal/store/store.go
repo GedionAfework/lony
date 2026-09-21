@@ -31,7 +31,7 @@ func (s *SQLStore) CreateUser(ctx context.Context, email, passwordHash, displayN
 	if err != nil {
 		return auth.UserRecord{}, err
 	}
-	return mapUser(row), nil
+	return s.hydrateUser(ctx, mapUser(row))
 }
 
 func (s *SQLStore) GetUserByEmail(ctx context.Context, email string) (auth.UserRecord, error) {
@@ -39,7 +39,7 @@ func (s *SQLStore) GetUserByEmail(ctx context.Context, email string) (auth.UserR
 	if err != nil {
 		return auth.UserRecord{}, err
 	}
-	return mapUser(row), nil
+	return s.hydrateUser(ctx, mapUser(row))
 }
 
 func (s *SQLStore) GetUserByID(ctx context.Context, id uuid.UUID) (auth.UserRecord, error) {
@@ -47,7 +47,7 @@ func (s *SQLStore) GetUserByID(ctx context.Context, id uuid.UUID) (auth.UserReco
 	if err != nil {
 		return auth.UserRecord{}, err
 	}
-	return mapUser(row), nil
+	return s.hydrateUser(ctx, mapUser(row))
 }
 
 func (s *SQLStore) MarkEmailVerified(ctx context.Context, id uuid.UUID) (auth.UserRecord, error) {
@@ -55,21 +55,17 @@ func (s *SQLStore) MarkEmailVerified(ctx context.Context, id uuid.UUID) (auth.Us
 	if err != nil {
 		return auth.UserRecord{}, err
 	}
-	return mapUser(row), nil
+	return s.hydrateUser(ctx, mapUser(row))
 }
 
-func (s *SQLStore) UpdateUserProfile(ctx context.Context, id uuid.UUID, displayName, timezone, locale, currency *string) (auth.UserRecord, error) {
-	row, err := s.q.UpdateUserProfile(ctx, sqlc.UpdateUserProfileParams{
-		ID:                  id,
-		DisplayName:         displayName,
-		Timezone:            timezone,
-		Locale:              locale,
-		DefaultCurrencyCode: currency,
+func (s *SQLStore) UpdateUserProfile(ctx context.Context, id uuid.UUID, displayName, username, timezone, locale, currency *string) (auth.UserRecord, error) {
+	return s.UpdateUserAccount(ctx, id, auth.AccountUpdate{
+		DisplayName: displayName,
+		Username:    username,
+		Timezone:    timezone,
+		Locale:      locale,
+		Currency:    currency,
 	})
-	if err != nil {
-		return auth.UserRecord{}, err
-	}
-	return mapUser(row), nil
 }
 
 func (s *SQLStore) CreateSession(ctx context.Context, userID uuid.UUID, refreshHash string, device *string, expiresAt time.Time) (auth.SessionRecord, error) {
@@ -158,8 +154,11 @@ func mapUser(row sqlc.User) auth.UserRecord {
 	return auth.UserRecord{
 		ID:                  row.ID,
 		Email:               row.Email,
+		Username:            row.Username,
+		PhoneE164:           row.PhoneE164,
 		DisplayName:         row.DisplayName,
 		PasswordHash:        row.PasswordHash,
+		AvatarObjectKey:     row.AvatarObjectKey,
 		EmailVerifiedAt:     row.EmailVerifiedAt,
 		Status:              row.Status,
 		Timezone:            row.Timezone,

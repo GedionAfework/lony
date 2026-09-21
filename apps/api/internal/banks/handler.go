@@ -25,6 +25,8 @@ type createBody struct {
 	InstitutionName *string `json:"institution_name"`
 	Identifier      string  `json:"account_identifier"`
 	CurrencyCode    *string `json:"currency_code"`
+	CountryCode     *string `json:"country_code"`
+	RailCode        *string `json:"rail_code"`
 	IsPreferred     bool    `json:"is_preferred"`
 }
 

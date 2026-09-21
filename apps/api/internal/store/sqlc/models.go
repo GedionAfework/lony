@@ -134,6 +134,8 @@ type BankProfile struct {
 	AccountIdentifierEncrypted []byte     `json:"account_identifier_encrypted"`
 	AccountLast4               string     `json:"account_last4"`
 	CurrencyCode               *string    `json:"currency_code"`
+	CountryCode                *string    `json:"country_code"`
+	RailCode                   *string    `json:"rail_code"`
 	IsPreferred                bool       `json:"is_preferred"`
 	ArchivedAt                 *time.Time `json:"archived_at"`
 	CreatedAt                  time.Time  `json:"created_at"`

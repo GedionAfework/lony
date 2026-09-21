@@ -7,6 +7,13 @@ CREATE TABLE users (
   phone_e164 varchar(20),
   username citext UNIQUE,
   display_name varchar(120) NOT NULL,
+  first_name varchar(60),
+  middle_name varchar(60),
+  last_name varchar(60),
+  country_code char(2),
+  preferred_auth_provider varchar(16),
+  tos_version varchar(32),
+  tos_accepted_at timestamptz,
   avatar_object_key varchar,
   timezone varchar(64) NOT NULL DEFAULT 'UTC',
   locale varchar(16) NOT NULL DEFAULT 'en',
@@ -17,12 +24,41 @@ CREATE TABLE users (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
   deleted_at timestamptz,
-  CHECK (status IN ('active', 'suspended', 'deletion_pending', 'deleted'))
+  CHECK (status IN ('active', 'suspended', 'deletion_pending', 'deleted')),
+  CHECK (
+    preferred_auth_provider IS NULL
+    OR preferred_auth_provider IN ('email', 'google', 'telegram')
+  )
 );
 
 CREATE UNIQUE INDEX users_phone_e164_key
   ON users (phone_e164)
   WHERE phone_e164 IS NOT NULL AND deleted_at IS NULL;
+
+CREATE TABLE media_objects (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  owner_user_id uuid NOT NULL REFERENCES users(id),
+  object_key text NOT NULL UNIQUE,
+  kind varchar(32) NOT NULL,
+  mime_type text,
+  original_name text,
+  byte_size integer NOT NULL DEFAULT 0,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX media_objects_owner_idx ON media_objects (owner_user_id);
+
+CREATE TABLE user_identities (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES users(id),
+  provider varchar(32) NOT NULL,
+  subject text NOT NULL,
+  email text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE (provider, subject)
+);
+
+CREATE INDEX user_identities_user_idx ON user_identities (user_id);
 
 CREATE TABLE user_sessions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -162,12 +198,16 @@ CREATE TABLE bank_profiles (
   account_identifier_encrypted bytea NOT NULL,
   account_last4 varchar(4) NOT NULL,
   currency_code char(3),
+  country_code char(2),
+  rail_code varchar(64),
   is_preferred boolean NOT NULL DEFAULT false,
   archived_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  CHECK (profile_type IN ('bank_account', 'mobile_wallet', 'other')),
-  CHECK (currency_code IS NULL OR currency_code IN ('ETB', 'USD'))
+  CHECK (profile_type IN (
+    'bank_account', 'iban', 'mobile_money', 'mobile_wallet', 'crypto_wallet', 'card',
+    'paypal', 'wise', 'cash_app', 'venmo', 'upi', 'pix', 'sepa', 'swift', 'other'
+  ))
 );
 
 CREATE INDEX bank_profiles_user_idx ON bank_profiles (user_id, archived_at);
@@ -214,7 +254,7 @@ CREATE TABLE repayments (
   amount numeric(20,4) NOT NULL CHECK (amount > 0),
   status varchar(32) NOT NULL,
   note varchar(500),
-  proof_attachment_id uuid,
+  proof_attachment_id uuid REFERENCES media_objects(id),
   submitted_at timestamptz NOT NULL DEFAULT now(),
   confirmed_by_user_id uuid REFERENCES users(id),
   confirmed_at timestamptz,
@@ -290,12 +330,22 @@ CREATE TABLE conversations (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   user_low_id uuid NOT NULL REFERENCES users(id),
   user_high_id uuid NOT NULL REFERENCES users(id),
+  loan_id uuid REFERENCES loans(id),
   last_message_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   CHECK (user_low_id <> user_high_id)
 );
 
-CREATE UNIQUE INDEX conversations_pair_key ON conversations (user_low_id, user_high_id);
+CREATE UNIQUE INDEX conversations_pair_key
+  ON conversations (user_low_id, user_high_id)
+  WHERE loan_id IS NULL;
+
+CREATE UNIQUE INDEX conversations_loan_key
+  ON conversations (loan_id)
+  WHERE loan_id IS NOT NULL;
+
+CREATE INDEX conversations_loan_idx ON conversations (loan_id)
+  WHERE loan_id IS NOT NULL;
 
 CREATE TABLE conversation_members (
   conversation_id uuid NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,

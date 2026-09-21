@@ -25,7 +25,8 @@ func NewHandler(svc *Service, media *DiskMedia) *Handler {
 }
 
 type openBody struct {
-	PeerID uuid.UUID `json:"peer_id"`
+	PeerID *uuid.UUID `json:"peer_id"`
+	LoanID *uuid.UUID `json:"loan_id"`
 }
 
 type sendBody struct {
@@ -58,7 +59,20 @@ func (h *Handler) Open(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, err)
 		return
 	}
-	out, err := h.svc.OpenOrCreate(r.Context(), auth.UserIDFrom(r.Context()), body.PeerID)
+	actor := auth.UserIDFrom(r.Context())
+	var out any
+	var err error
+	switch {
+	case body.LoanID != nil && *body.LoanID != uuid.Nil:
+		out, err = h.svc.OpenForLoan(r.Context(), actor, *body.LoanID)
+	case body.PeerID != nil && *body.PeerID != uuid.Nil:
+		out, err = h.svc.OpenOrCreate(r.Context(), actor, *body.PeerID)
+	default:
+		httpx.Error(w, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"peer_id": "provide peer_id or loan_id",
+		}))
+		return
+	}
 	if err != nil {
 		httpx.Error(w, err)
 		return
@@ -207,6 +221,15 @@ func (h *Handler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) Media(w http.ResponseWriter, r *http.Request) {
 	key := chi.URLParam(r, "key")
+	ok, err := h.svc.CanAccessMedia(r.Context(), auth.UserIDFrom(r.Context()), key)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	if !ok {
+		httpx.Error(w, httpx.E(http.StatusNotFound, "NOT_FOUND", "media not found"))
+		return
+	}
 	path, err := h.media.Path(key)
 	if err != nil {
 		httpx.Error(w, httpx.E(http.StatusNotFound, "NOT_FOUND", "media not found"))

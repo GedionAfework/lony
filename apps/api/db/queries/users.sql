@@ -29,6 +29,7 @@ RETURNING *;
 UPDATE users
 SET
   display_name = COALESCE(sqlc.narg('display_name'), display_name),
+  username = COALESCE(sqlc.narg('username'), username),
   timezone = COALESCE(sqlc.narg('timezone'), timezone),
   locale = COALESCE(sqlc.narg('locale'), locale),
   default_currency_code = COALESCE(sqlc.narg('default_currency_code'), default_currency_code),

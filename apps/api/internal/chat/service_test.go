@@ -57,7 +57,21 @@ func (m *memoryStore) GetConversationByPair(_ context.Context, low, high uuid.UU
 	if !ok {
 		return Conversation{}, pgx.ErrNoRows
 	}
-	return m.conversations[id], nil
+	c := m.conversations[id]
+	if c.LoanID != nil {
+		return Conversation{}, pgx.ErrNoRows
+	}
+	return c, nil
+}
+func (m *memoryStore) GetConversationByLoan(_ context.Context, loanID uuid.UUID) (Conversation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, c := range m.conversations {
+		if c.LoanID != nil && *c.LoanID == loanID {
+			return c, nil
+		}
+	}
+	return Conversation{}, pgx.ErrNoRows
 }
 func (m *memoryStore) GetConversationByID(_ context.Context, id uuid.UUID) (Conversation, error) {
 	m.mu.Lock()
@@ -68,12 +82,14 @@ func (m *memoryStore) GetConversationByID(_ context.Context, id uuid.UUID) (Conv
 	}
 	return c, nil
 }
-func (m *memoryStore) InsertConversation(_ context.Context, low, high uuid.UUID) (Conversation, error) {
+func (m *memoryStore) InsertConversation(_ context.Context, low, high uuid.UUID, loanID *uuid.UUID) (Conversation, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	c := Conversation{ID: uuid.New(), UserLowID: low, UserHighID: high, CreatedAt: time.Now().UTC()}
+	c := Conversation{ID: uuid.New(), UserLowID: low, UserHighID: high, LoanID: loanID, CreatedAt: time.Now().UTC()}
 	m.conversations[c.ID] = c
-	m.byPair[pairKey(low, high)] = c.ID
+	if loanID == nil {
+		m.byPair[pairKey(low, high)] = c.ID
+	}
 	return c, nil
 }
 func (m *memoryStore) InsertMembers(_ context.Context, conversationID, a, b uuid.UUID) error {
@@ -197,6 +213,18 @@ func (m *memoryStore) GetUserPeer(_ context.Context, id uuid.UUID) (Peer, error)
 		return Peer{}, pgx.ErrNoRows
 	}
 	return p, nil
+}
+func (m *memoryStore) CanAccessMediaKey(_ context.Context, userID uuid.UUID, objectKey string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, msg := range m.messages {
+		if msg.AttachmentObjectKey != nil && *msg.AttachmentObjectKey == objectKey {
+			if _, ok := m.members[msg.ConversationID][userID]; ok {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 func TestSendReplyReact(t *testing.T) {

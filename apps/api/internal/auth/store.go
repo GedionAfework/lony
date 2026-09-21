@@ -8,16 +8,43 @@ import (
 )
 
 type UserRecord struct {
-	ID                  uuid.UUID
-	Email               string
-	DisplayName         string
-	PasswordHash        string
-	EmailVerifiedAt     *time.Time
-	Status              string
-	Timezone            string
-	Locale              string
-	DefaultCurrencyCode *string
-	CreatedAt           time.Time
+	ID                    uuid.UUID
+	Email                 string
+	Username              *string
+	PhoneE164             *string
+	DisplayName           string
+	FirstName             *string
+	MiddleName            *string
+	LastName              *string
+	CountryCode           *string
+	PreferredAuthProvider *string
+	TOSVersion            *string
+	TOSAcceptedAt         *time.Time
+	PasswordHash          string
+	AvatarObjectKey       *string
+	EmailVerifiedAt       *time.Time
+	Status                string
+	Timezone              string
+	Locale                string
+	DefaultCurrencyCode   *string
+	CreatedAt             time.Time
+}
+
+// AccountUpdate is a partial profile update (nil fields are left unchanged).
+type AccountUpdate struct {
+	FirstName             *string
+	MiddleName            *string
+	LastName              *string
+	DisplayName           *string
+	Username              *string
+	PhoneE164             *string
+	CountryCode           *string
+	PreferredAuthProvider *string
+	Timezone              *string
+	Locale                *string
+	Currency              *string
+	TOSVersion            *string
+	TOSAcceptedAt         *time.Time
 }
 
 type SessionRecord struct {
@@ -42,7 +69,12 @@ type Store interface {
 	GetUserByEmail(ctx context.Context, email string) (UserRecord, error)
 	GetUserByID(ctx context.Context, id uuid.UUID) (UserRecord, error)
 	MarkEmailVerified(ctx context.Context, id uuid.UUID) (UserRecord, error)
-	UpdateUserProfile(ctx context.Context, id uuid.UUID, displayName, timezone, locale, currency *string) (UserRecord, error)
+	UpdateUserProfile(ctx context.Context, id uuid.UUID, displayName, username, timezone, locale, currency *string) (UserRecord, error)
+	UpdateUserAccount(ctx context.Context, id uuid.UUID, in AccountUpdate) (UserRecord, error)
+	AcceptTOS(ctx context.Context, id uuid.UUID, version string) (UserRecord, error)
+	SetUserAvatar(ctx context.Context, userID uuid.UUID, objectKey string) (UserRecord, error)
+	FindIdentity(ctx context.Context, provider, subject string) (uuid.UUID, error)
+	LinkIdentity(ctx context.Context, userID uuid.UUID, provider, subject string, email *string) error
 
 	CreateSession(ctx context.Context, userID uuid.UUID, refreshHash string, device *string, expiresAt time.Time) (SessionRecord, error)
 	GetSessionByID(ctx context.Context, id uuid.UUID) (SessionRecord, error)

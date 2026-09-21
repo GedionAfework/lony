@@ -32,6 +32,8 @@ func (s *SQLStore) Insert(ctx context.Context, rec repayments.Record, loan loans
 		return repayments.Record{}, loans.Record{}, err
 	}
 	mapped := mapRepayment(row)
+	mapped.ProofObjectKey = rec.ProofObjectKey
+	mapped.ProofName = rec.ProofName
 	event.Payload = repaymentsClaimPayload(mapped)
 	updated, err := q.UpdateLoan(ctx, updateLoanParams(loan))
 	if err != nil {
@@ -51,7 +53,7 @@ func (s *SQLStore) Get(ctx context.Context, id uuid.UUID) (repayments.Record, er
 	if err != nil {
 		return repayments.Record{}, err
 	}
-	return mapRepayment(row), nil
+	return s.hydrateProof(ctx, mapRepayment(row)), nil
 }
 
 func (s *SQLStore) ListForLoan(ctx context.Context, loanID uuid.UUID) ([]repayments.Record, error) {
@@ -61,7 +63,7 @@ func (s *SQLStore) ListForLoan(ctx context.Context, loanID uuid.UUID) ([]repayme
 	}
 	out := make([]repayments.Record, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, mapRepayment(row))
+		out = append(out, s.hydrateProof(ctx, mapRepayment(row)))
 	}
 	return out, nil
 }
@@ -71,7 +73,7 @@ func (s *SQLStore) GetPendingForLoan(ctx context.Context, loanID uuid.UUID) (rep
 	if err != nil {
 		return repayments.Record{}, err
 	}
-	return mapRepayment(row), nil
+	return s.hydrateProof(ctx, mapRepayment(row)), nil
 }
 
 func (s *SQLStore) SumClaimed(ctx context.Context, loanID uuid.UUID) (decimal.Decimal, error) {
@@ -140,6 +142,20 @@ func mapRepayment(row sqlc.Repayment) repayments.Record {
 		CreatedAt:         row.CreatedAt,
 		UpdatedAt:         row.UpdatedAt,
 	}
+}
+
+func (s *SQLStore) hydrateProof(ctx context.Context, rec repayments.Record) repayments.Record {
+	if rec.ProofAttachmentID == nil {
+		return rec
+	}
+	media, err := s.GetMediaObject(ctx, *rec.ProofAttachmentID)
+	if err != nil {
+		return rec
+	}
+	key := media.ObjectKey
+	rec.ProofObjectKey = &key
+	rec.ProofName = media.OriginalName
+	return rec
 }
 
 func repaymentsClaimPayload(rec repayments.Record) []byte {

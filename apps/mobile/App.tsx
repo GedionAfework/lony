@@ -1,4 +1,8 @@
 import { StatusBar } from 'expo-status-bar';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system';
+import * as ImagePicker from 'expo-image-picker';
+import * as Notifications from 'expo-notifications';
 import * as SecureStore from 'expo-secure-store';
 import {
   JetBrainsMono_500Medium,
@@ -16,6 +20,7 @@ import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
+  Linking,
   Platform,
   Pressable,
   ScrollView,
@@ -27,8 +32,15 @@ import { api, DISCLAIMER, type AppNotification, type BankProfile, type BankProfi
 import { BottomNav, type TabId } from './src/BottomNav';
 import { ChatScreen } from './src/ChatScreen';
 import { DashboardHome } from './src/DashboardHome';
+import {
+  idTokenFromGoogleResponse,
+  openTelegramLogin,
+  parseTelegramDeepLink,
+  useGoogleIdTokenAuth,
+} from './src/oauth';
+import { TermsScreen } from './src/TermsScreen';
 import { ThemeProvider, useTheme } from './src/theme';
-import { BrandMark, Card, Field, Money, PrimaryButton, SecondaryButton, StatusPill, ThemeToggle, useAppStyles } from './src/ui';
+import { BrandMark, Card, CheckRow, EmptyState, Field, Money, PrimaryButton, ScreenHeader, SecondaryButton, SectionLabel, StatusPill, ThemeToggle, useAppStyles } from './src/ui';
 
 const ACCESS_KEY = 'lony.access_token';
 const REFRESH_KEY = 'lony.refresh_token';
@@ -67,7 +79,7 @@ function formatMoney(amount: string | null | undefined, currency: string | null 
   return currency ? `${amount} ${currency}` : amount;
 }
 
-type Screen = 'login' | 'register' | 'verify' | 'home' | 'new-loan' | 'loan' | 'banks' | 'activity' | 'chats' | 'profile';
+type Screen = 'login' | 'register' | 'verify' | 'home' | 'new-loan' | 'loan' | 'banks' | 'activity' | 'chats' | 'profile' | 'tos';
 
 export default function App() {
   const [manropeLoaded] = useManrope({
@@ -94,6 +106,7 @@ export default function App() {
 function AppShell({ fontsReady }: { fontsReady: boolean }) {
   const styles = useAppStyles();
   const { colors, resolved } = useTheme();
+  const googleAuth = useGoogleIdTokenAuth();
 
   const [screen, setScreen] = useState<Screen>('login');
   const [booting, setBooting] = useState(true);
@@ -132,9 +145,21 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [profileName, setProfileName] = useState('');
+  const [profileUsername, setProfileUsername] = useState('');
+  const [profileFirstName, setProfileFirstName] = useState('');
+  const [profileMiddleName, setProfileMiddleName] = useState('');
+  const [profileLastName, setProfileLastName] = useState('');
+  const [profilePhone, setProfilePhone] = useState('');
+  const [profileCountry, setProfileCountry] = useState('ET');
+  const [profileAuthPref, setProfileAuthPref] = useState<'email' | 'google' | 'telegram'>('email');
   const [profileLocale, setProfileLocale] = useState('en');
+  const [paymentRails, setPaymentRails] = useState<import('./src/api').PaymentRail[]>([]);
+  const [selectedRail, setSelectedRail] = useState('');
+  const [bankCountry, setBankCountry] = useState('ET');
+  const [bankRailCode, setBankRailCode] = useState('');
   const [profileCurrency, setProfileCurrency] = useState('ETB');
   const [profileTimezone, setProfileTimezone] = useState('Africa/Addis_Ababa');
+  const [chatLoanId, setChatLoanId] = useState<string | null>(null);
   const [editingBankId, setEditingBankId] = useState<string | null>(null);
   const [editBankLabel, setEditBankLabel] = useState('');
 
@@ -159,6 +184,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
             setToken(access);
             setUser(me.user);
             setProfileName(me.user.display_name);
+            setProfileUsername(me.user.username ?? '');
             setProfileLocale(me.user.locale || 'en');
             setProfileCurrency(me.user.default_currency_code || 'ETB');
             setProfileTimezone(me.user.timezone || 'Africa/Addis_Ababa');
@@ -176,6 +202,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
           setToken(tokens.access_token);
           setUser(tokens.user);
           setProfileName(tokens.user.display_name);
+          setProfileUsername(tokens.user.username ?? '');
           setProfileLocale(tokens.user.locale || 'en');
           setProfileCurrency(tokens.user.default_currency_code || 'ETB');
           setProfileTimezone(tokens.user.timezone || 'Africa/Addis_Ababa');
@@ -194,12 +221,36 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     })();
   }, []);
 
+  useEffect(() => {
+    const handleUrl = (url: string | null) => {
+      if (!url || !url.includes('oauth/telegram')) {
+        return;
+      }
+      const fields = parseTelegramDeepLink(url);
+      if (!fields) {
+        return;
+      }
+      if (!acceptedDisclaimer) {
+        setAcceptedDisclaimer(true);
+      }
+      setBusy(true);
+      setError(null);
+      completeTelegramAuth(fields)
+        .catch((e) => setError(e instanceof Error ? e.message : 'Telegram sign-in failed'))
+        .finally(() => setBusy(false));
+    };
+    Linking.getInitialURL().then(handleUrl).catch(() => undefined);
+    const sub = Linking.addEventListener('url', ({ url }) => handleUrl(url));
+    return () => sub.remove();
+  }, [acceptedDisclaimer]);
+
   async function persistTokens(access: string, refresh: string, nextUser: User) {
     await SecureStore.setItemAsync(ACCESS_KEY, access);
     await SecureStore.setItemAsync(REFRESH_KEY, refresh);
     setToken(access);
     setUser(nextUser);
     setProfileName(nextUser.display_name);
+    setProfileUsername(nextUser.username ?? '');
     setProfileLocale(nextUser.locale || 'en');
     setProfileCurrency(nextUser.default_currency_code || 'ETB');
     setProfileTimezone(nextUser.timezone || 'Africa/Addis_Ababa');
@@ -208,12 +259,22 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   }
 
   async function registerDevDeviceToken(access: string) {
-    let deviceId = await SecureStore.getItemAsync('lony.device_id');
-    if (!deviceId) {
-      deviceId = `dev-${Platform.OS}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-      await SecureStore.setItemAsync('lony.device_id', deviceId);
+    try {
+      const { status } = await Notifications.requestPermissionsAsync();
+      if (status !== 'granted') {
+        return;
+      }
+      const projectId = process.env.EXPO_PUBLIC_EAS_PROJECT_ID?.trim();
+      const push = projectId
+        ? await Notifications.getExpoPushTokenAsync({ projectId })
+        : await Notifications.getExpoPushTokenAsync();
+      if (!push.data.startsWith('ExponentPushToken[') && !push.data.startsWith('ExpoPushToken[')) {
+        return;
+      }
+      await api.registerDeviceToken(access, Platform.OS === 'ios' ? 'ios' : 'android', push.data);
+    } catch {
+      /* Expo Go needs EAS projectId for push; skip fake tokens so worker does not log-spam. */
     }
-    await api.registerDeviceToken(access, Platform.OS === 'ios' ? 'ios' : 'android', deviceId);
   }
 
   async function onRegister() {
@@ -457,16 +518,121 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     setError(null);
     try {
       const res = await api.patchMe(token, {
-        display_name: profileName.trim(),
+        display_name: profileName.trim() || `${profileFirstName} ${profileLastName}`.trim(),
+        username: profileUsername.trim(),
+        first_name: profileFirstName.trim(),
+        middle_name: profileMiddleName.trim() || undefined,
+        last_name: profileLastName.trim(),
+        phone_e164: profilePhone.trim() || undefined,
+        country_code: profileCountry.trim().toUpperCase(),
+        preferred_auth_provider: profileAuthPref,
         locale: profileLocale.trim() || 'en',
         timezone: profileTimezone.trim() || 'Africa/Addis_Ababa',
         default_currency_code: profileCurrency.trim().toUpperCase() || 'ETB',
       });
       setUser(res.user);
+      setProfileUsername(res.user.username ?? '');
+      setProfileFirstName(res.user.first_name ?? '');
+      setProfileMiddleName(res.user.middle_name ?? '');
+      setProfileLastName(res.user.last_name ?? '');
+      setProfilePhone(res.user.phone_e164 ?? '');
+      setProfileCountry(res.user.country_code ?? 'ET');
+      setProfileAuthPref((res.user.preferred_auth_provider as 'email' | 'google' | 'telegram') || 'email');
       setDashCurrency(res.user.default_currency_code || dashCurrency);
       setScreen('home');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not update profile');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onPickAvatar() {
+    if (!token) {
+      return;
+    }
+    const picked = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      quality: 0.8,
+      base64: true,
+    });
+    if (picked.canceled || !picked.assets?.[0]?.base64) {
+      return;
+    }
+    const asset = picked.assets[0];
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api.uploadAvatar(token, {
+        filename: asset.fileName ?? 'avatar.jpg',
+        mime: asset.mimeType ?? 'image/jpeg',
+        attachment_base64: asset.base64!,
+      });
+      setUser(res.user);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not upload photo');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onGoogleSignIn() {
+    if (!acceptedDisclaimer) {
+      setError('Accept the disclaimer to continue');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      let idToken = process.env.EXPO_PUBLIC_GOOGLE_ID_TOKEN?.trim() || '';
+      if (!idToken) {
+        if (!googleAuth.configured) {
+          throw new Error('Set EXPO_PUBLIC_GOOGLE_CLIENT_ID (or EXPO_PUBLIC_GOOGLE_ID_TOKEN for local testing).');
+        }
+        const result = await googleAuth.promptAsync();
+        idToken = idTokenFromGoogleResponse(result) ?? '';
+        if (!idToken) {
+          throw new Error('Google sign-in was cancelled or did not return an ID token');
+        }
+      }
+      const tokens = await api.oauth({
+        provider: 'google',
+        id_token: idToken,
+        accepted_disclaimer: true,
+      });
+      await persistTokens(tokens.access_token, tokens.refresh_token, tokens.user);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Google sign-in failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function completeTelegramAuth(fields: Record<string, string>) {
+    const tokens = await api.oauth({
+      provider: 'telegram',
+      telegram: fields,
+      accepted_disclaimer: true,
+    });
+    await persistTokens(tokens.access_token, tokens.refresh_token, tokens.user);
+  }
+
+  async function onTelegramSignIn() {
+    if (!acceptedDisclaimer) {
+      setError('Accept the disclaimer to continue');
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const fields = await openTelegramLogin();
+      if (!fields) {
+        setError('Telegram sign-in cancelled. Ensure TELEGRAM_BOT_USERNAME is set on the API.');
+        return;
+      }
+      await completeTelegramAuth(fields);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Telegram sign-in failed');
     } finally {
       setBusy(false);
     }
@@ -586,7 +752,21 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     setBusy(true);
     setError(null);
     try {
-      await api.claimRepayment(token, selectedLoan.id, {});
+      const body: {
+        amount?: string;
+        note?: string;
+        proof_filename?: string;
+        proof_mime?: string;
+        proof_base64?: string;
+      } = {};
+      const picked = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true, multiple: false });
+      if (!picked.canceled && picked.assets?.[0]) {
+        const asset = picked.assets[0];
+        body.proof_filename = asset.name;
+        body.proof_mime = asset.mimeType ?? 'application/octet-stream';
+        body.proof_base64 = await FileSystem.readAsStringAsync(asset.uri, { encoding: 'base64' });
+      }
+      await api.claimRepayment(token, selectedLoan.id, body);
       const [loanRes, repayRes] = await Promise.all([
         api.getLoan(token, selectedLoan.id),
         api.listRepayments(token, selectedLoan.id),
@@ -717,6 +897,9 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         label: bankLabel.trim() || 'Payment profile',
         institution_name: bankInstitution.trim() || undefined,
         account_identifier: bankIdentifier.trim(),
+        currency_code: profileCurrency.trim().toUpperCase() || undefined,
+        country_code: bankCountry.trim().toUpperCase() || undefined,
+        rail_code: bankRailCode.trim() || selectedRail || undefined,
         is_preferred: bankProfiles.length === 0,
       });
       setBankIdentifier('');
@@ -844,7 +1027,10 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
       }
       return;
     }
-    if (tab === 'banks') setScreen('banks');
+    if (tab === 'banks') {
+      setScreen('banks');
+      api.listPaymentRails().then((res) => setPaymentRails(res.rails ?? [])).catch(() => undefined);
+    }
     if (tab === 'activity') setScreen('activity');
     if (tab === 'chats') setScreen('chats');
   }
@@ -857,11 +1043,13 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         style={styles.flex}
       >
         {screen === 'chats' && user && token ? (
-          <View style={[styles.flex, { paddingHorizontal: 12, paddingTop: 8 }]}>
-            {error ? <Text style={styles.error}>{error}</Text> : null}
+          <View style={styles.flex}>
+            {error ? <Text style={[styles.error, { paddingHorizontal: 16, paddingTop: 8 }]}>{error}</Text> : null}
             <ChatScreen
               token={token}
               friends={friends}
+              openLoanId={chatLoanId}
+              onLoanOpened={() => setChatLoanId(null)}
               onBack={() => setScreen('home')}
               onError={(message) => setError(message)}
             />
@@ -869,12 +1057,12 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         ) : (
         <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
           {!authed ? (
-            <View style={{ gap: 12, marginBottom: 8, flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' }}>
-              <View style={{ flex: 1, gap: 8 }}>
-                <BrandMark />
-                <Text style={styles.subtitle}>Shared loan records and reminders. Not a bank.</Text>
+            <View style={styles.authHero}>
+              <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+                <BrandMark hero />
+                <ThemeToggle />
               </View>
-              <ThemeToggle />
+              <Text style={styles.authSub}>Shared loan records and reminders. Not a bank.</Text>
             </View>
           ) : null}
 
@@ -895,11 +1083,21 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                 setLoanFriendId(friends[0]?.peer.id ?? '');
                 setScreen('new-loan');
               }}
-              onBanks={() => setScreen('banks')}
+              onBanks={() => {
+                setScreen('banks');
+                api.listPaymentRails().then((res) => setPaymentRails(res.rails ?? [])).catch(() => undefined);
+              }}
               onLogout={onLogout}
               onProfile={() => {
                 if (user) {
                   setProfileName(user.display_name);
+                  setProfileUsername(user.username ?? '');
+                  setProfileFirstName(user.first_name ?? '');
+                  setProfileMiddleName(user.middle_name ?? '');
+                  setProfileLastName(user.last_name ?? '');
+                  setProfilePhone(user.phone_e164 ?? '');
+                  setProfileCountry(user.country_code ?? 'ET');
+                  setProfileAuthPref((user.preferred_auth_provider as 'email' | 'google' | 'telegram') || 'email');
                   setProfileLocale(user.locale || 'en');
                   setProfileCurrency(user.default_currency_code || 'ETB');
                   setProfileTimezone(user.timezone || 'Africa/Addis_Ababa');
@@ -962,179 +1160,222 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
             </View>
           ) : null}
 
+          {screen === 'tos' ? (
+            <View style={[styles.card, { minHeight: 480 }]}>
+              <TermsScreen
+                token={token}
+                requireAccept={Boolean(token)}
+                onAccepted={async () => {
+                  if (token) {
+                    const me = await api.me(token);
+                    setUser(me.user);
+                  }
+                  setScreen(token ? 'profile' : 'register');
+                }}
+                onBack={() => setScreen(token ? 'profile' : 'register')}
+              />
+            </View>
+          ) : null}
+
           {screen === 'profile' && user ? (
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>Profile</Text>
-              <Text style={styles.muted}>{user.email}</Text>
-              <Field label="Display name" value={profileName} onChange={setProfileName} />
-              <Field label="Locale" value={profileLocale} onChange={setProfileLocale} />
-              <Field label="Timezone" value={profileTimezone} onChange={setProfileTimezone} />
-              <Field label="Default currency" value={profileCurrency} onChange={setProfileCurrency} />
-              <Pressable style={styles.button} onPress={onSaveProfile} disabled={busy || !profileName.trim()}>
-                <Text style={styles.buttonText}>{busy ? 'Saving…' : 'Save profile'}</Text>
-              </Pressable>
-              <Pressable onPress={() => setScreen('home')}>
-                <Text style={styles.link}>Back</Text>
-              </Pressable>
+            <View style={{ gap: 14 }}>
+              <ScreenHeader title="Account" onBack={() => setScreen('home')} />
+              <Card>
+                <Text style={styles.muted}>{user.email}</Text>
+                {!user.profile_complete ? (
+                  <Text style={styles.error}>Complete your account (names, username, country, currency, and Terms).</Text>
+                ) : null}
+                <SecondaryButton label={busy ? 'Uploading…' : 'Change profile photo'} onPress={onPickAvatar} disabled={busy} />
+                {user.avatar_url ? <Text style={styles.dev}>Photo set</Text> : null}
+                <SectionLabel>Identity</SectionLabel>
+                <Field label="Username (required)" value={profileUsername} onChange={setProfileUsername} />
+                <Field label="First name" value={profileFirstName} onChange={setProfileFirstName} />
+                <Field label="Middle name" value={profileMiddleName} onChange={setProfileMiddleName} />
+                <Field label="Last name" value={profileLastName} onChange={setProfileLastName} />
+                <Field label="Display name" value={profileName} onChange={setProfileName} />
+                <Field label="Phone (E.164)" value={profilePhone} onChange={setProfilePhone} keyboardType="phone-pad" />
+                <Field label="Country (ISO)" value={profileCountry} onChange={setProfileCountry} />
+                <SectionLabel>Sign-in preference</SectionLabel>
+                <View style={styles.row}>
+                  {(['email', 'google', 'telegram'] as const).map((p) => (
+                    <Pressable
+                      key={p}
+                      style={profileAuthPref === p ? styles.smallButton : styles.ghostButton}
+                      onPress={() => setProfileAuthPref(p)}
+                    >
+                      <Text style={profileAuthPref === p ? styles.smallButtonText : styles.ghostButtonText}>
+                        {p}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </View>
+                <SectionLabel>Preferences</SectionLabel>
+                <Field label="Locale" value={profileLocale} onChange={setProfileLocale} />
+                <Field label="Timezone" value={profileTimezone} onChange={setProfileTimezone} />
+                <Field label="Currency preference" value={profileCurrency} onChange={setProfileCurrency} />
+                <PrimaryButton
+                  label={busy ? 'Saving…' : 'Save account'}
+                  onPress={onSaveProfile}
+                  disabled={busy || !profileUsername.trim() || !profileFirstName.trim() || !profileLastName.trim()}
+                />
+                <SecondaryButton label="Read Terms of Service" onPress={() => setScreen('tos')} />
+                {user.tos_accepted_at ? (
+                  <Text style={styles.dev}>Terms accepted · {user.tos_version}</Text>
+                ) : (
+                  <Text style={styles.error}>You must accept the Terms of Service.</Text>
+                )}
+              </Card>
             </View>
           ) : null}
 
           {screen === 'new-loan' ? (
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>New loan</Text>
-              <Text style={styles.muted}>Shared record only. Money still moves outside the app.</Text>
-              <Text style={styles.label}>Friend</Text>
-              {friends.map((friend) => (
-                <Pressable
-                  key={friend.id}
-                  style={[styles.row, loanFriendId === friend.peer.id ? styles.selectedRow : null]}
-                  onPress={() => setLoanFriendId(friend.peer.id)}
-                >
-                  <Text style={styles.rowTitle}>{friend.peer.display_name}</Text>
-                </Pressable>
-              ))}
-              <View style={styles.row}>
-                <Pressable style={loanRole === 'borrower' ? styles.smallButton : styles.ghostButton} onPress={() => setLoanRole('borrower')}>
-                  <Text style={loanRole === 'borrower' ? styles.smallButtonText : styles.ghostButtonText}>I borrow</Text>
-                </Pressable>
-                <Pressable style={loanRole === 'lender' ? styles.smallButton : styles.ghostButton} onPress={() => setLoanRole('lender')}>
-                  <Text style={loanRole === 'lender' ? styles.smallButtonText : styles.ghostButtonText}>I lend</Text>
-                </Pressable>
-              </View>
-              <Field label="Principal" value={principal} onChange={setPrincipal} keyboardType="decimal-pad" />
-              <Field label="Flat interest %" value={interest} onChange={setInterest} keyboardType="decimal-pad" />
-              <Field label="Currency ETB or USD" value={currency} onChange={setCurrency} />
-              <Field label="Due date YYYY-MM-DD" value={dueDate} onChange={setDueDate} />
-              <Field label="Note" value={note} onChange={setNote} />
-              <Pressable style={styles.button} onPress={onCreateLoan} disabled={busy || !loanFriendId}>
-                <Text style={styles.buttonText}>{busy ? 'Working…' : 'Send for acceptance'}</Text>
-              </Pressable>
-              <Pressable onPress={() => setScreen('home')}>
-                <Text style={styles.link}>Back</Text>
-              </Pressable>
+            <View style={{ gap: 14 }}>
+              <ScreenHeader title="New loan" onBack={() => setScreen('home')} />
+              <Card>
+                <Text style={styles.muted}>Shared record only. Money still moves outside the app.</Text>
+                <SectionLabel>Friend</SectionLabel>
+                {friends.length === 0 ? (
+                  <EmptyState title="No friends yet" body="Add a friend from Home before creating a loan." />
+                ) : (
+                  friends.map((friend) => (
+                    <Pressable
+                      key={friend.id}
+                      style={[styles.row, loanFriendId === friend.peer.id ? styles.selectedRow : null]}
+                      onPress={() => setLoanFriendId(friend.peer.id)}
+                    >
+                      <Text style={styles.rowTitle}>{friend.peer.display_name}</Text>
+                    </Pressable>
+                  ))
+                )}
+                <SectionLabel>Your role</SectionLabel>
+                <View style={styles.row}>
+                  <Pressable style={loanRole === 'borrower' ? styles.smallButton : styles.ghostButton} onPress={() => setLoanRole('borrower')}>
+                    <Text style={loanRole === 'borrower' ? styles.smallButtonText : styles.ghostButtonText}>I borrow</Text>
+                  </Pressable>
+                  <Pressable style={loanRole === 'lender' ? styles.smallButton : styles.ghostButton} onPress={() => setLoanRole('lender')}>
+                    <Text style={loanRole === 'lender' ? styles.smallButtonText : styles.ghostButtonText}>I lend</Text>
+                  </Pressable>
+                </View>
+                <SectionLabel>Terms</SectionLabel>
+                <Field label="Principal" value={principal} onChange={setPrincipal} keyboardType="decimal-pad" />
+                <Field label="Flat interest %" value={interest} onChange={setInterest} keyboardType="decimal-pad" />
+                <Field label="Currency" value={currency} onChange={setCurrency} placeholder="ETB or USD" />
+                <Field label="Due date" value={dueDate} onChange={setDueDate} placeholder="YYYY-MM-DD" />
+                <Field label="Note" value={note} onChange={setNote} />
+                <PrimaryButton label={busy ? 'Working…' : 'Send for acceptance'} onPress={onCreateLoan} disabled={busy || !loanFriendId} />
+              </Card>
             </View>
           ) : null}
 
           {screen === 'loan' && selectedLoan ? (
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>{selectedLoan.reference_code}</Text>
-              <StatusPill status={selectedLoan.status} />
-              <Money
-                value={
-                  selectedLoan.expected_total
-                    ? formatMoney(selectedLoan.expected_total, selectedLoan.currency_code, user?.locale)
-                    : statusLabel(selectedLoan.status)
-                }
-                size="xl"
+            <View style={{ gap: 14 }}>
+              <ScreenHeader
+                title={selectedLoan.reference_code}
+                onBack={() => setScreen('home')}
+                right={<StatusPill status={selectedLoan.status} />}
               />
-              <Text style={styles.muted}>
-                {selectedLoan.your_role === 'borrower' ? `From ${selectedLoan.lender.display_name}` : `To ${selectedLoan.borrower.display_name}`}
-              </Text>
-              {selectedLoan.principal ? (
+              <Card>
+                <Money
+                  value={
+                    selectedLoan.expected_total
+                      ? formatMoney(selectedLoan.expected_total, selectedLoan.currency_code, user?.locale)
+                      : statusLabel(selectedLoan.status)
+                  }
+                  size="xl"
+                />
                 <Text style={styles.muted}>
-                  Principal {formatMoney(selectedLoan.principal, selectedLoan.currency_code, user?.locale)} · flat{' '}
-                  {selectedLoan.interest_rate_percent}% · due{' '}
-                  {selectedLoan.due_at
-                    ? new Date(selectedLoan.due_at).toLocaleDateString(user?.locale || 'en', { year: 'numeric', month: 'short', day: 'numeric' })
-                    : '—'}
+                  {selectedLoan.your_role === 'borrower'
+                    ? `From ${selectedLoan.lender.display_name}`
+                    : `To ${selectedLoan.borrower.display_name}`}
                 </Text>
-              ) : null}
+                {selectedLoan.principal ? (
+                  <Text style={styles.muted}>
+                    Principal {formatMoney(selectedLoan.principal, selectedLoan.currency_code, user?.locale)} · flat{' '}
+                    {selectedLoan.interest_rate_percent}% · due{' '}
+                    {selectedLoan.due_at
+                      ? new Date(selectedLoan.due_at).toLocaleDateString(user?.locale || 'en', {
+                          year: 'numeric',
+                          month: 'short',
+                          day: 'numeric',
+                        })
+                      : '—'}
+                  </Text>
+                ) : null}
+                <SecondaryButton
+                  label="Open loan chat"
+                  onPress={() => {
+                    setChatLoanId(selectedLoan.id);
+                    setScreen('chats');
+                  }}
+                />
+              </Card>
+
               {selectedLoan.can_accept ? (
-                <>
+                <Card>
                   <Text style={styles.disclaimer}>{DISCLAIMER}</Text>
-                  <Pressable
-                    style={styles.button}
-                    onPress={() => onLoanAction('accept')}
-                    disabled={busy}
-                    accessibilityRole="button"
-                    accessibilityLabel="Accept loan terms and disclaimer"
-                  >
-                    <Text style={styles.buttonText}>Accept terms</Text>
-                  </Pressable>
-                </>
+                  <PrimaryButton label="Accept terms" onPress={() => onLoanAction('accept')} disabled={busy} />
+                </Card>
               ) : null}
+
               {selectedLoan.can_propose_terms ? (
-                <View style={{ gap: 8 }}>
-                  <Text style={styles.label}>Propose or update terms</Text>
+                <Card>
+                  <SectionLabel>Propose or update terms</SectionLabel>
                   <Field label="Principal" value={principal} onChange={setPrincipal} keyboardType="decimal-pad" />
                   <Field label="Flat interest %" value={interest} onChange={setInterest} keyboardType="decimal-pad" />
-                  <Field label="Currency ETB or USD" value={currency} onChange={setCurrency} />
-                  <Field label="Due date YYYY-MM-DD" value={dueDate} onChange={setDueDate} />
+                  <Field label="Currency" value={currency} onChange={setCurrency} placeholder="ETB or USD" />
+                  <Field label="Due date" value={dueDate} onChange={setDueDate} placeholder="YYYY-MM-DD" />
                   <Field label="Note" value={note} onChange={setNote} />
-                  <Pressable
-                    style={styles.button}
-                    onPress={onProposeTerms}
-                    disabled={busy}
-                    accessibilityRole="button"
-                    accessibilityLabel="Propose loan terms"
-                  >
-                    <Text style={styles.buttonText}>{busy ? 'Working…' : 'Send terms'}</Text>
-                  </Pressable>
-                </View>
+                  <PrimaryButton label={busy ? 'Working…' : 'Send terms'} onPress={onProposeTerms} disabled={busy} />
+                </Card>
               ) : null}
-              {selectedLoan.can_reject ? (
-                <Pressable style={styles.secondaryButton} onPress={() => onLoanAction('reject')} disabled={busy}>
-                  <Text style={styles.secondaryButtonText}>Reject</Text>
-                </Pressable>
+
+              {(selectedLoan.can_reject || selectedLoan.can_cancel) ? (
+                <Card>
+                  {selectedLoan.can_reject ? (
+                    <SecondaryButton label="Reject" onPress={() => onLoanAction('reject')} disabled={busy} />
+                  ) : null}
+                  {selectedLoan.can_cancel ? (
+                    <Pressable style={styles.ghostButton} onPress={() => onLoanAction('cancel')} disabled={busy}>
+                      <Text style={styles.ghostButtonText}>Cancel loan</Text>
+                    </Pressable>
+                  ) : null}
+                </Card>
               ) : null}
-              {selectedLoan.can_cancel ? (
-                <Pressable style={styles.ghostButton} onPress={() => onLoanAction('cancel')} disabled={busy}>
-                  <Text style={styles.ghostButtonText}>Cancel</Text>
-                </Pressable>
-              ) : null}
+
               {selectedLoan.your_role === 'borrower' &&
               (selectedLoan.status === 'active' || selectedLoan.status === 'overdue') ? (
-                <Pressable
-                  style={styles.button}
-                  onPress={onClaimRepayment}
-                  disabled={busy}
-                  accessibilityRole="button"
-                  accessibilityLabel="Claim full repayment"
-                >
-                  <Text style={styles.buttonText}>{busy ? 'Working…' : 'I paid the outstanding amount'}</Text>
-                </Pressable>
+                <Card>
+                  <PrimaryButton label={busy ? 'Working…' : 'I paid (optional proof)'} onPress={onClaimRepayment} disabled={busy} />
+                </Card>
               ) : null}
+
               {repayments.length > 0 ? (
-                <View style={{ gap: 8 }}>
-                  <Text style={styles.label}>Repayments</Text>
+                <Card>
+                  <SectionLabel>Repayments</SectionLabel>
                   {repayments.map((rep) => (
-                    <View key={rep.id} style={{ gap: 6 }}>
+                    <View key={rep.id} style={{ gap: 8 }}>
                       <Text style={styles.rowTitle}>
                         {formatMoney(rep.amount, selectedLoan.currency_code, user?.locale)} · {statusLabel(rep.status)}
                       </Text>
                       {rep.note ? <Text style={styles.muted}>{rep.note}</Text> : null}
+                      {rep.proof_url ? <Text style={styles.dev}>Proof · {rep.proof_name || 'attachment'}</Text> : null}
                       {rep.can_confirm ? (
-                        <Pressable
-                          style={styles.button}
-                          onPress={() => onConfirmRepayment(rep.id)}
-                          disabled={busy}
-                          accessibilityRole="button"
-                          accessibilityLabel="Confirm repayment received"
-                        >
-                          <Text style={styles.buttonText}>Confirm received</Text>
-                        </Pressable>
+                        <PrimaryButton label="Confirm received" onPress={() => onConfirmRepayment(rep.id)} disabled={busy} />
                       ) : null}
                       {rep.can_reject ? (
                         <>
                           <Field label="Reject reason" value={rejectReason} onChange={setRejectReason} />
-                          <Pressable
-                            style={styles.secondaryButton}
-                            onPress={() => onRejectRepayment(rep.id)}
-                            disabled={busy}
-                            accessibilityRole="button"
-                            accessibilityLabel="Reject repayment claim"
-                          >
-                            <Text style={styles.secondaryButtonText}>Reject claim</Text>
-                          </Pressable>
+                          <SecondaryButton label="Reject claim" onPress={() => onRejectRepayment(rep.id)} disabled={busy} />
                         </>
                       ) : null}
                     </View>
                   ))}
-                </View>
+                </Card>
               ) : null}
+
               {selectedLoan.your_role === 'lender' && (selectedLoan.status === 'active' || selectedLoan.status === 'overdue') ? (
-                <View style={{ gap: 8 }}>
-                  <Text style={styles.label}>Share payment profile</Text>
+                <Card>
+                  <SectionLabel>Share payment profile</SectionLabel>
                   {bankProfiles.length === 0 ? (
                     <Pressable onPress={() => setScreen('banks')}>
                       <Text style={styles.link}>Add a payment profile first</Text>
@@ -1156,231 +1397,273 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                       </Pressable>
                     ))
                   )}
-                </View>
+                </Card>
               ) : null}
+
               {selectedLoan.your_role === 'borrower' ? (
-                <View style={{ gap: 8 }}>
-                  <Text style={styles.label}>Where to send repayment</Text>
+                <Card>
+                  <SectionLabel>Where to send repayment</SectionLabel>
                   {paymentProfile ? (
                     <>
                       <Text style={styles.rowTitle}>
                         {paymentProfile.label} · •••• {paymentProfile.account_last4}
                       </Text>
                       {revealedNumber ? <Text style={styles.dev}>{revealedNumber}</Text> : null}
-                      <Pressable style={styles.secondaryButton} onPress={() => onRevealProfile(paymentProfile.id, true)} disabled={busy}>
-                        <Text style={styles.secondaryButtonText}>{busy ? 'Working…' : 'Reveal number'}</Text>
-                      </Pressable>
+                      <SecondaryButton
+                        label={busy ? 'Working…' : 'Reveal number'}
+                        onPress={() => onRevealProfile(paymentProfile.id, true)}
+                        disabled={busy}
+                      />
                     </>
                   ) : (
-                    <Text style={styles.muted}>The lender has not shared a payment profile yet.</Text>
+                    <EmptyState title="Waiting on lender" body="The lender has not shared a payment profile yet." />
                   )}
-                </View>
+                </Card>
               ) : null}
-              {selectedLoan.events?.map((ev) => (
-                <Text key={ev.id} style={styles.muted}>
-                  {ev.event_type} · {ev.created_at.slice(0, 16)}
-                </Text>
-              ))}
-              <Pressable onPress={() => setScreen('home')}>
-                <Text style={styles.link}>Back</Text>
-              </Pressable>
+
+              {selectedLoan.events?.length ? (
+                <Card>
+                  <SectionLabel>Timeline</SectionLabel>
+                  {selectedLoan.events.map((ev) => (
+                    <Text key={ev.id} style={styles.muted}>
+                      {ev.event_type} · {ev.created_at.slice(0, 16)}
+                    </Text>
+                  ))}
+                </Card>
+              ) : null}
             </View>
           ) : null}
 
           {screen === 'activity' && user ? (
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>Activity</Text>
-              <Text style={styles.muted}>In-app inbox for friends, loans, repayments, and due reminders.</Text>
-              {unreadCount > 0 ? (
-                <Pressable style={styles.secondaryButton} onPress={onMarkAllNotificationsRead} disabled={busy}>
-                  <Text style={styles.secondaryButtonText}>Mark all read</Text>
-                </Pressable>
-              ) : null}
-              {notifications.length === 0 ? (
-                <Text style={styles.muted}>No notifications yet.</Text>
-              ) : (
-                notifications.map((n) => (
-                  <Pressable
-                    key={n.id}
-                    style={styles.row}
-                    onPress={() => {
-                      if (!n.read_at) {
-                        onMarkNotificationRead(n.id);
-                      }
-                      if (n.loan_id) {
-                        openLoan(n.loan_id);
-                      }
-                    }}
-                    accessibilityRole="button"
-                    accessibilityLabel={`${n.title}. ${n.read_at ? 'Read' : 'Unread'}`}
-                  >
-                    <View style={styles.flex}>
-                      <Text style={styles.rowTitle}>
-                        {n.read_at ? '' : '• '}
-                        {n.title}
-                      </Text>
-                      <Text style={styles.muted}>{n.body}</Text>
-                      <Text style={styles.muted}>
-                        {new Date(n.created_at).toLocaleString(user.locale || 'en')}
-                      </Text>
-                    </View>
-                  </Pressable>
-                ))
-              )}
-              <Pressable onPress={() => setScreen('home')}>
-                <Text style={styles.link}>Back</Text>
-              </Pressable>
+            <View style={{ gap: 14 }}>
+              <ScreenHeader
+                title="Inbox"
+                onBack={() => setScreen('home')}
+                right={
+                  unreadCount > 0 ? (
+                    <Pressable onPress={onMarkAllNotificationsRead} disabled={busy}>
+                      <Text style={styles.link}>Mark all read</Text>
+                    </Pressable>
+                  ) : null
+                }
+              />
+              <Card>
+                <Text style={styles.muted}>Friends, loans, repayments, and due reminders.</Text>
+                {notifications.length === 0 ? (
+                  <EmptyState title="All quiet" body="When something needs your attention, it shows up here." />
+                ) : (
+                  notifications.map((n) => (
+                    <Pressable
+                      key={n.id}
+                      style={[styles.row, { alignItems: 'flex-start', paddingVertical: 10 }]}
+                      onPress={() => {
+                        if (!n.read_at) {
+                          onMarkNotificationRead(n.id);
+                        }
+                        if (n.loan_id) {
+                          openLoan(n.loan_id);
+                        }
+                      }}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${n.title}. ${n.read_at ? 'Read' : 'Unread'}`}
+                    >
+                      <View
+                        style={{
+                          width: 8,
+                          height: 8,
+                          borderRadius: 4,
+                          marginTop: 6,
+                          backgroundColor: n.read_at ? 'transparent' : '#1FA8A8',
+                        }}
+                      />
+                      <View style={styles.flex}>
+                        <Text style={styles.rowTitle}>{n.title}</Text>
+                        <Text style={styles.muted}>{n.body}</Text>
+                        <Text style={styles.muted}>
+                          {new Date(n.created_at).toLocaleString(user.locale || 'en')}
+                        </Text>
+                      </View>
+                    </Pressable>
+                  ))
+                )}
+              </Card>
             </View>
           ) : null}
 
           {screen === 'banks' && user ? (
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>Payment profiles</Text>
-              <Text style={styles.muted}>Account numbers are encrypted. Lists show last 4 only.</Text>
-              {bankProfiles.map((profile) => (
-                <View key={profile.id} style={{ gap: 8 }}>
-                  <View style={styles.row}>
-                    <View style={styles.flex}>
-                      <Text style={styles.rowTitle}>
-                        {profile.label}
-                        {profile.is_preferred ? ' · preferred' : ''}
-                      </Text>
-                      <Text style={styles.muted}>
-                        {profile.profile_type} · •••• {profile.account_last4}
-                      </Text>
+            <View style={{ gap: 14 }}>
+              <ScreenHeader title="Payment profiles" onBack={() => { setRevealedNumber(null); setScreen('home'); }} />
+              <Card>
+                <Text style={styles.muted}>
+                  Encrypted destinations for any rail worldwide. Lists show last 4 only.
+                </Text>
+                {bankProfiles.length === 0 ? (
+                  <EmptyState title="No profiles yet" body="Add a bank, mobile money, wallet, or crypto account below." />
+                ) : (
+                  bankProfiles.map((profile) => (
+                    <View key={profile.id} style={{ gap: 8, paddingVertical: 4 }}>
+                      <View style={styles.row}>
+                        <View style={styles.flex}>
+                          <Text style={styles.rowTitle}>
+                            {profile.label}
+                            {profile.is_preferred ? ' · preferred' : ''}
+                          </Text>
+                          <Text style={styles.muted}>
+                            {profile.profile_type} · •••• {profile.account_last4}
+                          </Text>
+                        </View>
+                      </View>
+                      <View style={styles.row}>
+                        {!profile.is_preferred ? (
+                          <Pressable style={styles.smallButton} onPress={() => onPreferBank(profile.id)} disabled={busy}>
+                            <Text style={styles.smallButtonText}>Preferred</Text>
+                          </Pressable>
+                        ) : null}
+                        <Pressable style={styles.ghostButton} onPress={() => onRevealProfile(profile.id)} disabled={busy}>
+                          <Text style={styles.ghostButtonText}>Reveal</Text>
+                        </Pressable>
+                        <Pressable
+                          style={styles.ghostButton}
+                          onPress={() => {
+                            setEditingBankId(profile.id);
+                            setEditBankLabel(profile.label);
+                          }}
+                          disabled={busy}
+                        >
+                          <Text style={styles.ghostButtonText}>Edit</Text>
+                        </Pressable>
+                        <Pressable style={styles.ghostButton} onPress={() => onArchiveBank(profile.id)} disabled={busy}>
+                          <Text style={styles.ghostButtonText}>Archive</Text>
+                        </Pressable>
+                      </View>
+                      {editingBankId === profile.id ? (
+                        <View style={{ gap: 8 }}>
+                          <Field label="Label" value={editBankLabel} onChange={setEditBankLabel} />
+                          <PrimaryButton label={busy ? 'Saving…' : 'Save label'} onPress={() => onPatchBank(profile.id)} disabled={busy} />
+                        </View>
+                      ) : null}
+                      {friends.length > 0 ? (
+                        <SecondaryButton
+                          label="Share with friend"
+                          onPress={() => onShareBank(profile.id, shareFriendId || friends[0].peer.id)}
+                          disabled={busy}
+                        />
+                      ) : null}
                     </View>
-                  </View>
-                  <View style={styles.row}>
-                    {!profile.is_preferred ? (
-                      <Pressable style={styles.smallButton} onPress={() => onPreferBank(profile.id)} disabled={busy}>
-                        <Text style={styles.smallButtonText}>Preferred</Text>
-                      </Pressable>
-                    ) : null}
-                    <Pressable style={styles.ghostButton} onPress={() => onRevealProfile(profile.id)} disabled={busy}>
-                      <Text style={styles.ghostButtonText}>Reveal</Text>
-                    </Pressable>
+                  ))
+                )}
+                {revealedNumber ? <Text style={styles.dev}>Revealed: {revealedNumber}</Text> : null}
+              </Card>
+
+              <Card>
+                <SectionLabel>Add payment account</SectionLabel>
+                <Field label="Account country (ISO)" value={bankCountry} onChange={setBankCountry} placeholder="ET, US, …" />
+                <SecondaryButton
+                  label={paymentRails.length ? `Refresh types (${paymentRails.length})` : 'Load global payment types'}
+                  onPress={() => {
+                    api.listPaymentRails().then((res) => setPaymentRails(res.rails ?? [])).catch((e) => setError(e instanceof Error ? e.message : 'Could not load rails'));
+                  }}
+                />
+                <View style={[styles.row, { flexWrap: 'wrap' }]}>
+                  {(paymentRails.length
+                    ? paymentRails
+                    : [
+                        { code: 'bank_local', label: 'Local bank', profile_type: 'bank_account' },
+                        { code: 'iban', label: 'IBAN', profile_type: 'iban' },
+                        { code: 'swift', label: 'SWIFT', profile_type: 'swift' },
+                        { code: 'mobile_money', label: 'Mobile money', profile_type: 'mobile_money' },
+                        { code: 'paypal', label: 'PayPal', profile_type: 'paypal' },
+                        { code: 'wise', label: 'Wise', profile_type: 'wise' },
+                        { code: 'crypto_wallet', label: 'Crypto', profile_type: 'crypto_wallet' },
+                        { code: 'other', label: 'Other', profile_type: 'other' },
+                      ]
+                  ).map((rail) => (
                     <Pressable
-                      style={styles.ghostButton}
+                      key={rail.code}
+                      style={selectedRail === rail.code ? styles.smallButton : styles.ghostButton}
                       onPress={() => {
-                        setEditingBankId(profile.id);
-                        setEditBankLabel(profile.label);
+                        setSelectedRail(rail.code);
+                        setBankRailCode(rail.code);
+                        setBankType(rail.profile_type);
+                        setBankLabel(rail.label);
                       }}
-                      disabled={busy}
                     >
-                      <Text style={styles.ghostButtonText}>Edit</Text>
-                    </Pressable>
-                    <Pressable style={styles.ghostButton} onPress={() => onArchiveBank(profile.id)} disabled={busy}>
-                      <Text style={styles.ghostButtonText}>Archive</Text>
-                    </Pressable>
-                  </View>
-                  {editingBankId === profile.id ? (
-                    <View style={{ gap: 8 }}>
-                      <Field label="Label" value={editBankLabel} onChange={setEditBankLabel} />
-                      <Pressable style={styles.smallButton} onPress={() => onPatchBank(profile.id)} disabled={busy}>
-                        <Text style={styles.smallButtonText}>{busy ? 'Saving…' : 'Save label'}</Text>
-                      </Pressable>
-                    </View>
-                  ) : null}
-                  {friends.length > 0 ? (
-                    <Pressable
-                      style={styles.secondaryButton}
-                      onPress={() => onShareBank(profile.id, shareFriendId || friends[0].peer.id)}
-                      disabled={busy || friends.length === 0}
-                    >
-                      <Text style={styles.secondaryButtonText}>Share with friend</Text>
-                    </Pressable>
-                  ) : null}
-                </View>
-              ))}
-              {revealedNumber ? <Text style={styles.dev}>Revealed: {revealedNumber}</Text> : null}
-              <Text style={styles.label}>Add profile</Text>
-              <View style={styles.row}>
-                <Pressable style={bankType === 'bank_account' ? styles.smallButton : styles.ghostButton} onPress={() => setBankType('bank_account')}>
-                  <Text style={bankType === 'bank_account' ? styles.smallButtonText : styles.ghostButtonText}>Bank</Text>
-                </Pressable>
-                <Pressable style={bankType === 'mobile_wallet' ? styles.smallButton : styles.ghostButton} onPress={() => setBankType('mobile_wallet')}>
-                  <Text style={bankType === 'mobile_wallet' ? styles.smallButtonText : styles.ghostButtonText}>Wallet</Text>
-                </Pressable>
-                <Pressable style={bankType === 'other' ? styles.smallButton : styles.ghostButton} onPress={() => setBankType('other')}>
-                  <Text style={bankType === 'other' ? styles.smallButtonText : styles.ghostButtonText}>Other</Text>
-                </Pressable>
-              </View>
-              <Field label="Label" value={bankLabel} onChange={setBankLabel} />
-              <Field label="Institution" value={bankInstitution} onChange={setBankInstitution} />
-              <Field label="Account or wallet number" value={bankIdentifier} onChange={setBankIdentifier} />
-              {friends.length > 0 ? (
-                <>
-                  <Text style={styles.label}>Default share friend</Text>
-                  {friends.map((friend) => (
-                    <Pressable
-                      key={friend.id}
-                      style={[styles.row, shareFriendId === friend.peer.id ? styles.selectedRow : null]}
-                      onPress={() => setShareFriendId(friend.peer.id)}
-                    >
-                      <Text style={styles.rowTitle}>{friend.peer.display_name}</Text>
+                      <Text style={selectedRail === rail.code ? styles.smallButtonText : styles.ghostButtonText}>
+                        {rail.label}
+                      </Text>
                     </Pressable>
                   ))}
-                </>
+                </View>
+                <Field label="Label" value={bankLabel} onChange={setBankLabel} />
+                <Field label="Institution" value={bankInstitution} onChange={setBankInstitution} />
+                <Field label="Account or wallet number" value={bankIdentifier} onChange={setBankIdentifier} />
+                {friends.length > 0 ? (
+                  <>
+                    <SectionLabel>Default share friend</SectionLabel>
+                    {friends.map((friend) => (
+                      <Pressable
+                        key={friend.id}
+                        style={[styles.row, shareFriendId === friend.peer.id ? styles.selectedRow : null]}
+                        onPress={() => setShareFriendId(friend.peer.id)}
+                      >
+                        <Text style={styles.rowTitle}>{friend.peer.display_name}</Text>
+                      </Pressable>
+                    ))}
+                  </>
+                ) : null}
+                <PrimaryButton label={busy ? 'Working…' : 'Save encrypted profile'} onPress={onCreateBank} disabled={busy || !bankIdentifier.trim()} />
+              </Card>
+
+              {outgoingShares.filter((s) => !s.revoked_at).length > 0 ? (
+                <Card>
+                  <SectionLabel>Shared with</SectionLabel>
+                  {outgoingShares.filter((s) => !s.revoked_at).map((share) => (
+                    <View key={share.id} style={styles.row}>
+                      <View style={styles.flex}>
+                        <Text style={styles.rowTitle}>{share.profile.label} · •••• {share.profile.account_last4}</Text>
+                        <Text style={styles.muted}>{share.loan_id ? 'Loan share' : 'Friend share'}</Text>
+                      </View>
+                      <Pressable style={styles.ghostButton} onPress={() => onRevokeShare(share.id)} disabled={busy}>
+                        <Text style={styles.ghostButtonText}>Revoke</Text>
+                      </Pressable>
+                    </View>
+                  ))}
+                </Card>
               ) : null}
-              <Pressable style={styles.button} onPress={onCreateBank} disabled={busy || !bankIdentifier.trim()}>
-                <Text style={styles.buttonText}>{busy ? 'Working…' : 'Save encrypted profile'}</Text>
-              </Pressable>
-              {outgoingShares.filter((s) => !s.revoked_at).length > 0 ? <Text style={styles.label}>Shared with</Text> : null}
-              {outgoingShares.filter((s) => !s.revoked_at).map((share) => (
-                <View key={share.id} style={styles.row}>
-                  <View style={styles.flex}>
-                    <Text style={styles.rowTitle}>{share.profile.label} · •••• {share.profile.account_last4}</Text>
-                    <Text style={styles.muted}>{share.loan_id ? 'Loan share' : 'Friend share'}</Text>
-                  </View>
-                  <Pressable style={styles.ghostButton} onPress={() => onRevokeShare(share.id)} disabled={busy}>
-                    <Text style={styles.ghostButtonText}>Revoke</Text>
-                  </Pressable>
-                </View>
-              ))}
-              {incomingShares.length > 0 ? <Text style={styles.label}>Shared with me</Text> : null}
-              {incomingShares.map((share) => (
-                <View key={share.id} style={styles.row}>
-                  <View style={styles.flex}>
-                    <Text style={styles.rowTitle}>{share.profile.label} · •••• {share.profile.account_last4}</Text>
-                    <Text style={styles.muted}>Masked until you reveal</Text>
-                  </View>
-                  <Pressable style={styles.ghostButton} onPress={() => onRevealProfile(share.profile.id)} disabled={busy}>
-                    <Text style={styles.ghostButtonText}>Reveal</Text>
-                  </Pressable>
-                </View>
-              ))}
-              <Pressable onPress={() => { setRevealedNumber(null); setScreen('home'); }}>
-                <Text style={styles.link}>Back</Text>
-              </Pressable>
+
+              {incomingShares.length > 0 ? (
+                <Card>
+                  <SectionLabel>Shared with me</SectionLabel>
+                  {incomingShares.map((share) => (
+                    <View key={share.id} style={styles.row}>
+                      <View style={styles.flex}>
+                        <Text style={styles.rowTitle}>{share.profile.label} · •••• {share.profile.account_last4}</Text>
+                        <Text style={styles.muted}>Masked until you reveal</Text>
+                      </View>
+                      <Pressable style={styles.ghostButton} onPress={() => onRevealProfile(share.profile.id)} disabled={busy}>
+                        <Text style={styles.ghostButtonText}>Reveal</Text>
+                      </Pressable>
+                    </View>
+                  ))}
+                </Card>
+              ) : null}
             </View>
           ) : null}
 
           {screen === 'register' ? (
             <View style={styles.card}>
               <Text style={styles.cardTitle}>Create account</Text>
+              <Text style={styles.muted}>One shared ledger for friends who lend each other money.</Text>
               <Field label="Display name" value={displayName} onChange={setDisplayName} />
               <Field label="Email" value={email} onChange={setEmail} keyboardType="email-address" />
               <Field label="Password" value={password} onChange={setPassword} secure />
               <Text style={styles.disclaimer}>{DISCLAIMER}</Text>
-              <Pressable
-                style={styles.row}
+              <CheckRow
+                checked={acceptedDisclaimer}
+                label="I understand Lony is a shared ledger, not a bank or escrow."
                 onPress={() => setAcceptedDisclaimer((v) => !v)}
-                accessibilityRole="checkbox"
-                accessibilityState={{ checked: acceptedDisclaimer }}
-                accessibilityLabel="Accept Lony product disclaimer"
-              >
-                <Text style={styles.checkbox}>{acceptedDisclaimer ? '[x]' : '[ ]'}</Text>
-                <Text style={[styles.muted, styles.flex]}>I understand Lony is a shared ledger, not a bank or escrow.</Text>
-              </Pressable>
-              <Pressable
-                style={styles.button}
-                onPress={onRegister}
-                disabled={busy || !acceptedDisclaimer}
-                accessibilityRole="button"
-                accessibilityLabel="Register"
-              >
-                <Text style={styles.buttonText}>{busy ? 'Working…' : 'Register'}</Text>
-              </Pressable>
+              />
+              <PrimaryButton label={busy ? 'Working…' : 'Register'} onPress={onRegister} disabled={busy || !acceptedDisclaimer} />
               <Pressable onPress={() => setScreen('login')} accessibilityRole="link" accessibilityLabel="Go to sign in">
                 <Text style={styles.link}>Already have an account? Sign in</Text>
               </Pressable>
@@ -1390,9 +1673,27 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
           {screen === 'login' ? (
             <View style={styles.card}>
               <Text style={styles.cardTitle}>Sign in</Text>
+              <Text style={styles.muted}>Continue with email, Google, or Telegram.</Text>
               <Field label="Email" value={email} onChange={setEmail} keyboardType="email-address" />
               <Field label="Password" value={password} onChange={setPassword} secure />
               <PrimaryButton label={busy ? 'Working…' : 'Sign in'} onPress={onLogin} disabled={busy} />
+              <View style={styles.divider} />
+              <Text style={styles.dividerLabel}>or</Text>
+              <SecondaryButton
+                label="Continue with Google"
+                onPress={onGoogleSignIn}
+                disabled={busy || !acceptedDisclaimer}
+              />
+              <SecondaryButton
+                label="Continue with Telegram"
+                onPress={onTelegramSignIn}
+                disabled={busy || !acceptedDisclaimer}
+              />
+              <CheckRow
+                checked={acceptedDisclaimer}
+                label="Accept disclaimer (needed for Google / Telegram)"
+                onPress={() => setAcceptedDisclaimer((v) => !v)}
+              />
               <Pressable onPress={() => setScreen('register')}>
                 <Text style={styles.link}>New here? Create an account</Text>
               </Pressable>
@@ -1407,9 +1708,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               </Text>
               {devCode ? <Text style={styles.dev}>Dev code: {devCode}</Text> : null}
               <Field label="Code" value={code} onChange={setCode} keyboardType="number-pad" />
-              <Pressable style={styles.button} onPress={onVerify} disabled={busy}>
-                <Text style={styles.buttonText}>{busy ? 'Working…' : 'Verify and continue'}</Text>
-              </Pressable>
+              <PrimaryButton label={busy ? 'Working…' : 'Verify and continue'} onPress={onVerify} disabled={busy} />
               <Pressable onPress={() => setScreen('login')}>
                 <Text style={styles.link}>Back to sign in</Text>
               </Pressable>

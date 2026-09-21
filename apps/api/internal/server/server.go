@@ -13,8 +13,10 @@ import (
 	"equilend/api/internal/friends"
 	"equilend/api/internal/httpx"
 	"equilend/api/internal/idempotency"
+	"equilend/api/internal/legal"
 	"equilend/api/internal/loans"
 	"equilend/api/internal/notifications"
+	"equilend/api/internal/rails"
 	"equilend/api/internal/ratelimit"
 	"equilend/api/internal/repayments"
 	"equilend/api/internal/store"
@@ -26,7 +28,13 @@ import (
 )
 
 func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.Handler {
-	authH := auth.NewHandler(auth.NewService(sqlStore, cfg))
+	mediaStore, err := chat.NewDiskMedia(cfg.MediaDir)
+	if err != nil {
+		panic(err)
+	}
+
+	authSvc := auth.NewService(sqlStore, cfg)
+	authH := auth.NewHandler(authSvc).WithMedia(mediaStore, sqlStore)
 	friendsSvc := friends.NewService(sqlStore)
 	friendsH := friends.NewHandler(friendsSvc)
 	loansSvc := loans.NewService(sqlStore, friendsSvc)
@@ -35,19 +43,17 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 	banksSvc := banks.NewService(sqlStore, loansSvc, friendsSvc, cfg.BankKey)
 	banksH := banks.NewHandler(banksSvc)
 	repaySvc := repayments.NewService(sqlStore, loansSvc)
-	repayH := repayments.NewHandler(repaySvc)
-	notifySvc := notifications.NewService(sqlStore, notifications.LogPusher{})
+	repayH := repayments.NewHandler(repaySvc).WithMedia(mediaStore, sqlStore)
+	notifySvc := notifications.NewService(sqlStore, notifications.NewPusher(cfg.ExpoAccessToken))
 	notifyH := notifications.NewHandler(notifySvc)
 	loansSvc.SetHooks(notifications.LoanHooks{Svc: notifySvc})
 	friendsSvc.SetNotifier(notifications.FriendHooks{Svc: notifySvc})
 	repaySvc.SetNotifier(notifications.RepayHooks{Svc: notifySvc})
 
-	media, err := chat.NewDiskMedia(cfg.MediaDir)
-	if err != nil {
-		panic(err)
-	}
-	chatSvc := chat.NewService(sqlStore, media, friendsSvc)
-	chatH := chat.NewHandler(chatSvc, media)
+	chatSvc := chat.NewService(sqlStore, mediaStore, friendsSvc)
+	chatSvc.SetLoans(loansSvc)
+	chatH := chat.NewHandler(chatSvc, mediaStore)
+	banksSvc.SetNotifier(notifications.BankHooks{Svc: notifySvc, Chat: chatSvc})
 
 	authLimit := ratelimit.New(30, time.Minute)
 	apiLimit := ratelimit.New(180, time.Minute)
@@ -78,6 +84,13 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 		httpx.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
+	// Telegram Login Widget HTML (public; no JWT). Domain must match BotFather settings in production.
+	r.Get("/auth/telegram/widget", authH.TelegramWidget)
+	r.Get("/auth/telegram/callback", authH.TelegramCallback)
+
+	legalH := legal.NewHandler()
+	railsH := rails.NewHandler()
+
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Group(func(r chi.Router) {
 			r.Use(authLimit.Middleware)
@@ -85,6 +98,9 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 			r.With(idem.Handler("auth.verify")).Post("/auth/verify", authH.Verify)
 			r.With(idem.Handler("auth.login")).Post("/auth/login", authH.Login)
 			r.With(idem.Handler("auth.refresh")).Post("/auth/refresh", authH.Refresh)
+			r.With(idem.Handler("auth.oauth")).Post("/auth/oauth", authH.OAuth)
+			r.Get("/legal/tos", legalH.GetTOS)
+			r.Get("/payment-rails", railsH.List)
 		})
 
 		r.Group(func(r chi.Router) {
@@ -93,6 +109,8 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 			r.Post("/auth/logout", authH.Logout)
 			r.Get("/me", authH.Me)
 			r.Patch("/me", authH.PatchMe)
+			r.With(idem.Handler("auth.tos")).Post("/me/tos", authH.AcceptTOS)
+			r.With(idem.Handler("auth.avatar")).Post("/me/avatar", authH.UploadAvatar)
 
 			r.Get("/users/search", friendsH.Search)
 			r.With(idem.Handler("friends.block")).Post("/users/{userID}/block", friendsH.Block)

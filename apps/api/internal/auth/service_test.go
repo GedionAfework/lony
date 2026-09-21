@@ -93,7 +93,7 @@ func TestRegisterVerifyLoginMe(t *testing.T) {
 
 	name := "Abebe Kebede"
 	currency := "ETB"
-	updated, err := svc.UpdateMe(ctx, me.ID, &name, nil, nil, &currency)
+	updated, err := svc.UpdateMe(ctx, me.ID, &name, nil, nil, nil, &currency)
 	if err != nil {
 		t.Fatal(err)
 	}

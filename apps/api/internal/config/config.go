@@ -22,6 +22,16 @@ type Config struct {
 	VerificationCodeTTL time.Duration
 	BankKey             []byte
 	MediaDir            string
+	GoogleClientID      string
+	TelegramBotToken    string
+	TelegramBotUsername string
+	ExpoAccessToken     string
+	ResendAPIKey        string
+	SMTPHost            string
+	SMTPPort            string
+	SMTPUser            string
+	SMTPPass            string
+	MailFrom            string
 }
 
 func Load() (Config, error) {
@@ -38,6 +48,16 @@ func Load() (Config, error) {
 		RefreshTokenTTL:     durationEnv("REFRESH_TOKEN_TTL", 30*24*time.Hour),
 		VerificationCodeTTL: durationEnv("VERIFICATION_CODE_TTL", 10*time.Minute),
 		MediaDir:            getenv("MEDIA_DIR", ""),
+		GoogleClientID:      os.Getenv("GOOGLE_CLIENT_ID"),
+		TelegramBotToken:    os.Getenv("TELEGRAM_BOT_TOKEN"),
+		TelegramBotUsername: strings.TrimPrefix(os.Getenv("TELEGRAM_BOT_USERNAME"), "@"),
+		ExpoAccessToken:     os.Getenv("EXPO_ACCESS_TOKEN"),
+		ResendAPIKey:        os.Getenv("RESEND_API_KEY"),
+		SMTPHost:            os.Getenv("SMTP_HOST"),
+		SMTPPort:            getenv("SMTP_PORT", "587"),
+		SMTPUser:            os.Getenv("SMTP_USER"),
+		SMTPPass:            os.Getenv("SMTP_PASS"),
+		MailFrom:            getenv("MAIL_FROM", "Lony <noreply@lony.local>"),
 	}
 
 	if cfg.DatabaseURL == "" {

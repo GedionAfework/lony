@@ -149,16 +149,18 @@ const updateUserProfile = `-- name: UpdateUserProfile :one
 UPDATE users
 SET
   display_name = COALESCE($1, display_name),
-  timezone = COALESCE($2, timezone),
-  locale = COALESCE($3, locale),
-  default_currency_code = COALESCE($4, default_currency_code),
+  username = COALESCE($2, username),
+  timezone = COALESCE($3, timezone),
+  locale = COALESCE($4, locale),
+  default_currency_code = COALESCE($5, default_currency_code),
   updated_at = now()
-WHERE id = $5 AND deleted_at IS NULL
+WHERE id = $6 AND deleted_at IS NULL
 RETURNING id, email, phone_e164, username, display_name, avatar_object_key, timezone, locale, default_currency_code, password_hash, email_verified_at, status, created_at, updated_at, deleted_at
 `
 
 type UpdateUserProfileParams struct {
 	DisplayName         *string   `json:"display_name"`
+	Username            *string   `json:"username"`
 	Timezone            *string   `json:"timezone"`
 	Locale              *string   `json:"locale"`
 	DefaultCurrencyCode *string   `json:"default_currency_code"`
@@ -168,6 +170,7 @@ type UpdateUserProfileParams struct {
 func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfileParams) (User, error) {
 	row := q.db.QueryRow(ctx, updateUserProfile,
 		arg.DisplayName,
+		arg.Username,
 		arg.Timezone,
 		arg.Locale,
 		arg.DefaultCurrencyCode,

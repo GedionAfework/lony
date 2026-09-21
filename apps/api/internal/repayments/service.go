@@ -95,6 +95,9 @@ func (s *Service) Claim(ctx context.Context, actor, loanID uuid.UUID, in ClaimIn
 		Amount:            amount,
 		Status:            StatusPending,
 		Note:              note,
+		ProofAttachmentID: in.ProofAttachmentID,
+		ProofObjectKey:    in.ProofObjectKey,
+		ProofName:         in.ProofName,
 		SubmittedAt:       now,
 	}
 	loan.Status = loans.StatusRepaymentPending

@@ -3,6 +3,8 @@ package chat
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -23,6 +25,11 @@ type FriendshipGate interface {
 	CanCreateLoan(ctx context.Context, a, b uuid.UUID) (bool, error)
 }
 
+// LoanParty resolves the counterparty for a loan the actor is on.
+type LoanParty interface {
+	LoanPeer(ctx context.Context, actor, loanID uuid.UUID) (peerID uuid.UUID, ref string, err error)
+}
+
 type Peer struct {
 	ID          uuid.UUID `json:"id"`
 	DisplayName string    `json:"display_name"`
@@ -32,6 +39,7 @@ type Conversation struct {
 	ID            uuid.UUID
 	UserLowID     uuid.UUID
 	UserHighID    uuid.UUID
+	LoanID        *uuid.UUID
 	LastMessageAt *time.Time
 	CreatedAt     time.Time
 }
@@ -69,8 +77,9 @@ type Reaction struct {
 
 type Store interface {
 	GetConversationByPair(ctx context.Context, low, high uuid.UUID) (Conversation, error)
+	GetConversationByLoan(ctx context.Context, loanID uuid.UUID) (Conversation, error)
 	GetConversationByID(ctx context.Context, id uuid.UUID) (Conversation, error)
-	InsertConversation(ctx context.Context, low, high uuid.UUID) (Conversation, error)
+	InsertConversation(ctx context.Context, low, high uuid.UUID, loanID *uuid.UUID) (Conversation, error)
 	InsertMembers(ctx context.Context, conversationID, a, b uuid.UUID) error
 	IsMember(ctx context.Context, conversationID, userID uuid.UUID) (bool, error)
 	ListConversations(ctx context.Context, userID uuid.UUID) ([]ConversationListRow, error)
@@ -84,6 +93,7 @@ type Store interface {
 	DeleteReaction(ctx context.Context, messageID, userID uuid.UUID, emoji string) error
 	ListReactions(ctx context.Context, messageIDs []uuid.UUID) ([]Reaction, error)
 	GetUserPeer(ctx context.Context, id uuid.UUID) (Peer, error)
+	CanAccessMediaKey(ctx context.Context, userID uuid.UUID, objectKey string) (bool, error)
 }
 
 type MediaStore interface {
@@ -95,6 +105,7 @@ type Service struct {
 	store Store
 	media MediaStore
 	gate  FriendshipGate
+	loans LoanParty
 	now   func() time.Time
 }
 
@@ -102,13 +113,18 @@ func NewService(store Store, media MediaStore, gate FriendshipGate) *Service {
 	return &Service{store: store, media: media, gate: gate, now: time.Now}
 }
 
+func (s *Service) SetLoans(loans LoanParty) {
+	s.loans = loans
+}
+
 type ConversationDTO struct {
-	ID                 uuid.UUID `json:"id"`
-	Peer               Peer      `json:"peer"`
-	LastMessagePreview string    `json:"last_message_preview,omitempty"`
+	ID                 uuid.UUID  `json:"id"`
+	Peer               Peer       `json:"peer"`
+	LoanID             *uuid.UUID `json:"loan_id,omitempty"`
+	LastMessagePreview string     `json:"last_message_preview,omitempty"`
 	LastMessageAt      *time.Time `json:"last_message_at,omitempty"`
-	UnreadCount        int       `json:"unread_count"`
-	CreatedAt          time.Time `json:"created_at"`
+	UnreadCount        int        `json:"unread_count"`
+	CreatedAt          time.Time  `json:"created_at"`
 }
 
 type ReactionDTO struct {
@@ -170,7 +186,7 @@ func (s *Service) OpenOrCreate(ctx context.Context, actor, peerID uuid.UUID) (Co
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return ConversationDTO{}, err
 	}
-	conv, err = s.store.InsertConversation(ctx, low, high)
+	conv, err = s.store.InsertConversation(ctx, low, high, nil)
 	if err != nil {
 		return ConversationDTO{}, err
 	}
@@ -178,6 +194,64 @@ func (s *Service) OpenOrCreate(ctx context.Context, actor, peerID uuid.UUID) (Co
 		return ConversationDTO{}, err
 	}
 	return s.toConversationDTO(ctx, actor, ConversationListRow{Conversation: conv})
+}
+
+// OpenForLoan opens (or creates) a loan-scoped thread between lender and borrower.
+func (s *Service) OpenForLoan(ctx context.Context, actor, loanID uuid.UUID) (ConversationDTO, error) {
+	if s.loans == nil {
+		return ConversationDTO{}, httpx.E(500, "LOANS_UNAVAILABLE", "loan chat is not configured")
+	}
+	peerID, ref, err := s.loans.LoanPeer(ctx, actor, loanID)
+	if err != nil {
+		return ConversationDTO{}, err
+	}
+	conv, err := s.store.GetConversationByLoan(ctx, loanID)
+	if err == nil {
+		return s.toConversationDTO(ctx, actor, ConversationListRow{Conversation: conv})
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return ConversationDTO{}, err
+	}
+	low, high := CanonicalPair(actor, peerID)
+	lid := loanID
+	conv, err = s.store.InsertConversation(ctx, low, high, &lid)
+	if err != nil {
+		// race: another party created it
+		if existing, gerr := s.store.GetConversationByLoan(ctx, loanID); gerr == nil {
+			return s.toConversationDTO(ctx, actor, ConversationListRow{Conversation: existing})
+		}
+		return ConversationDTO{}, err
+	}
+	if err := s.store.InsertMembers(ctx, conv.ID, actor, peerID); err != nil {
+		return ConversationDTO{}, err
+	}
+	body := fmt.Sprintf("Chat for loan %s. Money still moves outside Lony.", ref)
+	_, _ = s.Send(ctx, actor, conv.ID, SendInput{Body: &body})
+	return s.toConversationDTO(ctx, actor, ConversationListRow{Conversation: conv})
+}
+
+// NotifyBankSharedInChat opens the friend DM and posts a masked payment-profile note (never the full account).
+func (s *Service) NotifyBankSharedInChat(ctx context.Context, owner, recipient uuid.UUID, ref, last4, label string) error {
+	conv, err := s.OpenOrCreate(ctx, owner, recipient)
+	if err != nil {
+		return err
+	}
+	label = strings.TrimSpace(label)
+	if label == "" {
+		label = "payment profile"
+	}
+	body := fmt.Sprintf("Shared %s (••••%s) for %s. Open Banks → Shared with me to reveal after a fresh sign-in.", label, last4, ref)
+	_, err = s.Send(ctx, owner, conv.ID, SendInput{Body: &body})
+	return err
+}
+
+// CanAccessMedia checks conversation membership, avatar ownership, or repayment proof party.
+func (s *Service) CanAccessMedia(ctx context.Context, actor uuid.UUID, objectKey string) (bool, error) {
+	objectKey = strings.TrimSpace(objectKey)
+	if objectKey == "" {
+		return false, nil
+	}
+	return s.store.CanAccessMediaKey(ctx, actor, objectKey)
 }
 
 func (s *Service) List(ctx context.Context, actor uuid.UUID) ([]ConversationDTO, error) {
@@ -351,6 +425,7 @@ func (s *Service) toConversationDTO(ctx context.Context, actor uuid.UUID, row Co
 	return ConversationDTO{
 		ID:                 row.ID,
 		Peer:               peer,
+		LoanID:             row.LoanID,
 		LastMessagePreview: preview,
 		LastMessageAt:      firstTime(row.LastCreatedAt, row.LastMessageAt),
 		UnreadCount:        int(row.UnreadCount),

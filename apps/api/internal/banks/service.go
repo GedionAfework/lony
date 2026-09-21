@@ -11,6 +11,7 @@ import (
 
 	"equilend/api/internal/httpx"
 	"equilend/api/internal/loans"
+	"equilend/api/internal/rails"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -25,15 +26,24 @@ type LoanLookup interface {
 }
 
 type Service struct {
-	store Store
-	loans LoanLookup
-	gate  FriendshipGate
-	key   []byte
-	now   func() time.Time
+	store    Store
+	loans    LoanLookup
+	gate     FriendshipGate
+	key      []byte
+	now      func() time.Time
+	notifier ShareNotifier
+}
+
+type ShareNotifier interface {
+	OnBankShared(ctx context.Context, owner, recipient uuid.UUID, loanID *uuid.UUID, ref, last4, label string) error
 }
 
 func NewService(store Store, loans LoanLookup, gate FriendshipGate, key []byte) *Service {
 	return &Service{store: store, loans: loans, gate: gate, key: key, now: time.Now}
+}
+
+func (s *Service) SetNotifier(n ShareNotifier) {
+	s.notifier = n
 }
 
 func (s *Service) Create(ctx context.Context, actor uuid.UUID, in CreateInput) (ProfileDTO, error) {
@@ -235,6 +245,15 @@ func (s *Service) Share(ctx context.Context, actor, profileID uuid.UUID, in Shar
 	if err != nil {
 		return ShareDTO{}, err
 	}
+	if s.notifier != nil {
+		ref := "a loan"
+		if in.LoanID != nil {
+			if rec, err := s.loans.Record(ctx, actor, *in.LoanID); err == nil {
+				ref = rec.ReferenceCode
+			}
+		}
+		_ = s.notifier.OnBankShared(ctx, actor, in.RecipientID, in.LoanID, ref, row.Last4, row.Label)
+	}
 	return s.toShareDTO(saved, row), nil
 }
 
@@ -369,16 +388,16 @@ func (s *Service) owned(ctx context.Context, actor, id uuid.UUID) (Profile, erro
 func (s *Service) parseProfile(actor uuid.UUID, in CreateInput) (Profile, error) {
 	fields := map[string]string{}
 	typ := strings.ToLower(strings.TrimSpace(in.Type))
-	if typ != TypeBankAccount && typ != TypeMobileWallet && typ != TypeOther {
-		fields["profile_type"] = "must be bank_account, mobile_wallet, or other"
+	if !rails.ValidProfileType(typ) {
+		fields["profile_type"] = "unsupported payment account type"
 	}
 	label := strings.TrimSpace(in.Label)
 	if label == "" || utf8.RuneCountInString(label) > 120 {
 		fields["label"] = "required, max 120 characters"
 	}
 	ident := strings.TrimSpace(in.Identifier)
-	if utf8.RuneCountInString(ident) < 4 || utf8.RuneCountInString(ident) > 64 {
-		fields["account_identifier"] = "required, 4 to 64 characters"
+	if utf8.RuneCountInString(ident) < 4 || utf8.RuneCountInString(ident) > 128 {
+		fields["account_identifier"] = "required, 4 to 128 characters"
 	}
 	var institution *string
 	if in.InstitutionName != nil {
@@ -392,10 +411,28 @@ func (s *Service) parseProfile(actor uuid.UUID, in CreateInput) (Profile, error)
 	var currency *string
 	if in.CurrencyCode != nil {
 		code := strings.ToUpper(strings.TrimSpace(*in.CurrencyCode))
-		if code != "" && code != "ETB" && code != "USD" {
-			fields["currency_code"] = "must be ETB or USD"
+		if code != "" && len(code) != 3 {
+			fields["currency_code"] = "must be a 3-letter code"
 		} else if code != "" {
 			currency = &code
+		}
+	}
+	var country *string
+	if in.CountryCode != nil {
+		c := strings.ToUpper(strings.TrimSpace(*in.CountryCode))
+		if c != "" && len(c) != 2 {
+			fields["country_code"] = "must be a 2-letter ISO country code"
+		} else if c != "" {
+			country = &c
+		}
+	}
+	var rail *string
+	if in.RailCode != nil {
+		r := strings.TrimSpace(*in.RailCode)
+		if utf8.RuneCountInString(r) > 64 {
+			fields["rail_code"] = "max 64 characters"
+		} else if r != "" {
+			rail = &r
 		}
 	}
 	if len(fields) > 0 {
@@ -413,6 +450,8 @@ func (s *Service) parseProfile(actor uuid.UUID, in CreateInput) (Profile, error)
 		IdentifierCipher: cipher,
 		Last4:            Last4(ident),
 		CurrencyCode:     currency,
+		CountryCode:      country,
+		RailCode:         rail,
 		IsPreferred:      in.IsPreferred,
 	}, nil
 }
@@ -470,6 +509,8 @@ func toDTO(row Profile, withIdentifier bool, canReveal bool) ProfileDTO {
 		InstitutionName: row.InstitutionName,
 		AccountLast4:    row.Last4,
 		CurrencyCode:    row.CurrencyCode,
+		CountryCode:     row.CountryCode,
+		RailCode:        row.RailCode,
 		IsPreferred:     row.IsPreferred,
 		ArchivedAt:      row.ArchivedAt,
 		CreatedAt:       row.CreatedAt,

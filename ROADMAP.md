@@ -37,7 +37,7 @@ Confirm these before writing application code. Product rules match the SDS. The 
 | 5 | API contract | OpenAPI 3; generate the TypeScript client for mobile |
 | 6 | Money | `shopspring/decimal` in Go; `NUMERIC(20,4)` in Postgres |
 | 7 | Repo layout | Monorepo: `apps/mobile`, `apps/api`, `packages/shared` |
-| 8 | Auth for MVP | Email + password + verification (phone later) |
+| 8 | Auth for MVP | Email + password + Google + Telegram OAuth (WhatsApp unsupported by Meta) |
 | 9 | Interest | Flat per-loan % only (not APR) |
 | 10 | Repayment UI | Full repayment only; schema already supports partials |
 | 11 | Proof attachments | Schema + private storage; optional in v1 UI |
@@ -380,6 +380,14 @@ Critical end-to-end path (from SDS testing strategy):
 
 ## Immediate next step
 
-Basic functionality complete for v1 core path (auth, friends remove/block, profile edit, loans, banks patch, repayments, inbox, chat, worker reminders).
+UI polish complete (auth, home, nav, chat, loan, banks, inbox, profile, new-loan).
 
-Next: UI polish pass. Deferred: EAS signed builds, Redis/Asynq, real FCM/APNs, OpenAPI codegen, repayment proof uploads.
+Email: Resend or SMTP via `RESEND_API_KEY` / `SMTP_*` + `MAIL_FROM` (dev without mailer still logs + returns codes).
+
+**You still need to provide:**
+1. `GOOGLE_CLIENT_ID` / `EXPO_PUBLIC_GOOGLE_CLIENT_ID`
+2. `TELEGRAM_BOT_TOKEN` + `TELEGRAM_BOT_USERNAME`
+3. `RESEND_API_KEY` (or SMTP) + verified `MAIL_FROM`
+4. Run `eas init` → set `EXPO_PUBLIC_EAS_PROJECT_ID` and `app.json` → `extra.eas.projectId`
+5. Apple / Google store accounts when submitting builds
+

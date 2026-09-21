@@ -31,6 +31,8 @@ func (s *SQLStore) InsertProfile(ctx context.Context, rec banks.Profile, event b
 		AccountIdentifierEncrypted: rec.IdentifierCipher,
 		AccountLast4:               rec.Last4,
 		CurrencyCode:               rec.CurrencyCode,
+		CountryCode:                rec.CountryCode,
+		RailCode:                   rec.RailCode,
 		IsPreferred:                rec.IsPreferred,
 	})
 	if err != nil {
@@ -255,6 +257,8 @@ func updateParams(rec banks.Profile) sqlc.UpdateBankProfileParams {
 		AccountIdentifierEncrypted: rec.IdentifierCipher,
 		AccountLast4:               rec.Last4,
 		CurrencyCode:               rec.CurrencyCode,
+		CountryCode:                rec.CountryCode,
+		RailCode:                   rec.RailCode,
 		IsPreferred:                rec.IsPreferred,
 		ArchivedAt:                 rec.ArchivedAt,
 	}
@@ -270,6 +274,8 @@ func mapBankProfile(row sqlc.BankProfile) banks.Profile {
 		IdentifierCipher: row.AccountIdentifierEncrypted,
 		Last4:            row.AccountLast4,
 		CurrencyCode:     row.CurrencyCode,
+		CountryCode:      row.CountryCode,
+		RailCode:         row.RailCode,
 		IsPreferred:      row.IsPreferred,
 		ArchivedAt:       row.ArchivedAt,
 		CreatedAt:        row.CreatedAt,

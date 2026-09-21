@@ -61,3 +61,23 @@ func (h RepayHooks) OnConfirmed(ctx context.Context, loan loans.Record) error {
 func (h RepayHooks) OnRejected(ctx context.Context, loan loans.Record) error {
 	return h.Svc.NotifyRepaymentRejected(ctx, loan.BorrowerID, loan.ID, loan.ReferenceCode)
 }
+
+type BankHooks struct {
+	Svc  *Service
+	Chat ChatPoster
+}
+
+// ChatPoster posts a ledger note into the peer DM when a payment profile is shared.
+type ChatPoster interface {
+	NotifyBankSharedInChat(ctx context.Context, owner, recipient uuid.UUID, ref, last4, label string) error
+}
+
+func (h BankHooks) OnBankShared(ctx context.Context, owner, recipient uuid.UUID, loanID *uuid.UUID, ref, last4, label string) error {
+	if h.Chat != nil {
+		_ = h.Chat.NotifyBankSharedInChat(ctx, owner, recipient, ref, last4, label)
+	}
+	if loanID != nil {
+		return h.Svc.NotifyBankShared(ctx, recipient, *loanID, ref)
+	}
+	return h.Svc.Notify(ctx, recipient, TypeBankProfileShared, nil, "Payment profile shared", "A payment profile was shared with you.", map[string]any{})
+}

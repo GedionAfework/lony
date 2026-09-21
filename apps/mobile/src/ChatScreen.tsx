@@ -24,16 +24,23 @@ import {
 } from './api';
 import { apiBaseUrl, fonts, useTheme, type ThemeColors } from './theme';
 
-const EMOJIS = ['👍', '❤️', '😂', '🔥', '😮', '😢', '👏', '🎉'];
+const REACTION_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏', '🔥', '👏'];
+const COMPOSER_EMOJIS = [
+  '😀', '😁', '😂', '🤣', '😊', '😍', '😘', '😎', '🤔', '😅',
+  '😭', '😡', '👍', '👎', '❤️', '🔥', '🙏', '👏', '🎉', '✅',
+  '💯', '🤝', '💪', '✨', '📌', '💰', '🏦', '📱',
+];
 
 type Props = {
   token: string;
   friends: { peer: { id: string; display_name: string } }[];
+  openLoanId?: string | null;
+  onLoanOpened?: () => void;
   onBack: () => void;
   onError: (message: string) => void;
 };
 
-export function ChatScreen({ token, friends, onBack, onError }: Props) {
+export function ChatScreen({ token, friends, openLoanId, onLoanOpened, onBack, onError }: Props) {
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
@@ -58,7 +65,7 @@ export function ChatScreen({ token, friends, onBack, onError }: Props) {
   async function openPeer(peerId: string) {
     setBusy(true);
     try {
-      const res = await api.openConversation(token, peerId);
+      const res = await api.openConversation(token, { peer_id: peerId });
       setActive(res.conversation);
       lastCreated.current = undefined;
       const msgs = await api.listMessages(token, res.conversation.id);
@@ -69,6 +76,27 @@ export function ChatScreen({ token, friends, onBack, onError }: Props) {
       await loadConversations();
     } catch (e) {
       onError(e instanceof Error ? e.message : 'Could not open chat');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openLoan(loanId: string) {
+    setBusy(true);
+    try {
+      const res = await api.openConversation(token, { loan_id: loanId });
+      setActive(res.conversation);
+      lastCreated.current = undefined;
+      const msgs = await api.listMessages(token, res.conversation.id);
+      setMessages(msgs.messages ?? []);
+      if (msgs.messages?.length) {
+        lastCreated.current = msgs.messages[msgs.messages.length - 1].created_at;
+      }
+      await loadConversations();
+      onLoanOpened?.();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Could not open loan chat');
+      onLoanOpened?.();
     } finally {
       setBusy(false);
     }
@@ -107,6 +135,12 @@ export function ChatScreen({ token, friends, onBack, onError }: Props) {
   useEffect(() => {
     loadConversations().catch((e) => onError(e instanceof Error ? e.message : 'Could not load chats'));
   }, [token]);
+
+  useEffect(() => {
+    if (openLoanId) {
+      openLoan(openLoanId).catch(() => undefined);
+    }
+  }, [openLoanId, token]);
 
   useEffect(() => {
     if (!active) {
@@ -272,7 +306,7 @@ export function ChatScreen({ token, friends, onBack, onError }: Props) {
           <Text style={styles.headerTitle}>Chats</Text>
           <View style={{ width: 48 }} />
         </View>
-        <Text style={styles.hint}>Message friends directly — text, emoji, reply, react, files, and voice.</Text>
+        <Text style={styles.hint}>Message friends about loans — text, emoji, reply, react, files, and voice.</Text>
         {friends.map((f) => (
           <Pressable
             key={f.peer.id}
@@ -311,6 +345,7 @@ export function ChatScreen({ token, friends, onBack, onError }: Props) {
             <View style={styles.flex}>
               <Text style={styles.rowTitle}>
                 {c.peer.display_name}
+                {c.loan_id ? ' · loan' : ''}
                 {c.unread_count > 0 ? ` · ${c.unread_count}` : ''}
               </Text>
               <Text style={styles.muted} numberOfLines={1}>
@@ -339,7 +374,7 @@ export function ChatScreen({ token, friends, onBack, onError }: Props) {
         >
           <Text style={styles.headerLink}>Chats</Text>
         </Pressable>
-        <Text style={styles.headerTitle}>{active.peer.display_name}</Text>
+        <Text style={styles.headerTitle}>{active.peer.display_name}{active.loan_id ? ' · loan' : ''}</Text>
         <View style={{ width: 48 }} />
       </View>
 
@@ -368,16 +403,16 @@ export function ChatScreen({ token, friends, onBack, onError }: Props) {
             {item.attachment_kind === 'voice' ? (
               <Pressable onPress={() => playVoice(item)}>
                 <Text style={[styles.bubbleText, item.mine && styles.mineText]}>
-                  🎤 Voice · {Math.round((item.voice_duration_ms ?? 0) / 1000)}s · tap to play
+                  Voice · {Math.round((item.voice_duration_ms ?? 0) / 1000)}s · tap to play
                 </Text>
               </Pressable>
             ) : null}
             {item.attachment_kind === 'image' || item.attachment_kind === 'file' ? (
               <Text style={[styles.bubbleText, item.mine && styles.mineText]}>
-                {item.attachment_kind === 'image' ? '🖼' : '📎'} {item.attachment_name || 'Attachment'}
+                {item.attachment_kind === 'image' ? 'Image' : 'File'} · {item.attachment_name || 'Attachment'}
               </Text>
             ) : null}
-            <Text style={styles.time}>
+            <Text style={[styles.time, item.mine && styles.mineTime]}>
               {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
             </Text>
             {item.reactions?.length ? (
@@ -393,8 +428,8 @@ export function ChatScreen({ token, friends, onBack, onError }: Props) {
             ) : null}
             {reactFor === item.id ? (
               <View style={styles.reactionPicker}>
-                {EMOJIS.map((e) => (
-                  <Pressable key={e} onPress={() => react(item, e)}>
+                {REACTION_EMOJIS.map((e) => (
+                  <Pressable key={e} onPress={() => react(item, e)} style={styles.reactionPick}>
                     <Text style={styles.emoji}>{e}</Text>
                   </Pressable>
                 ))}
@@ -420,8 +455,8 @@ export function ChatScreen({ token, friends, onBack, onError }: Props) {
 
       {showEmoji ? (
         <View style={styles.emojiBar}>
-          {EMOJIS.map((e) => (
-            <Pressable key={e} onPress={() => sendText(e)}>
+          {COMPOSER_EMOJIS.map((e) => (
+            <Pressable key={e} onPress={() => setDraft((d) => d + e)} style={styles.reactionPick}>
               <Text style={styles.emoji}>{e}</Text>
             </Pressable>
           ))}
@@ -429,11 +464,11 @@ export function ChatScreen({ token, friends, onBack, onError }: Props) {
       ) : null}
 
       <View style={styles.composer}>
-        <Pressable onPress={() => setShowEmoji((v) => !v)} accessibilityLabel="Emoji">
-          <Text style={styles.tool}>☺</Text>
+        <Pressable onPress={() => setShowEmoji((v) => !v)} accessibilityLabel="Emoji" style={styles.toolBtn}>
+          <Text style={styles.tool}>{showEmoji ? 'Close' : 'Emoji'}</Text>
         </Pressable>
-        <Pressable onPress={sendFile} accessibilityLabel="Attach file">
-          <Text style={styles.tool}>📎</Text>
+        <Pressable onPress={sendFile} accessibilityLabel="Attach file" style={styles.toolBtn}>
+          <Text style={styles.tool}>File</Text>
         </Pressable>
         <TextInput
           style={styles.input}
@@ -443,17 +478,21 @@ export function ChatScreen({ token, friends, onBack, onError }: Props) {
           placeholderTextColor={colors.muted}
           multiline
         />
-        <Pressable
-          onPress={toggleRecord}
-          accessibilityLabel={recorderState.isRecording ? 'Stop recording' : 'Record voice'}
-        >
-          <Text style={[styles.tool, recorderState.isRecording && { color: colors.error }]}>
-            {recorderState.isRecording ? '■' : '🎤'}
-          </Text>
-        </Pressable>
-        <Pressable style={styles.send} onPress={() => sendText()} disabled={busy || !draft.trim()}>
-          <Text style={styles.sendText}>Send</Text>
-        </Pressable>
+        {draft.trim() ? (
+          <Pressable style={styles.send} onPress={() => sendText()} disabled={busy}>
+            <Text style={styles.sendText}>Send</Text>
+          </Pressable>
+        ) : (
+          <Pressable
+            onPress={toggleRecord}
+            accessibilityLabel={recorderState.isRecording ? 'Stop recording' : 'Record voice'}
+            style={styles.toolBtn}
+          >
+            <Text style={[styles.tool, recorderState.isRecording && { color: colors.error }]}>
+              {recorderState.isRecording ? 'Stop' : 'Voice'}
+            </Text>
+          </Pressable>
+        )}
       </View>
     </View>
   );
@@ -483,28 +522,28 @@ function makeStyles(colors: ThemeColors) {
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
-      paddingHorizontal: 14,
-      paddingVertical: 12,
+      paddingHorizontal: 16,
+      paddingVertical: 14,
       backgroundColor: colors.surface,
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: colors.border,
     },
     headerTitle: { color: colors.text, fontSize: 17, fontFamily: fonts.uiBold },
-    headerLink: { color: colors.tertiary, fontFamily: fonts.uiSemi },
-    hint: { color: colors.muted, padding: 14, fontSize: 13, lineHeight: 18, fontFamily: fonts.ui },
+    headerLink: { color: colors.tertiary, fontFamily: fonts.uiSemi, fontSize: 15 },
+    hint: { color: colors.muted, padding: 16, fontSize: 13, lineHeight: 18, fontFamily: fonts.ui },
     row: {
       flexDirection: 'row',
       gap: 12,
       alignItems: 'center',
-      paddingHorizontal: 14,
-      paddingVertical: 12,
+      paddingHorizontal: 16,
+      paddingVertical: 14,
       borderBottomWidth: StyleSheet.hairlineWidth,
       borderBottomColor: colors.border,
     },
     avatar: {
-      width: 44,
-      height: 44,
-      borderRadius: 22,
+      width: 46,
+      height: 46,
+      borderRadius: 23,
       backgroundColor: colors.primarySoft,
       alignItems: 'center',
       justifyContent: 'center',
@@ -513,54 +552,88 @@ function makeStyles(colors: ThemeColors) {
     flex: { flex: 1 },
     rowTitle: { color: colors.text, fontSize: 16, fontFamily: fonts.uiSemi },
     muted: { color: colors.muted, fontSize: 13, fontFamily: fonts.ui },
-    thread: { padding: 12, gap: 8, paddingBottom: 20 },
+    thread: { paddingHorizontal: 12, paddingTop: 14, paddingBottom: 20, gap: 2 },
     bubbleWrap: {
-      maxWidth: '82%',
-      borderRadius: 16,
+      maxWidth: '78%',
       paddingHorizontal: 12,
-      paddingVertical: 8,
-      marginVertical: 3,
+      paddingTop: 8,
+      paddingBottom: 6,
+      marginVertical: 2,
     },
-    mineWrap: { alignSelf: 'flex-end', backgroundColor: colors.primary },
-    theirsWrap: { alignSelf: 'flex-start', backgroundColor: colors.surfaceMuted, borderWidth: 1, borderColor: colors.border },
-    bubbleText: { color: colors.text, fontSize: 15, lineHeight: 20, fontFamily: fonts.ui },
+    mineWrap: {
+      alignSelf: 'flex-end',
+      backgroundColor: colors.primary,
+      borderTopLeftRadius: 16,
+      borderTopRightRadius: 16,
+      borderBottomLeftRadius: 16,
+      borderBottomRightRadius: 4,
+    },
+    theirsWrap: {
+      alignSelf: 'flex-start',
+      backgroundColor: colors.surface,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+      borderTopLeftRadius: 16,
+      borderTopRightRadius: 16,
+      borderBottomLeftRadius: 4,
+      borderBottomRightRadius: 16,
+    },
+    bubbleText: { color: colors.text, fontSize: 15, lineHeight: 21, fontFamily: fonts.ui },
     mineText: { color: colors.onPrimary },
     time: { color: colors.muted, fontSize: 10, marginTop: 4, alignSelf: 'flex-end', fontFamily: fonts.ui },
+    mineTime: { color: colors.onPrimary, opacity: 0.72 },
     replyBox: {
       borderLeftWidth: 2,
       borderLeftColor: colors.tertiary,
       paddingLeft: 8,
       marginBottom: 4,
+      opacity: 0.9,
     },
     replyText: { color: colors.textSecondary, fontSize: 12, fontFamily: fonts.ui },
     reactionRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 6 },
     reactionChip: {
-      backgroundColor: colors.surface,
+      backgroundColor: colors.surfaceMuted,
       borderRadius: 12,
-      paddingHorizontal: 6,
-      paddingVertical: 2,
-      borderWidth: 1,
+      paddingHorizontal: 7,
+      paddingVertical: 3,
+      borderWidth: StyleSheet.hairlineWidth,
       borderColor: colors.border,
     },
-    reactionMine: { borderColor: colors.primary },
+    reactionMine: { borderColor: colors.primary, backgroundColor: colors.primarySoft },
     reactionText: { color: colors.text, fontSize: 12, fontFamily: fonts.ui },
-    reactionPicker: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8 },
+    reactionPicker: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 4,
+      marginTop: 8,
+      backgroundColor: colors.surface,
+      borderRadius: 14,
+      padding: 6,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+    },
     emojiBar: {
       flexDirection: 'row',
       flexWrap: 'wrap',
-      gap: 8,
-      padding: 10,
+      gap: 6,
+      padding: 12,
       backgroundColor: colors.surface,
       borderTopWidth: StyleSheet.hairlineWidth,
       borderTopColor: colors.border,
     },
-    emoji: { fontSize: 24 },
+    reactionPick: {
+      paddingHorizontal: 6,
+      paddingVertical: 4,
+      borderRadius: 8,
+    },
+    emoji: { fontSize: 22 },
+    reactionPickText: { fontFamily: fonts.uiSemi, color: colors.text, fontSize: 13 },
     replyBar: {
       flexDirection: 'row',
       alignItems: 'center',
       gap: 8,
-      paddingHorizontal: 12,
-      paddingVertical: 8,
+      paddingHorizontal: 14,
+      paddingVertical: 10,
       backgroundColor: colors.surface,
       borderTopWidth: StyleSheet.hairlineWidth,
       borderTopColor: colors.border,
@@ -569,35 +642,40 @@ function makeStyles(colors: ThemeColors) {
     composer: {
       flexDirection: 'row',
       alignItems: 'flex-end',
-      gap: 8,
-      padding: 10,
+      gap: 6,
+      paddingHorizontal: 10,
+      paddingVertical: 10,
       backgroundColor: colors.surface,
       borderTopWidth: StyleSheet.hairlineWidth,
       borderTopColor: colors.border,
     },
-    tool: { color: colors.muted, fontSize: 22, paddingBottom: 8 },
+    toolBtn: {
+      minHeight: 40,
+      paddingHorizontal: 6,
+      justifyContent: 'center',
+      paddingBottom: 8,
+    },
+    tool: { color: colors.muted, fontSize: 13, fontFamily: fonts.uiSemi },
     input: {
       flex: 1,
       minHeight: 40,
       maxHeight: 120,
       backgroundColor: colors.surfaceMuted,
-      borderRadius: 18,
+      borderRadius: 20,
       paddingHorizontal: 14,
       paddingVertical: 10,
       color: colors.text,
       fontSize: 15,
       fontFamily: fonts.ui,
-      borderWidth: 1,
-      borderColor: colors.border,
     },
     send: {
       backgroundColor: colors.primary,
-      borderRadius: 18,
+      borderRadius: 20,
       minHeight: 40,
-      paddingHorizontal: 14,
+      paddingHorizontal: 16,
       alignItems: 'center',
       justifyContent: 'center',
     },
-    sendText: { color: colors.onPrimary, fontFamily: fonts.uiBold },
+    sendText: { color: colors.onPrimary, fontFamily: fonts.uiBold, fontSize: 14 },
   });
 }

@@ -18,6 +18,8 @@ func scanBankProfile(scan func(dest ...any) error) (BankProfile, error) {
 		&i.AccountIdentifierEncrypted,
 		&i.AccountLast4,
 		&i.CurrencyCode,
+		&i.CountryCode,
+		&i.RailCode,
 		&i.IsPreferred,
 		&i.ArchivedAt,
 		&i.CreatedAt,
@@ -41,9 +43,9 @@ func scanBankProfileEvent(scan func(dest ...any) error) (BankProfileEvent, error
 const insertBankProfile = `-- name: InsertBankProfile :one
 INSERT INTO bank_profiles (
   user_id, profile_type, label, institution_name, account_identifier_encrypted,
-  account_last4, currency_code, is_preferred
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, user_id, profile_type, label, institution_name, account_identifier_encrypted, account_last4, currency_code, is_preferred, archived_at, created_at, updated_at
+  account_last4, currency_code, country_code, rail_code, is_preferred
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+RETURNING id, user_id, profile_type, label, institution_name, account_identifier_encrypted, account_last4, currency_code, country_code, rail_code, is_preferred, archived_at, created_at, updated_at
 `
 
 type InsertBankProfileParams struct {
@@ -54,18 +56,20 @@ type InsertBankProfileParams struct {
 	AccountIdentifierEncrypted []byte    `json:"account_identifier_encrypted"`
 	AccountLast4               string    `json:"account_last4"`
 	CurrencyCode               *string   `json:"currency_code"`
+	CountryCode                *string   `json:"country_code"`
+	RailCode                   *string   `json:"rail_code"`
 	IsPreferred                bool      `json:"is_preferred"`
 }
 
 func (q *Queries) InsertBankProfile(ctx context.Context, arg InsertBankProfileParams) (BankProfile, error) {
 	row := q.db.QueryRow(ctx, insertBankProfile,
-		arg.UserID, arg.ProfileType, arg.Label, arg.InstitutionName, arg.AccountIdentifierEncrypted, arg.AccountLast4, arg.CurrencyCode, arg.IsPreferred,
+		arg.UserID, arg.ProfileType, arg.Label, arg.InstitutionName, arg.AccountIdentifierEncrypted, arg.AccountLast4, arg.CurrencyCode, arg.CountryCode, arg.RailCode, arg.IsPreferred,
 	)
 	return scanBankProfile(row.Scan)
 }
 
 const getBankProfileByID = `-- name: GetBankProfileByID :one
-SELECT id, user_id, profile_type, label, institution_name, account_identifier_encrypted, account_last4, currency_code, is_preferred, archived_at, created_at, updated_at FROM bank_profiles
+SELECT id, user_id, profile_type, label, institution_name, account_identifier_encrypted, account_last4, currency_code, country_code, rail_code, is_preferred, archived_at, created_at, updated_at FROM bank_profiles
 WHERE id = $1
 `
 
@@ -75,7 +79,7 @@ func (q *Queries) GetBankProfileByID(ctx context.Context, id uuid.UUID) (BankPro
 }
 
 const listBankProfilesForUser = `-- name: ListBankProfilesForUser :many
-SELECT id, user_id, profile_type, label, institution_name, account_identifier_encrypted, account_last4, currency_code, is_preferred, archived_at, created_at, updated_at FROM bank_profiles
+SELECT id, user_id, profile_type, label, institution_name, account_identifier_encrypted, account_last4, currency_code, country_code, rail_code, is_preferred, archived_at, created_at, updated_at FROM bank_profiles
 WHERE user_id = $1
   AND ($2::boolean OR archived_at IS NULL)
 ORDER BY is_preferred DESC, created_at DESC
@@ -112,11 +116,13 @@ SET
   account_identifier_encrypted = $5,
   account_last4 = $6,
   currency_code = $7,
-  is_preferred = $8,
-  archived_at = $9,
+  country_code = $8,
+  rail_code = $9,
+  is_preferred = $10,
+  archived_at = $11,
   updated_at = now()
 WHERE id = $1
-RETURNING id, user_id, profile_type, label, institution_name, account_identifier_encrypted, account_last4, currency_code, is_preferred, archived_at, created_at, updated_at
+RETURNING id, user_id, profile_type, label, institution_name, account_identifier_encrypted, account_last4, currency_code, country_code, rail_code, is_preferred, archived_at, created_at, updated_at
 `
 
 type UpdateBankProfileParams struct {
@@ -127,13 +133,15 @@ type UpdateBankProfileParams struct {
 	AccountIdentifierEncrypted []byte     `json:"account_identifier_encrypted"`
 	AccountLast4               string     `json:"account_last4"`
 	CurrencyCode               *string    `json:"currency_code"`
+	CountryCode                *string    `json:"country_code"`
+	RailCode                   *string    `json:"rail_code"`
 	IsPreferred                bool       `json:"is_preferred"`
 	ArchivedAt                 *time.Time `json:"archived_at"`
 }
 
 func (q *Queries) UpdateBankProfile(ctx context.Context, arg UpdateBankProfileParams) (BankProfile, error) {
 	row := q.db.QueryRow(ctx, updateBankProfile,
-		arg.ID, arg.ProfileType, arg.Label, arg.InstitutionName, arg.AccountIdentifierEncrypted, arg.AccountLast4, arg.CurrencyCode, arg.IsPreferred, arg.ArchivedAt,
+		arg.ID, arg.ProfileType, arg.Label, arg.InstitutionName, arg.AccountIdentifierEncrypted, arg.AccountLast4, arg.CurrencyCode, arg.CountryCode, arg.RailCode, arg.IsPreferred, arg.ArchivedAt,
 	)
 	return scanBankProfile(row.Scan)
 }

@@ -284,6 +284,15 @@ func (s *Service) Record(ctx context.Context, actor, id uuid.UUID) (Record, erro
 	return s.mustGet(ctx, actor, id)
 }
 
+// LoanPeer returns the other party on a loan (for loan-scoped chat).
+func (s *Service) LoanPeer(ctx context.Context, actor, loanID uuid.UUID) (peerID uuid.UUID, ref string, err error) {
+	rec, err := s.mustGet(ctx, actor, loanID)
+	if err != nil {
+		return uuid.Nil, "", err
+	}
+	return rec.OtherParty(actor), rec.ReferenceCode, nil
+}
+
 func (s *Service) MarkOverdue(ctx context.Context) (int, error) {
 	return s.store.MarkOverdue(ctx, s.now().UTC())
 }

@@ -10,12 +10,12 @@ type Props = {
   onCreate: () => void;
 };
 
-const TABS: { id: TabId; label: string; icon: string }[] = [
-  { id: 'dashboard', label: 'Home', icon: '⌂' },
-  { id: 'loans', label: 'Loans', icon: '≡' },
-  { id: 'chats', label: 'Chats', icon: '◎' },
-  { id: 'banks', label: 'Banks', icon: '▤' },
-  { id: 'activity', label: 'Inbox', icon: '◉' },
+const TABS: { id: TabId; label: string }[] = [
+  { id: 'dashboard', label: 'Home' },
+  { id: 'loans', label: 'Loans' },
+  { id: 'chats', label: 'Chats' },
+  { id: 'banks', label: 'Banks' },
+  { id: 'activity', label: 'Inbox' },
 ];
 
 export function BottomNav({ active, unread = 0, onChange, onCreate }: Props) {
@@ -30,18 +30,18 @@ export function BottomNav({ active, unread = 0, onChange, onCreate }: Props) {
         borderTopColor: colors.border,
         backgroundColor: colors.nav,
         paddingBottom: 10,
-        paddingTop: 6,
+        paddingTop: 8,
       }}
     >
       <View style={{ flexDirection: 'row', alignItems: 'flex-end', paddingHorizontal: 4 }}>
         {left.map((tab) => (
           <TabButton key={tab.id} tab={tab} active={active === tab.id} onPress={() => onChange(tab.id)} colors={colors} />
         ))}
-        <View style={{ width: 70, alignItems: 'center', marginTop: -22 }}>
+        <View style={{ width: 70, alignItems: 'center', marginTop: -20 }}>
           <Pressable
             style={{
-              width: 56,
-              height: 56,
+              width: 54,
+              height: 54,
               borderRadius: radii.full,
               backgroundColor: colors.primary,
               alignItems: 'center',
@@ -53,8 +53,18 @@ export function BottomNav({ active, unread = 0, onChange, onCreate }: Props) {
             accessibilityRole="button"
             accessibilityLabel="New loan"
           >
-            <Text style={{ color: colors.onPrimary, fontSize: 28, fontFamily: fonts.uiBold, marginTop: -2 }}>+</Text>
+            <Text style={{ color: colors.onPrimary, fontSize: 26, fontFamily: fonts.uiBold, marginTop: -2 }}>+</Text>
           </Pressable>
+          <Text
+            style={{
+              color: colors.muted,
+              fontFamily: fonts.uiMedium,
+              fontSize: 10,
+              marginTop: 2,
+            }}
+          >
+            New
+          </Text>
         </View>
         {right.map((tab) => (
           <TabButton
@@ -78,7 +88,7 @@ function TabButton({
   onPress,
   colors,
 }: {
-  tab: { id: TabId; label: string; icon: string };
+  tab: { id: TabId; label: string };
   active: boolean;
   badge?: number;
   onPress: () => void;
@@ -86,17 +96,25 @@ function TabButton({
 }) {
   return (
     <Pressable
-      style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 2, minHeight: 48, position: 'relative' }}
+      style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 4, minHeight: 48, position: 'relative' }}
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={tab.label}
+      accessibilityState={{ selected: active }}
     >
-      <Text style={{ color: active ? colors.primary : colors.muted, fontSize: 16 }}>{tab.icon}</Text>
+      <View
+        style={{
+          width: 28,
+          height: 3,
+          borderRadius: 2,
+          backgroundColor: active ? colors.primary : 'transparent',
+        }}
+      />
       <Text
         style={{
           color: active ? colors.primary : colors.muted,
           fontFamily: active ? fonts.uiSemi : fonts.uiMedium,
-          fontSize: 11,
+          fontSize: 12,
         }}
       >
         {tab.label}
@@ -106,7 +124,7 @@ function TabButton({
           style={{
             position: 'absolute',
             top: 2,
-            right: '26%',
+            right: '18%',
             backgroundColor: colors.secondary,
             borderRadius: radii.full,
             minWidth: 16,

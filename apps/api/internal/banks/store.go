@@ -9,9 +9,21 @@ import (
 )
 
 const (
-	TypeBankAccount  = "bank_account"
-	TypeMobileWallet = "mobile_wallet"
-	TypeOther        = "other"
+	TypeBankAccount   = "bank_account"
+	TypeIBAN          = "iban"
+	TypeMobileMoney   = "mobile_money"
+	TypeMobileWallet  = "mobile_wallet"
+	TypeCryptoWallet  = "crypto_wallet"
+	TypeCard          = "card"
+	TypePayPal        = "paypal"
+	TypeWise          = "wise"
+	TypeCashApp       = "cash_app"
+	TypeVenmo         = "venmo"
+	TypeUPI           = "upi"
+	TypePix           = "pix"
+	TypeSEPA          = "sepa"
+	TypeSwift         = "swift"
+	TypeOther         = "other"
 
 	EventCreated   = "created"
 	EventUpdated   = "updated"
@@ -33,6 +45,8 @@ type Profile struct {
 	IdentifierCipher []byte
 	Last4            string
 	CurrencyCode     *string
+	CountryCode      *string
+	RailCode         *string
 	IsPreferred      bool
 	ArchivedAt       *time.Time
 	CreatedAt        time.Time
@@ -66,6 +80,8 @@ type ProfileDTO struct {
 	InstitutionName   *string    `json:"institution_name,omitempty"`
 	AccountLast4      string     `json:"account_last4"`
 	CurrencyCode      *string    `json:"currency_code,omitempty"`
+	CountryCode       *string    `json:"country_code,omitempty"`
+	RailCode          *string    `json:"rail_code,omitempty"`
 	IsPreferred       bool       `json:"is_preferred"`
 	ArchivedAt        *time.Time `json:"archived_at,omitempty"`
 	CreatedAt         time.Time  `json:"created_at"`
@@ -98,6 +114,8 @@ type CreateInput struct {
 	InstitutionName *string
 	Identifier      string
 	CurrencyCode    *string
+	CountryCode     *string
+	RailCode        *string
 	IsPreferred     bool
 }
 

@@ -1,6 +1,9 @@
 {
   "name": "@lony/shared",
-  "private": true,
   "version": "0.1.0",
-  "description": "OpenAPI contract for the Lony API"
+  "private": true,
+  "scripts": {
+    "openapi:lint": "npx --yes @redocly/cli lint openapi.yaml",
+    "openapi:types": "npx --yes openapi-typescript openapi.yaml -o ./generated/api.ts"
+  }
 }

@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View, type TextInputProps, type ViewStyle } from 'react-native';
+import { Image, Pressable, StyleSheet, Text, TextInput, View, type TextInputProps, type ViewStyle } from 'react-native';
 import { fonts, radii, space, useTheme, type ThemeColors } from './theme';
 
 export function Screen({ children, style }: { children: React.ReactNode; style?: ViewStyle }) {
@@ -7,26 +7,23 @@ export function Screen({ children, style }: { children: React.ReactNode; style?:
   return <View style={[{ flex: 1, backgroundColor: colors.background }, style]}>{children}</View>;
 }
 
-export function BrandMark({ compact = false }: { compact?: boolean }) {
+export function BrandMark({ compact = false, hero = false }: { compact?: boolean; hero?: boolean }) {
   const { colors } = useTheme();
+  const size = hero ? 56 : compact ? 28 : 40;
+  const titleSize = hero ? 32 : compact ? 18 : 22;
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-      <View
-        style={{
-          width: 36,
-          height: 36,
-          borderRadius: 12,
-          backgroundColor: colors.primary,
-          alignItems: 'center',
-          justifyContent: 'center',
-        }}
-      >
-        <Text style={{ color: colors.onPrimary, fontFamily: fonts.uiBold, fontSize: 18 }}>✓</Text>
-      </View>
+    <View style={{ flexDirection: hero ? 'column' : 'row', alignItems: hero ? 'flex-start' : 'center', gap: hero ? 12 : 10 }}>
+      <Image
+        source={require('../assets/logo.png')}
+        style={{ width: size, height: size, resizeMode: 'contain' }}
+        accessibilityLabel="Lony"
+      />
       <View>
-        <Text style={{ color: colors.text, fontFamily: fonts.uiBold, fontSize: 22 }}>Lony</Text>
+        <Text style={{ color: colors.text, fontFamily: fonts.uiBold, fontSize: titleSize, letterSpacing: hero ? -0.5 : 0 }}>
+          Lony
+        </Text>
         {!compact ? (
-          <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 10, letterSpacing: 2.5 }}>
+          <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: hero ? 11 : 10, letterSpacing: 2.5 }}>
             LEDGER
           </Text>
         ) : null}
@@ -61,7 +58,7 @@ export function Card({
           borderRadius: radii.lg,
           padding: space.md,
           gap: 12,
-          borderWidth: 1,
+          borderWidth: StyleSheet.hairlineWidth,
           borderColor: border,
         },
         style,
@@ -324,7 +321,7 @@ export function Field({
           paddingVertical: 14,
           fontSize: 16,
           fontFamily: fonts.ui,
-          borderWidth: 1,
+          borderWidth: StyleSheet.hairlineWidth,
           borderColor: colors.border,
         }}
         accessibilityLabel={label}
@@ -383,6 +380,63 @@ export function Banner({
   );
 }
 
+export function ScreenHeader({
+  title,
+  onBack,
+  backLabel = 'Back',
+  right,
+}: {
+  title: string;
+  onBack?: () => void;
+  backLabel?: string;
+  right?: React.ReactNode;
+}) {
+  const { colors } = useTheme();
+  return (
+    <View style={{ gap: 6, marginBottom: 4 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 36 }}>
+        {onBack ? (
+          <Pressable onPress={onBack} accessibilityRole="button" accessibilityLabel={backLabel} hitSlop={8}>
+            <Text style={{ color: colors.tertiary, fontFamily: fonts.uiSemi, fontSize: 15 }}>{backLabel}</Text>
+          </Pressable>
+        ) : (
+          <View style={{ width: 48 }} />
+        )}
+        {right ?? <View style={{ width: 48 }} />}
+      </View>
+      <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 24 }}>{title}</Text>
+    </View>
+  );
+}
+
+export function EmptyState({ title, body }: { title: string; body: string }) {
+  const { colors } = useTheme();
+  return (
+    <View style={{ gap: 6, paddingVertical: 8 }}>
+      <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>{title}</Text>
+      <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 14, lineHeight: 20 }}>{body}</Text>
+    </View>
+  );
+}
+
+export function SectionLabel({ children }: { children: string }) {
+  const { colors } = useTheme();
+  return (
+    <Text
+      style={{
+        color: colors.muted,
+        fontFamily: fonts.uiSemi,
+        fontSize: 12,
+        letterSpacing: 0.4,
+        textTransform: 'uppercase',
+        marginTop: 4,
+      }}
+    >
+      {children}
+    </Text>
+  );
+}
+
 export function ThemeToggle() {
   const { resolved, toggle, colors } = useTheme();
   return (
@@ -391,17 +445,53 @@ export function ThemeToggle() {
       accessibilityRole="button"
       accessibilityLabel={resolved === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
       style={{
-        minWidth: 44,
-        minHeight: 44,
+        minHeight: 36,
         borderRadius: radii.full,
         alignItems: 'center',
         justifyContent: 'center',
+        paddingHorizontal: 12,
         backgroundColor: colors.surfaceMuted,
         borderWidth: 1,
         borderColor: colors.border,
       }}
     >
-      <Text style={{ fontSize: 18 }}>{resolved === 'dark' ? '☀' : '☾'}</Text>
+      <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 12 }}>
+        {resolved === 'dark' ? 'Light' : 'Dark'}
+      </Text>
+    </Pressable>
+  );
+}
+
+export function CheckRow({
+  checked,
+  label,
+  onPress,
+}: {
+  checked: boolean;
+  label: string;
+  onPress: () => void;
+}) {
+  const { colors } = useTheme();
+  return (
+    <Pressable
+      style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}
+      onPress={onPress}
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked }}
+      accessibilityLabel={label}
+    >
+      <View
+        style={{
+          width: 22,
+          height: 22,
+          borderRadius: 6,
+          marginTop: 1,
+          borderWidth: 1.5,
+          borderColor: checked ? colors.primary : colors.borderStrong,
+          backgroundColor: checked ? colors.primary : colors.surface,
+        }}
+      />
+      <Text style={{ flex: 1, color: colors.muted, fontFamily: fonts.ui, fontSize: 14, lineHeight: 20 }}>{label}</Text>
     </Pressable>
   );
 }
@@ -442,17 +532,31 @@ function makeAppStyles(colors: ThemeColors) {
       borderColor: colors.primary,
     },
     center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-    container: { padding: 16, paddingTop: 20, gap: 16, paddingBottom: 28 },
+    container: { padding: 20, paddingTop: 24, gap: 18, paddingBottom: 32 },
     card: {
       backgroundColor: colors.surface,
       borderRadius: radii.lg,
-      padding: 16,
-      gap: 12,
-      borderWidth: 1,
+      padding: 18,
+      gap: 14,
+      borderWidth: StyleSheet.hairlineWidth,
       borderColor: colors.border,
     },
-    cardTitle: { color: colors.text, fontSize: 20, fontFamily: fonts.uiSemi },
+    cardTitle: { color: colors.text, fontSize: 22, fontFamily: fonts.uiSemi },
     hero: { color: colors.primary, fontSize: 24, fontFamily: fonts.uiBold },
+    authHero: { gap: 10, marginBottom: 4 },
+    authSub: { color: colors.muted, fontSize: 15, lineHeight: 22, fontFamily: fonts.ui, maxWidth: 320 },
+    divider: {
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: colors.border,
+      marginVertical: 4,
+    },
+    dividerLabel: {
+      color: colors.muted,
+      fontSize: 12,
+      fontFamily: fonts.uiMedium,
+      textAlign: 'center',
+      letterSpacing: 0.3,
+    },
     label: {
       color: colors.muted,
       fontSize: 12,

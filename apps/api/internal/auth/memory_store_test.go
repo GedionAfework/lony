@@ -17,6 +17,7 @@ type memoryStore struct {
 	sessions   map[uuid.UUID]SessionRecord
 	byRefresh  map[string]uuid.UUID
 	challenges map[uuid.UUID]ChallengeRecord
+	identities map[string]uuid.UUID
 }
 
 func newMemoryStore() *memoryStore {
@@ -26,6 +27,7 @@ func newMemoryStore() *memoryStore {
 		sessions:   map[uuid.UUID]SessionRecord{},
 		byRefresh:  map[string]uuid.UUID{},
 		challenges: map[uuid.UUID]ChallengeRecord{},
+		identities: map[string]uuid.UUID{},
 	}
 }
 
@@ -83,27 +85,107 @@ func (m *memoryStore) MarkEmailVerified(_ context.Context, id uuid.UUID) (UserRe
 	return user, nil
 }
 
-func (m *memoryStore) UpdateUserProfile(_ context.Context, id uuid.UUID, displayName, timezone, locale, currency *string) (UserRecord, error) {
+func (m *memoryStore) UpdateUserAccount(_ context.Context, id uuid.UUID, in AccountUpdate) (UserRecord, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	user, ok := m.users[id]
 	if !ok {
 		return UserRecord{}, pgx.ErrNoRows
 	}
-	if displayName != nil {
-		user.DisplayName = *displayName
+	if in.DisplayName != nil {
+		user.DisplayName = *in.DisplayName
 	}
-	if timezone != nil {
-		user.Timezone = *timezone
+	if in.Username != nil {
+		user.Username = in.Username
 	}
-	if locale != nil {
-		user.Locale = *locale
+	if in.FirstName != nil {
+		user.FirstName = in.FirstName
 	}
-	if currency != nil {
-		user.DefaultCurrencyCode = currency
+	if in.MiddleName != nil {
+		user.MiddleName = in.MiddleName
+	}
+	if in.LastName != nil {
+		user.LastName = in.LastName
+	}
+	if in.PhoneE164 != nil {
+		user.PhoneE164 = in.PhoneE164
+	}
+	if in.CountryCode != nil {
+		user.CountryCode = in.CountryCode
+	}
+	if in.PreferredAuthProvider != nil {
+		user.PreferredAuthProvider = in.PreferredAuthProvider
+	}
+	if in.Timezone != nil {
+		user.Timezone = *in.Timezone
+	}
+	if in.Locale != nil {
+		user.Locale = *in.Locale
+	}
+	if in.Currency != nil {
+		user.DefaultCurrencyCode = in.Currency
+	}
+	if in.TOSVersion != nil {
+		user.TOSVersion = in.TOSVersion
+	}
+	if in.TOSAcceptedAt != nil {
+		user.TOSAcceptedAt = in.TOSAcceptedAt
 	}
 	m.users[id] = user
 	return user, nil
+}
+
+func (m *memoryStore) AcceptTOS(_ context.Context, id uuid.UUID, version string) (UserRecord, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	user, ok := m.users[id]
+	if !ok {
+		return UserRecord{}, pgx.ErrNoRows
+	}
+	user.TOSVersion = &version
+	now := time.Now().UTC()
+	user.TOSAcceptedAt = &now
+	m.users[id] = user
+	return user, nil
+}
+
+func (m *memoryStore) UpdateUserProfile(_ context.Context, id uuid.UUID, displayName, username, timezone, locale, currency *string) (UserRecord, error) {
+	return m.UpdateUserAccount(context.Background(), id, AccountUpdate{
+		DisplayName: displayName,
+		Username:    username,
+		Timezone:    timezone,
+		Locale:      locale,
+		Currency:    currency,
+	})
+}
+
+func (m *memoryStore) SetUserAvatar(_ context.Context, userID uuid.UUID, objectKey string) (UserRecord, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	user, ok := m.users[userID]
+	if !ok {
+		return UserRecord{}, pgx.ErrNoRows
+	}
+	user.AvatarObjectKey = &objectKey
+	m.users[userID] = user
+	return user, nil
+}
+
+func (m *memoryStore) FindIdentity(_ context.Context, provider, subject string) (uuid.UUID, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	id, ok := m.identities[provider+":"+subject]
+	if !ok {
+		return uuid.Nil, pgx.ErrNoRows
+	}
+	return id, nil
+}
+
+func (m *memoryStore) LinkIdentity(_ context.Context, userID uuid.UUID, provider, subject string, _ *string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.identities[provider+":"+subject] = userID
+	return nil
 }
 
 func (m *memoryStore) CreateSession(_ context.Context, userID uuid.UUID, refreshHash string, _ *string, expiresAt time.Time) (SessionRecord, error) {

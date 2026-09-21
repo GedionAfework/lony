@@ -3,6 +3,8 @@ package auth
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log"
 	"net/http"
 	"net/mail"
 	"strings"
@@ -11,20 +13,42 @@ import (
 
 	"equilend/api/internal/config"
 	"equilend/api/internal/httpx"
+	"equilend/api/internal/legal"
+	"equilend/api/internal/mailer"
 	"equilend/api/internal/users"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 type Service struct {
 	store  Store
 	cfg    config.Config
+	mail   mailer.Sender
 	now    func() time.Time
 }
 
 func NewService(store Store, cfg config.Config) *Service {
-	return &Service{store: store, cfg: cfg, now: time.Now}
+	return &Service{
+		store: store,
+		cfg:   cfg,
+		mail: mailer.NewFromEnv(
+			cfg.ResendAPIKey,
+			cfg.SMTPHost,
+			cfg.SMTPPort,
+			cfg.SMTPUser,
+			cfg.SMTPPass,
+			cfg.MailFrom,
+		),
+		now: time.Now,
+	}
+}
+
+// WithMailer overrides the email sender (tests).
+func (s *Service) WithMailer(m mailer.Sender) *Service {
+	s.mail = m
+	return s
 }
 
 type RegisterInput struct {
@@ -238,26 +262,144 @@ func (s *Service) Me(ctx context.Context, userID uuid.UUID) (users.PublicUser, e
 	return ToPublic(user), nil
 }
 
-func (s *Service) UpdateMe(ctx context.Context, userID uuid.UUID, displayName, timezone, locale, currency *string) (users.PublicUser, error) {
-	if displayName != nil {
-		name := strings.TrimSpace(*displayName)
+func (s *Service) UpdateMe(ctx context.Context, userID uuid.UUID, displayName, username, timezone, locale, currency *string) (users.PublicUser, error) {
+	return s.UpdateAccount(ctx, userID, AccountUpdate{
+		DisplayName: displayName,
+		Username:    username,
+		Timezone:    timezone,
+		Locale:      locale,
+		Currency:    currency,
+	})
+}
+
+func (s *Service) UpdateAccount(ctx context.Context, userID uuid.UUID, in AccountUpdate) (users.PublicUser, error) {
+	if in.DisplayName != nil {
+		name := strings.TrimSpace(*in.DisplayName)
 		if utf8.RuneCountInString(name) < 1 || utf8.RuneCountInString(name) > 120 {
 			return users.PublicUser{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
 				"display_name": "must be between 1 and 120 characters",
 			})
 		}
-		displayName = &name
+		in.DisplayName = &name
 	}
-	if currency != nil {
-		c := strings.ToUpper(strings.TrimSpace(*currency))
+	if in.FirstName != nil {
+		v := strings.TrimSpace(*in.FirstName)
+		if utf8.RuneCountInString(v) < 1 || utf8.RuneCountInString(v) > 60 {
+			return users.PublicUser{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+				"first_name": "required, max 60 characters",
+			})
+		}
+		in.FirstName = &v
+	}
+	if in.MiddleName != nil {
+		v := strings.TrimSpace(*in.MiddleName)
+		if utf8.RuneCountInString(v) > 60 {
+			return users.PublicUser{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+				"middle_name": "max 60 characters",
+			})
+		}
+		if v == "" {
+			in.MiddleName = nil
+		} else {
+			in.MiddleName = &v
+		}
+	}
+	if in.LastName != nil {
+		v := strings.TrimSpace(*in.LastName)
+		if utf8.RuneCountInString(v) < 1 || utf8.RuneCountInString(v) > 60 {
+			return users.PublicUser{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+				"last_name": "required, max 60 characters",
+			})
+		}
+		in.LastName = &v
+	}
+	if in.Username != nil {
+		u := strings.ToLower(strings.TrimSpace(*in.Username))
+		if len(u) < 3 || len(u) > 32 {
+			return users.PublicUser{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+				"username": "must be 3–32 characters",
+			})
+		}
+		for _, r := range u {
+			if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' {
+				return users.PublicUser{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+					"username": "use letters, numbers, and underscores only",
+				})
+			}
+		}
+		in.Username = &u
+	}
+	if in.PhoneE164 != nil {
+		p := strings.TrimSpace(*in.PhoneE164)
+		if p != "" && (len(p) < 8 || len(p) > 20 || p[0] != '+') {
+			return users.PublicUser{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+				"phone_e164": "use E.164 format like +2519…",
+			})
+		}
+		if p == "" {
+			in.PhoneE164 = nil
+		} else {
+			in.PhoneE164 = &p
+		}
+	}
+	if in.CountryCode != nil {
+		c := strings.ToUpper(strings.TrimSpace(*in.CountryCode))
+		if len(c) != 2 {
+			return users.PublicUser{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+				"country_code": "must be a 2-letter ISO country code",
+			})
+		}
+		in.CountryCode = &c
+	}
+	if in.PreferredAuthProvider != nil {
+		p := strings.ToLower(strings.TrimSpace(*in.PreferredAuthProvider))
+		if p != "email" && p != "google" && p != "telegram" {
+			return users.PublicUser{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+				"preferred_auth_provider": "must be email, google, or telegram",
+			})
+		}
+		in.PreferredAuthProvider = &p
+	}
+	if in.Currency != nil {
+		c := strings.ToUpper(strings.TrimSpace(*in.Currency))
 		if len(c) != 3 {
 			return users.PublicUser{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
 				"default_currency_code": "must be a 3-letter code",
 			})
 		}
-		currency = &c
+		in.Currency = &c
 	}
-	user, err := s.store.UpdateUserProfile(ctx, userID, displayName, timezone, locale, currency)
+	// Keep display_name aligned with structured names when provided.
+	if in.DisplayName == nil && (in.FirstName != nil || in.LastName != nil) {
+		parts := []string{}
+		if in.FirstName != nil {
+			parts = append(parts, *in.FirstName)
+		}
+		if in.MiddleName != nil && *in.MiddleName != "" {
+			parts = append(parts, *in.MiddleName)
+		}
+		if in.LastName != nil {
+			parts = append(parts, *in.LastName)
+		}
+		if len(parts) > 0 {
+			joined := strings.Join(parts, " ")
+			in.DisplayName = &joined
+		}
+	}
+	user, err := s.store.UpdateUserAccount(ctx, userID, in)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return users.PublicUser{}, httpx.Field(http.StatusConflict, "CONFLICT", "username or phone already taken", map[string]string{
+				"username": "already taken",
+			})
+		}
+		return users.PublicUser{}, err
+	}
+	return ToPublic(user), nil
+}
+
+func (s *Service) AcceptTOS(ctx context.Context, userID uuid.UUID) (users.PublicUser, error) {
+	user, err := s.store.AcceptTOS(ctx, userID, legal.Version)
 	if err != nil {
 		return users.PublicUser{}, err
 	}
@@ -275,6 +417,21 @@ func (s *Service) issueChallenge(ctx context.Context, user UserRecord) (string, 
 	_, err = s.store.CreateChallenge(ctx, user.ID, "email", user.Email, HashToken(code), s.now().Add(s.cfg.VerificationCodeTTL))
 	if err != nil {
 		return "", err
+	}
+	subject := "Your Lony verification code"
+	body := fmt.Sprintf("Your Lony verification code is %s.\n\nIt expires in %s.\n\nIf you did not request this, ignore this email.\n",
+		code, s.cfg.VerificationCodeTTL.Round(time.Minute))
+	if s.mail != nil && s.mail.Configured() {
+		if sendErr := s.mail.Send(ctx, user.Email, subject, body); sendErr != nil {
+			log.Printf("auth: send verification email to %s: %v", user.Email, sendErr)
+			if !s.cfg.Dev() {
+				return "", httpx.E(http.StatusBadGateway, "EMAIL_SEND_FAILED", "could not send verification email; try again shortly")
+			}
+		}
+	} else if !s.cfg.Dev() {
+		return "", httpx.E(http.StatusServiceUnavailable, "EMAIL_NOT_CONFIGURED", "email delivery is not configured")
+	} else {
+		log.Printf("auth: verification code for %s (dev, no mailer): %s", user.Email, code)
 	}
 	return code, nil
 }
@@ -306,7 +463,7 @@ func (s *Service) registerResult(user UserRecord, code string) RegisterResult {
 		User:             ToPublic(user),
 		VerificationHint: "We sent a 6-digit code to your email.",
 	}
-	if s.cfg.Dev() {
+	if s.cfg.Dev() && (s.mail == nil || !s.mail.Configured()) {
 		out.VerificationCode = code
 		out.VerificationHint = "Development mode: use the verification_code in this response."
 	}
@@ -314,17 +471,54 @@ func (s *Service) registerResult(user UserRecord, code string) RegisterResult {
 }
 
 func ToPublic(user UserRecord) users.PublicUser {
-	return users.PublicUser{
-		ID:                  user.ID,
-		Email:               user.Email,
-		DisplayName:         user.DisplayName,
-		Timezone:            user.Timezone,
-		Locale:              user.Locale,
-		DefaultCurrencyCode: user.DefaultCurrencyCode,
-		EmailVerified:       user.EmailVerifiedAt != nil,
-		Status:              user.Status,
-		CreatedAt:           user.CreatedAt,
+	out := users.PublicUser{
+		ID:                    user.ID,
+		Email:                 user.Email,
+		Username:              user.Username,
+		PhoneE164:             user.PhoneE164,
+		DisplayName:           user.DisplayName,
+		FirstName:             user.FirstName,
+		MiddleName:            user.MiddleName,
+		LastName:              user.LastName,
+		CountryCode:           user.CountryCode,
+		PreferredAuthProvider: user.PreferredAuthProvider,
+		TOSVersion:            user.TOSVersion,
+		TOSAcceptedAt:         user.TOSAcceptedAt,
+		Timezone:              user.Timezone,
+		Locale:                user.Locale,
+		DefaultCurrencyCode:   user.DefaultCurrencyCode,
+		EmailVerified:         user.EmailVerifiedAt != nil,
+		Status:                user.Status,
+		CreatedAt:             user.CreatedAt,
 	}
+	if user.AvatarObjectKey != nil && *user.AvatarObjectKey != "" {
+		url := "/api/v1/media/" + *user.AvatarObjectKey
+		out.AvatarURL = &url
+	}
+	out.ProfileComplete = profileComplete(user)
+	return out
+}
+
+func profileComplete(user UserRecord) bool {
+	if user.Username == nil || strings.TrimSpace(*user.Username) == "" {
+		return false
+	}
+	if user.FirstName == nil || strings.TrimSpace(*user.FirstName) == "" {
+		return false
+	}
+	if user.LastName == nil || strings.TrimSpace(*user.LastName) == "" {
+		return false
+	}
+	if user.CountryCode == nil || len(strings.TrimSpace(*user.CountryCode)) != 2 {
+		return false
+	}
+	if user.DefaultCurrencyCode == nil || len(strings.TrimSpace(*user.DefaultCurrencyCode)) != 3 {
+		return false
+	}
+	if user.TOSAcceptedAt == nil || user.TOSVersion == nil || *user.TOSVersion != legal.Version {
+		return false
+	}
+	return true
 }
 
 func normalizeEmail(email string) (string, error) {
@@ -344,4 +538,9 @@ func validatePassword(password string) error {
 		})
 	}
 	return nil
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }

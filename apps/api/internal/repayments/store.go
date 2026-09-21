@@ -24,20 +24,22 @@ const (
 )
 
 type Record struct {
-	ID                 uuid.UUID
-	LoanID             uuid.UUID
-	SubmittedByUserID  uuid.UUID
-	Amount             decimal.Decimal
-	Status             string
-	Note               *string
-	ProofAttachmentID  *uuid.UUID
-	SubmittedAt        time.Time
-	ConfirmedByUserID  *uuid.UUID
-	ConfirmedAt        *time.Time
-	RejectedAt         *time.Time
-	RejectionReason    *string
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	ID                uuid.UUID
+	LoanID            uuid.UUID
+	SubmittedByUserID uuid.UUID
+	Amount            decimal.Decimal
+	Status            string
+	Note              *string
+	ProofAttachmentID *uuid.UUID
+	ProofObjectKey    *string // hydrated from media_objects
+	ProofName         *string
+	SubmittedAt       time.Time
+	ConfirmedByUserID *uuid.UUID
+	ConfirmedAt       *time.Time
+	RejectedAt        *time.Time
+	RejectionReason   *string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 type DTO struct {
@@ -47,6 +49,8 @@ type DTO struct {
 	Amount            string     `json:"amount"`
 	Status            string     `json:"status"`
 	Note              *string    `json:"note,omitempty"`
+	ProofURL          *string    `json:"proof_url,omitempty"`
+	ProofName         *string    `json:"proof_name,omitempty"`
 	SubmittedAt       time.Time  `json:"submitted_at"`
 	ConfirmedByUserID *uuid.UUID `json:"confirmed_by_user_id,omitempty"`
 	ConfirmedAt       *time.Time `json:"confirmed_at,omitempty"`
@@ -58,8 +62,11 @@ type DTO struct {
 }
 
 type ClaimInput struct {
-	Amount *string
-	Note   *string
+	Amount             *string
+	Note               *string
+	ProofAttachmentID  *uuid.UUID
+	ProofObjectKey     *string
+	ProofName          *string
 }
 
 type RejectInput struct {
@@ -82,7 +89,7 @@ type LoanAccess interface {
 }
 
 func toDTO(rec Record, actor uuid.UUID, loan loans.Record) DTO {
-	return DTO{
+	dto := DTO{
 		ID:                rec.ID,
 		LoanID:            rec.LoanID,
 		SubmittedByUserID: rec.SubmittedByUserID,
@@ -98,6 +105,12 @@ func toDTO(rec Record, actor uuid.UUID, loan loans.Record) DTO {
 		CanConfirm:        rec.Status == StatusPending && loan.LenderID == actor,
 		CanReject:         rec.Status == StatusPending && loan.LenderID == actor,
 	}
+	if rec.ProofAttachmentID != nil && rec.ProofObjectKey != nil && *rec.ProofObjectKey != "" {
+		url := "/api/v1/media/" + *rec.ProofObjectKey
+		dto.ProofURL = &url
+		dto.ProofName = rec.ProofName
+	}
+	return dto
 }
 
 func claimPayload(rec Record) json.RawMessage {
