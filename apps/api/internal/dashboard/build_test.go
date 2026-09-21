@@ -10,6 +10,13 @@ import (
 	"github.com/shopspring/decimal"
 )
 
+func TestBuildEmptyWithoutLoans(t *testing.T) {
+	got := Build(uuid.New(), time.Now().UTC(), nil, nil)
+	if len(got.ByCurrency) != 0 {
+		t.Fatalf("expected no currency tabs, got %+v", got.ByCurrency)
+	}
+}
+
 func TestBuildReconcilesOpenLoansPerCurrency(t *testing.T) {
 	actor := uuid.New()
 	sara := uuid.New()

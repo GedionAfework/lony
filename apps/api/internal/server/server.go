@@ -11,6 +11,7 @@ import (
 	"equilend/api/internal/config"
 	"equilend/api/internal/dashboard"
 	"equilend/api/internal/friends"
+	"equilend/api/internal/fx"
 	"equilend/api/internal/httpx"
 	"equilend/api/internal/idempotency"
 	"equilend/api/internal/legal"
@@ -90,6 +91,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 
 	legalH := legal.NewHandler()
 	railsH := rails.NewHandler()
+	fxH := fx.NewHandler(fx.New())
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Group(func(r chi.Router) {
@@ -101,6 +103,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 			r.With(idem.Handler("auth.oauth")).Post("/auth/oauth", authH.OAuth)
 			r.Get("/legal/tos", legalH.GetTOS)
 			r.Get("/payment-rails", railsH.List)
+			r.Get("/fx/rates", fxH.Rates)
 		})
 
 		r.Group(func(r chi.Router) {

@@ -38,9 +38,35 @@ type Props = {
   onLoanOpened?: () => void;
   onBack: () => void;
   onError: (message: string) => void;
+  notifications?: {
+    id: string;
+    title: string;
+    body: string;
+    loan_id?: string | null;
+    read_at?: string | null;
+    created_at: string;
+  }[];
+  unreadCount?: number;
+  onMarkAllRead?: () => void;
+  onMarkRead?: (id: string) => void;
+  onOpenLoan?: (loanId: string) => void;
+  locale?: string;
 };
 
-export function ChatScreen({ token, friends, openLoanId, onLoanOpened, onBack, onError }: Props) {
+export function ChatScreen({
+  token,
+  friends,
+  openLoanId,
+  onLoanOpened,
+  onBack,
+  onError,
+  notifications = [],
+  unreadCount = 0,
+  onMarkAllRead,
+  onMarkRead,
+  onOpenLoan,
+  locale = 'en',
+}: Props) {
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
@@ -300,13 +326,54 @@ export function ChatScreen({ token, friends, openLoanId, onLoanOpened, onBack, o
     return (
       <View style={styles.shell}>
         <View style={styles.header}>
-          <Pressable onPress={onBack} accessibilityRole="button" accessibilityLabel="Back">
-            <Text style={styles.headerLink}>Back</Text>
-          </Pressable>
+          <View style={{ width: 48 }} />
           <Text style={styles.headerTitle}>Chats</Text>
           <View style={{ width: 48 }} />
         </View>
-        <Text style={styles.hint}>Message friends about loans — text, emoji, reply, react, files, and voice.</Text>
+
+        <View style={{ paddingHorizontal: 14, gap: 8, marginBottom: 8 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+            <Text style={styles.sectionTitle}>Inbox{unreadCount > 0 ? ` · ${unreadCount}` : ''}</Text>
+            {unreadCount > 0 && onMarkAllRead ? (
+              <Pressable onPress={onMarkAllRead}>
+                <Text style={styles.headerLink}>Mark all read</Text>
+              </Pressable>
+            ) : null}
+          </View>
+          {notifications.length === 0 ? (
+            <Text style={styles.muted}>No notifications</Text>
+          ) : (
+            notifications.slice(0, 8).map((n) => (
+              <Pressable
+                key={n.id}
+                style={styles.row}
+                onPress={() => {
+                  if (!n.read_at) onMarkRead?.(n.id);
+                  if (n.loan_id) onOpenLoan?.(n.loan_id);
+                }}
+              >
+                <View
+                  style={{
+                    width: 8,
+                    height: 8,
+                    borderRadius: 4,
+                    backgroundColor: n.read_at ? 'transparent' : colors.primary,
+                    marginTop: 6,
+                  }}
+                />
+                <View style={styles.flex}>
+                  <Text style={styles.rowTitle}>{n.title}</Text>
+                  <Text style={styles.muted} numberOfLines={2}>
+                    {n.body}
+                  </Text>
+                  <Text style={styles.muted}>{new Date(n.created_at).toLocaleString(locale)}</Text>
+                </View>
+              </Pressable>
+            ))
+          )}
+        </View>
+
+        <Text style={[styles.sectionTitle, { paddingHorizontal: 14 }]}>Messages</Text>
         {friends.map((f) => (
           <Pressable
             key={f.peer.id}
@@ -530,6 +597,7 @@ function makeStyles(colors: ThemeColors) {
     },
     headerTitle: { color: colors.text, fontSize: 17, fontFamily: fonts.uiBold },
     headerLink: { color: colors.tertiary, fontFamily: fonts.uiSemi, fontSize: 15 },
+    sectionTitle: { color: colors.text, fontSize: 15, fontFamily: fonts.uiSemi, marginBottom: 4 },
     hint: { color: colors.muted, padding: 16, fontSize: 13, lineHeight: 18, fontFamily: fonts.ui },
     row: {
       flexDirection: 'row',

@@ -8,26 +8,14 @@ export function Screen({ children, style }: { children: React.ReactNode; style?:
 }
 
 export function BrandMark({ compact = false, hero = false }: { compact?: boolean; hero?: boolean }) {
-  const { colors } = useTheme();
-  const size = hero ? 56 : compact ? 28 : 40;
-  const titleSize = hero ? 32 : compact ? 18 : 22;
+  const size = hero ? 72 : compact ? 32 : 48;
   return (
-    <View style={{ flexDirection: hero ? 'column' : 'row', alignItems: hero ? 'flex-start' : 'center', gap: hero ? 12 : 10 }}>
+    <View style={{ alignItems: 'center', justifyContent: 'center' }}>
       <Image
         source={require('../assets/logo.png')}
         style={{ width: size, height: size, resizeMode: 'contain' }}
         accessibilityLabel="Lony"
       />
-      <View>
-        <Text style={{ color: colors.text, fontFamily: fonts.uiBold, fontSize: titleSize, letterSpacing: hero ? -0.5 : 0 }}>
-          Lony
-        </Text>
-        {!compact ? (
-          <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: hero ? 11 : 10, letterSpacing: 2.5 }}>
-            LEDGER
-          </Text>
-        ) : null}
-      </View>
     </View>
   );
 }
@@ -439,25 +427,24 @@ export function SectionLabel({ children }: { children: string }) {
 
 export function ThemeToggle() {
   const { resolved, toggle, colors } = useTheme();
+  const isDark = resolved === 'dark';
   return (
     <Pressable
       onPress={toggle}
       accessibilityRole="button"
-      accessibilityLabel={resolved === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+      accessibilityLabel={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
       style={{
-        minHeight: 36,
+        width: 40,
+        height: 40,
         borderRadius: radii.full,
         alignItems: 'center',
         justifyContent: 'center',
-        paddingHorizontal: 12,
         backgroundColor: colors.surfaceMuted,
         borderWidth: 1,
         borderColor: colors.border,
       }}
     >
-      <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 12 }}>
-        {resolved === 'dark' ? 'Light' : 'Dark'}
-      </Text>
+      <Text style={{ fontSize: 18 }}>{isDark ? '☀' : '☾'}</Text>
     </Pressable>
   );
 }

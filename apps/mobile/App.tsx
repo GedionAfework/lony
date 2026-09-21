@@ -1,9 +1,7 @@
 import { StatusBar } from 'expo-status-bar';
-import Constants, { ExecutionEnvironment } from 'expo-constants';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
-import * as Notifications from 'expo-notifications';
 import * as SecureStore from 'expo-secure-store';
 import {
   JetBrainsMono_500Medium,
@@ -30,18 +28,29 @@ import {
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { api, DISCLAIMER, type AppNotification, type BankProfile, type BankProfileShare, type Dashboard, type Friendship, type Loan, type Repayment, type SearchHit, type User } from './src/api';
+import { AnalyticsScreen } from './src/AnalyticsScreen';
+import { AuthScreens } from './src/AuthScreens';
 import { BottomNav, type TabId } from './src/BottomNav';
+import { COUNTRIES, CURRENCIES } from './src/catalogs';
 import { ChatScreen } from './src/ChatScreen';
 import { DashboardHome } from './src/DashboardHome';
+import { DateField } from './src/DateField';
+import { DrawerMenu, type DrawerItem } from './src/DrawerMenu';
+import { LoansScreen } from './src/LoansScreen';
 import {
   idTokenFromGoogleResponse,
   openTelegramLogin,
   parseTelegramDeepLink,
   useGoogleIdTokenAuth,
 } from './src/oauth';
+import { OnboardingScreen } from './src/OnboardingScreen';
+import { PlaceholderScreen } from './src/PlaceholderScreen';
 import { TermsScreen } from './src/TermsScreen';
 import { ThemeProvider, useTheme } from './src/theme';
-import { BrandMark, Card, CheckRow, EmptyState, Field, Money, PrimaryButton, ScreenHeader, SecondaryButton, SectionLabel, StatusPill, ThemeToggle, useAppStyles } from './src/ui';
+import { registerPushToken } from './src/push';
+import { SearchSelect } from './src/SearchSelect';
+import { SettingsScreen } from './src/SettingsScreen';
+import { Card, EmptyState, Field, Money, PrimaryButton, ScreenHeader, SecondaryButton, SectionLabel, StatusPill, useAppStyles } from './src/ui';
 
 const ACCESS_KEY = 'lony.access_token';
 const REFRESH_KEY = 'lony.refresh_token';
@@ -80,7 +89,22 @@ function formatMoney(amount: string | null | undefined, currency: string | null 
   return currency ? `${amount} ${currency}` : amount;
 }
 
-type Screen = 'login' | 'register' | 'verify' | 'home' | 'new-loan' | 'loan' | 'banks' | 'activity' | 'chats' | 'profile' | 'tos';
+type Screen =
+  | 'login'
+  | 'register'
+  | 'verify'
+  | 'onboarding'
+  | 'home'
+  | 'loans'
+  | 'new-loan'
+  | 'loan'
+  | 'banks'
+  | 'chats'
+  | 'settings'
+  | 'expenses'
+  | 'analytics'
+  | 'plan'
+  | 'tos';
 
 export default function App() {
   const [manropeLoaded] = useManrope({
@@ -110,6 +134,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   const googleAuth = useGoogleIdTokenAuth();
 
   const [screen, setScreen] = useState<Screen>('login');
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [booting, setBooting] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -123,20 +148,20 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   const [selectedLoan, setSelectedLoan] = useState<Loan | null>(null);
   const [loanFriendId, setLoanFriendId] = useState<string>('');
   const [loanRole, setLoanRole] = useState<'borrower' | 'lender'>('borrower');
-  const [principal, setPrincipal] = useState('1000');
-  const [interest, setInterest] = useState('5');
-  const [currency, setCurrency] = useState('ETB');
+  const [principal, setPrincipal] = useState('');
+  const [interest, setInterest] = useState('0');
+  const [currency, setCurrency] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [note, setNote] = useState('');
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
-  const [dashCurrency, setDashCurrency] = useState('ETB');
+  const [dashCurrency, setDashCurrency] = useState('');
   const [loanFilter, setLoanFilter] = useState('');
   const [bankProfiles, setBankProfiles] = useState<BankProfile[]>([]);
   const [outgoingShares, setOutgoingShares] = useState<BankProfileShare[]>([]);
   const [incomingShares, setIncomingShares] = useState<BankProfileShare[]>([]);
   const [paymentProfile, setPaymentProfile] = useState<BankProfile | null>(null);
   const [revealedNumber, setRevealedNumber] = useState<string | null>(null);
-  const [bankLabel, setBankLabel] = useState('CBE checking');
+  const [bankLabel, setBankLabel] = useState('');
   const [bankType, setBankType] = useState('bank_account');
   const [bankInstitution, setBankInstitution] = useState('');
   const [bankIdentifier, setBankIdentifier] = useState('');
@@ -151,25 +176,67 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   const [profileMiddleName, setProfileMiddleName] = useState('');
   const [profileLastName, setProfileLastName] = useState('');
   const [profilePhone, setProfilePhone] = useState('');
-  const [profileCountry, setProfileCountry] = useState('ET');
+  const [profileCountry, setProfileCountry] = useState('');
   const [profileAuthPref, setProfileAuthPref] = useState<'email' | 'google' | 'telegram'>('email');
   const [profileLocale, setProfileLocale] = useState('en');
   const [paymentRails, setPaymentRails] = useState<import('./src/api').PaymentRail[]>([]);
   const [selectedRail, setSelectedRail] = useState('');
-  const [bankCountry, setBankCountry] = useState('ET');
+  const [bankCountry, setBankCountry] = useState('');
   const [bankRailCode, setBankRailCode] = useState('');
-  const [profileCurrency, setProfileCurrency] = useState('ETB');
-  const [profileTimezone, setProfileTimezone] = useState('Africa/Addis_Ababa');
+  const [profileCurrency, setProfileCurrency] = useState('');
+  const [profileTimezone, setProfileTimezone] = useState('UTC');
+  const [onboardingTos, setOnboardingTos] = useState(false);
   const [chatLoanId, setChatLoanId] = useState<string | null>(null);
   const [editingBankId, setEditingBankId] = useState<string | null>(null);
   const [editBankLabel, setEditBankLabel] = useState('');
-
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [code, setCode] = useState('');
   const [devCode, setDevCode] = useState<string | undefined>();
   const [acceptedDisclaimer, setAcceptedDisclaimer] = useState(false);
+
+  function applyUserProfile(next: User) {
+    setUser(next);
+    setProfileName(next.display_name);
+    setProfileUsername(next.username ?? '');
+    setProfileFirstName(next.first_name ?? '');
+    setProfileMiddleName(next.middle_name ?? '');
+    setProfileLastName(next.last_name ?? '');
+    setProfilePhone(next.phone_e164 ?? '');
+    setProfileCountry(next.country_code ?? '');
+    setProfileAuthPref((next.preferred_auth_provider as 'email' | 'google' | 'telegram') || 'email');
+    setProfileLocale(next.locale || 'en');
+    setProfileCurrency(next.default_currency_code ?? '');
+    setProfileTimezone(next.timezone || 'UTC');
+    setCurrency((c) => c || next.default_currency_code || '');
+    setDashCurrency((c) => c || next.default_currency_code || '');
+    setOnboardingTos(Boolean(next.tos_accepted_at));
+  }
+
+  function enterAuthed(next: User, access: string) {
+    setToken(access);
+    applyUserProfile(next);
+    registerPushToken(access).catch(() => undefined);
+    setScreen(next.profile_complete ? 'home' : 'onboarding');
+  }
+
+  function syncDashCurrency(dash: Dashboard | null, preferred?: string | null) {
+    const codes = dash?.by_currency?.map((c) => c.currency_code).filter(Boolean) ?? [];
+    if (!codes.length) {
+      setDashCurrency(preferred ?? '');
+      return;
+    }
+    setDashCurrency((current) => {
+      if (preferred && codes.includes(preferred)) {
+        return preferred;
+      }
+      if (current && codes.includes(current)) {
+        return current;
+      }
+      return codes[0];
+    });
+  }
 
   useEffect(() => {
     (async () => {
@@ -182,15 +249,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         try {
           if (access) {
             const me = await api.me(access);
-            setToken(access);
-            setUser(me.user);
-            setProfileName(me.user.display_name);
-            setProfileUsername(me.user.username ?? '');
-            setProfileLocale(me.user.locale || 'en');
-            setProfileCurrency(me.user.default_currency_code || 'ETB');
-            setProfileTimezone(me.user.timezone || 'Africa/Addis_Ababa');
-            setScreen('home');
-            registerDevDeviceToken(access).catch(() => undefined);
+            enterAuthed(me.user, access);
             return;
           }
         } catch {
@@ -200,15 +259,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
           const tokens = await api.refresh(refresh);
           await SecureStore.setItemAsync(ACCESS_KEY, tokens.access_token);
           await SecureStore.setItemAsync(REFRESH_KEY, tokens.refresh_token);
-          setToken(tokens.access_token);
-          setUser(tokens.user);
-          setProfileName(tokens.user.display_name);
-          setProfileUsername(tokens.user.username ?? '');
-          setProfileLocale(tokens.user.locale || 'en');
-          setProfileCurrency(tokens.user.default_currency_code || 'ETB');
-          setProfileTimezone(tokens.user.timezone || 'Africa/Addis_Ababa');
-          setScreen('home');
-          registerDevDeviceToken(tokens.access_token).catch(() => undefined);
+          enterAuthed(tokens.user, tokens.access_token);
           return;
         }
         await SecureStore.deleteItemAsync(ACCESS_KEY);
@@ -248,39 +299,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   async function persistTokens(access: string, refresh: string, nextUser: User) {
     await SecureStore.setItemAsync(ACCESS_KEY, access);
     await SecureStore.setItemAsync(REFRESH_KEY, refresh);
-    setToken(access);
-    setUser(nextUser);
-    setProfileName(nextUser.display_name);
-    setProfileUsername(nextUser.username ?? '');
-    setProfileLocale(nextUser.locale || 'en');
-    setProfileCurrency(nextUser.default_currency_code || 'ETB');
-    setProfileTimezone(nextUser.timezone || 'Africa/Addis_Ababa');
-    setScreen('home');
-    registerDevDeviceToken(access).catch(() => undefined);
-  }
-
-  async function registerDevDeviceToken(access: string) {
-    // Remote push was removed from Expo Go (SDK 53+). In-app inbox still works.
-    // Push tokens need a development/production build (eas build).
-    if (Constants.executionEnvironment === ExecutionEnvironment.StoreClient) {
-      return;
-    }
-    try {
-      const { status } = await Notifications.requestPermissionsAsync();
-      if (status !== 'granted') {
-        return;
-      }
-      const projectId = process.env.EXPO_PUBLIC_EAS_PROJECT_ID?.trim();
-      const push = projectId
-        ? await Notifications.getExpoPushTokenAsync({ projectId })
-        : await Notifications.getExpoPushTokenAsync();
-      if (!push.data.startsWith('ExponentPushToken[') && !push.data.startsWith('ExpoPushToken[')) {
-        return;
-      }
-      await api.registerDeviceToken(access, Platform.OS === 'ios' ? 'ios' : 'android', push.data);
-    } catch {
-      /* Skip when push is unavailable; worker should not get fake tokens. */
-    }
+    enterAuthed(nextUser, access);
   }
 
   async function onRegister() {
@@ -362,7 +381,9 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     const [friendRes, incomingRes, loanRes, dashRes, bankRes, shareRes, inShareRes, notifyRes] = await Promise.all([
       api.listFriends(access),
       api.listIncoming(access),
-      api.listLoans(access, loanFilter ? { currency: dashCurrency, filter: loanFilter } : {}),
+      api.listLoans(access, {
+        ...(loanFilter ? { filter: loanFilter } : {}),
+      }),
       api.dashboard(access),
       api.listBankProfiles(access),
       api.listBankShares(access, false),
@@ -373,6 +394,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     setIncoming(incomingRes.requests ?? []);
     setLoans(loanRes.loans ?? []);
     setDashboard(dashRes.dashboard);
+    syncDashCurrency(dashRes.dashboard, user?.default_currency_code);
     setBankProfiles(bankRes.bank_profiles ?? []);
     setOutgoingShares(shareRes.shares ?? []);
     setIncomingShares(inShareRes.shares ?? []);
@@ -388,7 +410,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     setLoanFilter(next);
     setBusy(true);
     try {
-      const res = await api.listLoans(token, next ? { currency: dashCurrency, filter: next } : {});
+      const res = await api.listLoans(token, next ? { filter: next } : {});
       setLoans(res.loans ?? []);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not load loans');
@@ -397,26 +419,19 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     }
   }
 
-  async function onDashCurrency(code: string) {
-    setDashCurrency(code);
-    if (!token) {
-      return;
-    }
-    try {
-      const res = await api.listLoans(token, loanFilter ? { currency: code, filter: loanFilter } : {});
-      setLoans(res.loans ?? []);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not load loans');
-    }
-  }
-
   useEffect(() => {
-    if (screen === 'home' && token) {
+    if ((screen === 'home' || screen === 'loans') && token) {
       refreshFriends(token).catch((e) => {
         setError(e instanceof Error ? e.message : 'Could not load friends');
       });
     }
   }, [screen, token]);
+
+  useEffect(() => {
+    if (user && token && !user.profile_complete && !['onboarding', 'tos', 'settings', 'login', 'register', 'verify'].includes(screen)) {
+      setScreen('onboarding');
+    }
+  }, [user, token, screen]);
 
   async function onSearch() {
     if (!token) {
@@ -520,9 +535,20 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     if (!token) {
       return;
     }
+    if (!profileUsername.trim() || !profileFirstName.trim() || !profileLastName.trim()) {
+      setError('Username, first name, and last name are required');
+      return;
+    }
+    if (profileCountry.trim().length !== 2 || profileCurrency.trim().length !== 3) {
+      setError('Select a country and currency');
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
+      if (onboardingTos && !user?.tos_accepted_at) {
+        await api.acceptTOS(token);
+      }
       const res = await api.patchMe(token, {
         display_name: profileName.trim() || `${profileFirstName} ${profileLastName}`.trim(),
         username: profileUsername.trim(),
@@ -533,19 +559,13 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         country_code: profileCountry.trim().toUpperCase(),
         preferred_auth_provider: profileAuthPref,
         locale: profileLocale.trim() || 'en',
-        timezone: profileTimezone.trim() || 'Africa/Addis_Ababa',
-        default_currency_code: profileCurrency.trim().toUpperCase() || 'ETB',
+        timezone: profileTimezone.trim() || 'UTC',
+        default_currency_code: profileCurrency.trim().toUpperCase(),
       });
-      setUser(res.user);
-      setProfileUsername(res.user.username ?? '');
-      setProfileFirstName(res.user.first_name ?? '');
-      setProfileMiddleName(res.user.middle_name ?? '');
-      setProfileLastName(res.user.last_name ?? '');
-      setProfilePhone(res.user.phone_e164 ?? '');
-      setProfileCountry(res.user.country_code ?? 'ET');
-      setProfileAuthPref((res.user.preferred_auth_provider as 'email' | 'google' | 'telegram') || 'email');
-      setDashCurrency(res.user.default_currency_code || dashCurrency);
-      setScreen('home');
+      applyUserProfile(res.user);
+      setCurrency(res.user.default_currency_code ?? '');
+      setDashCurrency(res.user.default_currency_code ?? '');
+      setScreen(res.user.profile_complete ? 'home' : 'onboarding');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not update profile');
     } finally {
@@ -669,7 +689,12 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     setBusy(true);
     setError(null);
     try {
-      const hasTerms = Boolean(principal.trim() && dueDate.trim());
+      const hasTerms = Boolean(principal.trim() && dueDate.trim() && currency.trim());
+      if (principal.trim() && !currency.trim()) {
+        setError('Select a currency');
+        setBusy(false);
+        return;
+      }
       const created = await api.createLoan(token, {
         counterparty_id: loanFriendId,
         role: loanRole,
@@ -1016,29 +1041,38 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   }
 
   const authed = Boolean(user && token);
-  const showNav = authed && !['login', 'register', 'verify', 'loan', 'new-loan', 'profile'].includes(screen);
+  const showNav =
+    authed &&
+    user?.profile_complete &&
+    !['login', 'register', 'verify', 'onboarding', 'loan', 'new-loan', 'settings', 'tos', 'banks', 'expenses', 'analytics', 'plan'].includes(screen);
 
   function tabFromScreen(s: Screen): TabId {
-    if (s === 'banks') return 'banks';
-    if (s === 'activity') return 'activity';
+    if (s === 'loans') return 'loans';
     if (s === 'chats') return 'chats';
-    return 'dashboard';
+    return 'home';
   }
 
   function goTab(tab: TabId) {
-    if (tab === 'dashboard' || tab === 'loans') {
+    if (tab === 'home') {
       setScreen('home');
-      if (tab === 'loans') {
-        applyLoanFilter(loanFilter || '');
-      }
       return;
     }
-    if (tab === 'banks') {
-      setScreen('banks');
-      api.listPaymentRails().then((res) => setPaymentRails(res.rails ?? [])).catch(() => undefined);
+    if (tab === 'loans') {
+      setScreen('loans');
+      return;
     }
-    if (tab === 'activity') setScreen('activity');
     if (tab === 'chats') setScreen('chats');
+  }
+
+  function onDrawerSelect(item: DrawerItem) {
+    if (item === 'expenses') setScreen('expenses');
+    if (item === 'loans') setScreen('loans');
+    if (item === 'analytics') setScreen('analytics');
+    if (item === 'plan') setScreen('plan');
+    if (item === 'settings') {
+      if (user) applyUserProfile(user);
+      setScreen('settings');
+    }
   }
 
   return (
@@ -1048,6 +1082,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         style={styles.flex}
       >
+        <DrawerMenu open={drawerOpen} onClose={() => setDrawerOpen(false)} onSelect={onDrawerSelect} />
         {screen === 'chats' && user && token ? (
           <View style={styles.flex}>
             {error ? <Text style={[styles.error, { paddingHorizontal: 16, paddingTop: 8 }]}>{error}</Text> : null}
@@ -1058,112 +1093,127 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               onLoanOpened={() => setChatLoanId(null)}
               onBack={() => setScreen('home')}
               onError={(message) => setError(message)}
+              notifications={notifications}
+              unreadCount={unreadCount}
+              onMarkAllRead={onMarkAllNotificationsRead}
+              onMarkRead={onMarkNotificationRead}
+              onOpenLoan={openLoan}
+              locale={user.locale}
             />
           </View>
         ) : (
         <ScrollView contentContainerStyle={styles.container} keyboardShouldPersistTaps="handled">
-          {!authed ? (
-            <View style={styles.authHero}>
-              <View style={{ flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between' }}>
-                <BrandMark hero />
-                <ThemeToggle />
-              </View>
-              <Text style={styles.authSub}>Shared loan records and reminders. Not a bank.</Text>
-            </View>
-          ) : null}
-
           {error ? <Text style={styles.error}>{error}</Text> : null}
 
-          {screen === 'home' && user ? (
+          {!authed && (screen === 'login' || screen === 'register' || screen === 'verify') ? (
+            <AuthScreens
+              mode={screen}
+              email={email}
+              password={password}
+              displayName={displayName}
+              code={code}
+              devCode={devCode}
+              busy={busy}
+              acceptedDisclaimer={acceptedDisclaimer}
+              onEmail={setEmail}
+              onPassword={setPassword}
+              onDisplayName={setDisplayName}
+              onCode={setCode}
+              onToggleDisclaimer={() => setAcceptedDisclaimer((v) => !v)}
+              onLogin={onLogin}
+              onRegister={onRegister}
+              onVerify={onVerify}
+              onGoogle={onGoogleSignIn}
+              onTelegram={onTelegramSignIn}
+              onGoLogin={() => setScreen('login')}
+              onGoRegister={() => setScreen('register')}
+            />
+          ) : null}
+
+          {screen === 'onboarding' && user ? (
+            <OnboardingScreen
+              username={profileUsername}
+              firstName={profileFirstName}
+              lastName={profileLastName}
+              phone={profilePhone}
+              country={profileCountry}
+              currency={profileCurrency}
+              tosAccepted={onboardingTos || Boolean(user.tos_accepted_at)}
+              busy={busy}
+              onUsername={setProfileUsername}
+              onFirstName={setProfileFirstName}
+              onLastName={setProfileLastName}
+              onPhone={setProfilePhone}
+              onCountry={setProfileCountry}
+              onCurrency={setProfileCurrency}
+              onToggleTos={() => setOnboardingTos((v) => !v)}
+              onSave={onSaveProfile}
+              onOpenTos={() => setScreen('tos')}
+            />
+          ) : null}
+
+          {screen === 'home' && user && token ? (
             <DashboardHome
               user={user}
               dashboard={dashboard}
-              dashCurrency={dashCurrency}
+              token={token}
+              onMenu={() => setDrawerOpen(true)}
+              onOpenAnalytics={() => setScreen('analytics')}
+              formatMoney={formatMoney}
+            />
+          ) : null}
+
+          {screen === 'loans' && user ? (
+            <LoansScreen
+              user={user}
               loans={loans}
               friends={friends}
+              incoming={incoming}
+              hits={hits}
+              query={query}
               loanFilter={loanFilter}
-              onCurrency={onDashCurrency}
+              busy={busy}
+              onQuery={setQuery}
+              onSearch={onSearch}
+              onAdd={onAdd}
+              onAccept={onAccept}
+              onReject={onReject}
+              onRemove={onRemove}
+              onBlock={onBlock}
               onFilter={applyLoanFilter}
               onOpenLoan={openLoan}
               onNewLoan={() => {
                 setLoanFriendId(friends[0]?.peer.id ?? '');
+                setCurrency(user.default_currency_code ?? '');
                 setScreen('new-loan');
-              }}
-              onBanks={() => {
-                setScreen('banks');
-                api.listPaymentRails().then((res) => setPaymentRails(res.rails ?? [])).catch(() => undefined);
-              }}
-              onLogout={onLogout}
-              onProfile={() => {
-                if (user) {
-                  setProfileName(user.display_name);
-                  setProfileUsername(user.username ?? '');
-                  setProfileFirstName(user.first_name ?? '');
-                  setProfileMiddleName(user.middle_name ?? '');
-                  setProfileLastName(user.last_name ?? '');
-                  setProfilePhone(user.phone_e164 ?? '');
-                  setProfileCountry(user.country_code ?? 'ET');
-                  setProfileAuthPref((user.preferred_auth_provider as 'email' | 'google' | 'telegram') || 'email');
-                  setProfileLocale(user.locale || 'en');
-                  setProfileCurrency(user.default_currency_code || 'ETB');
-                  setProfileTimezone(user.timezone || 'Africa/Addis_Ababa');
-                }
-                setScreen('profile');
               }}
               formatMoney={formatMoney}
             />
           ) : null}
 
-          {screen === 'home' && user ? (
-            <View style={{ gap: 12, marginTop: 8 }}>
-              <Card>
-                <Text style={styles.cardTitle}>Friends</Text>
-                <Text style={styles.muted}>Connect before you create a loan.</Text>
-                <Field label="Search email or name" value={query} onChange={setQuery} />
-                <PrimaryButton label={busy ? 'Working…' : 'Search'} onPress={onSearch} disabled={busy} />
-                {hits.map((hit) => (
-                  <View key={hit.id} style={styles.row}>
-                    <View style={styles.flex}>
-                      <Text style={styles.rowTitle}>{hit.display_name}</Text>
-                      <Text style={styles.muted}>{hit.username ?? hit.id.slice(0, 8)}</Text>
-                    </View>
-                    <SecondaryButton label="Add" onPress={() => onAdd(hit)} disabled={busy} />
-                  </View>
-                ))}
-                {incoming.map((req) => (
-                  <View key={req.id} style={styles.row}>
-                    <View style={styles.flex}>
-                      <Text style={styles.rowTitle}>{req.peer.display_name}</Text>
-                      <Text style={styles.muted}>Incoming request</Text>
-                    </View>
-                    <Pressable style={styles.smallButton} onPress={() => onAccept(req.id)} disabled={busy}>
-                      <Text style={styles.smallButtonText}>Accept</Text>
-                    </Pressable>
-                    <Pressable style={styles.ghostButton} onPress={() => onReject(req.id)} disabled={busy}>
-                      <Text style={styles.ghostButtonText}>Reject</Text>
-                    </Pressable>
-                  </View>
-                ))}
-                {friends.map((friend) => (
-                  <View key={friend.id} style={{ gap: 8 }}>
-                    <View style={styles.row}>
-                      <View style={styles.flex}>
-                        <Text style={styles.rowTitle}>{friend.peer.display_name}</Text>
-                        <Text style={styles.muted}>Friend</Text>
-                      </View>
-                    </View>
-                    <View style={styles.row}>
-                      <Pressable style={styles.ghostButton} onPress={() => onRemove(friend.id)} disabled={busy}>
-                        <Text style={styles.ghostButtonText}>Remove</Text>
-                      </Pressable>
-                      <Pressable style={styles.ghostButton} onPress={() => onBlock(friend.peer.id)} disabled={busy}>
-                        <Text style={styles.ghostButtonText}>Block</Text>
-                      </Pressable>
-                    </View>
-                  </View>
-                ))}
-              </Card>
-            </View>
+          {screen === 'expenses' ? (
+            <PlaceholderScreen
+              title="Expenses"
+              body="Full expense tracker is coming next. Use the menu to get back anytime."
+              onBack={() => setScreen('home')}
+            />
+          ) : null}
+
+          {screen === 'analytics' && user ? (
+            <AnalyticsScreen
+              user={user}
+              dashboard={dashboard}
+              onBack={() => setScreen('home')}
+              formatMoney={formatMoney}
+            />
+          ) : null}
+
+          {screen === 'plan' ? (
+            <PlaceholderScreen
+              title="Plan"
+              body="Budgets and savings plans will live here."
+              onBack={() => setScreen('home')}
+            />
           ) : null}
 
           {screen === 'tos' ? (
@@ -1174,74 +1224,65 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                 onAccepted={async () => {
                   if (token) {
                     const me = await api.me(token);
-                    setUser(me.user);
+                    applyUserProfile(me.user);
+                    setOnboardingTos(true);
                   }
-                  setScreen(token ? 'profile' : 'register');
+                  setScreen(token ? (user?.profile_complete ? 'settings' : 'onboarding') : 'register');
                 }}
-                onBack={() => setScreen(token ? 'profile' : 'register')}
+                onBack={() => setScreen(token ? (user?.profile_complete ? 'settings' : 'onboarding') : 'register')}
               />
             </View>
           ) : null}
 
-          {screen === 'profile' && user ? (
-            <View style={{ gap: 14 }}>
-              <ScreenHeader title="Account" onBack={() => setScreen('home')} />
-              <Card>
-                <Text style={styles.muted}>{user.email}</Text>
-                {!user.profile_complete ? (
-                  <Text style={styles.error}>Complete your account (names, username, country, currency, and Terms).</Text>
-                ) : null}
-                <SecondaryButton label={busy ? 'Uploading…' : 'Change profile photo'} onPress={onPickAvatar} disabled={busy} />
-                {user.avatar_url ? <Text style={styles.dev}>Photo set</Text> : null}
-                <SectionLabel>Identity</SectionLabel>
-                <Field label="Username (required)" value={profileUsername} onChange={setProfileUsername} />
-                <Field label="First name" value={profileFirstName} onChange={setProfileFirstName} />
-                <Field label="Middle name" value={profileMiddleName} onChange={setProfileMiddleName} />
-                <Field label="Last name" value={profileLastName} onChange={setProfileLastName} />
-                <Field label="Display name" value={profileName} onChange={setProfileName} />
-                <Field label="Phone (E.164)" value={profilePhone} onChange={setProfilePhone} keyboardType="phone-pad" />
-                <Field label="Country (ISO)" value={profileCountry} onChange={setProfileCountry} />
-                <SectionLabel>Sign-in preference</SectionLabel>
-                <View style={styles.row}>
-                  {(['email', 'google', 'telegram'] as const).map((p) => (
-                    <Pressable
-                      key={p}
-                      style={profileAuthPref === p ? styles.smallButton : styles.ghostButton}
-                      onPress={() => setProfileAuthPref(p)}
-                    >
-                      <Text style={profileAuthPref === p ? styles.smallButtonText : styles.ghostButtonText}>
-                        {p}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
-                <SectionLabel>Preferences</SectionLabel>
-                <Field label="Locale" value={profileLocale} onChange={setProfileLocale} />
-                <Field label="Timezone" value={profileTimezone} onChange={setProfileTimezone} />
-                <Field label="Currency preference" value={profileCurrency} onChange={setProfileCurrency} />
-                <PrimaryButton
-                  label={busy ? 'Saving…' : 'Save account'}
-                  onPress={onSaveProfile}
-                  disabled={busy || !profileUsername.trim() || !profileFirstName.trim() || !profileLastName.trim()}
-                />
-                <SecondaryButton label="Read Terms of Service" onPress={() => setScreen('tos')} />
-                {user.tos_accepted_at ? (
-                  <Text style={styles.dev}>Terms accepted · {user.tos_version}</Text>
-                ) : (
-                  <Text style={styles.error}>You must accept the Terms of Service.</Text>
-                )}
-              </Card>
-            </View>
+          {screen === 'settings' && user ? (
+            <SettingsScreen
+              email={user.email}
+              username={profileUsername}
+              firstName={profileFirstName}
+              middleName={profileMiddleName}
+              lastName={profileLastName}
+              displayName={profileName}
+              phone={profilePhone}
+              country={profileCountry}
+              currency={profileCurrency}
+              locale={profileLocale}
+              timezone={profileTimezone}
+              authPref={profileAuthPref}
+              profileComplete={Boolean(user.profile_complete)}
+              tosAccepted={Boolean(user.tos_accepted_at)}
+              tosVersion={user.tos_version}
+              busy={busy}
+              onUsername={setProfileUsername}
+              onFirstName={setProfileFirstName}
+              onMiddleName={setProfileMiddleName}
+              onLastName={setProfileLastName}
+              onDisplayName={setProfileName}
+              onPhone={setProfilePhone}
+              onCountry={setProfileCountry}
+              onCurrency={setProfileCurrency}
+              onLocale={setProfileLocale}
+              onTimezone={setProfileTimezone}
+              onAuthPref={setProfileAuthPref}
+              onSave={onSaveProfile}
+              onAvatar={onPickAvatar}
+              onTos={() => setScreen('tos')}
+              onBanks={() => {
+                setScreen('banks');
+                api.listPaymentRails().then((res) => setPaymentRails(res.rails ?? [])).catch(() => undefined);
+              }}
+              onLogout={onLogout}
+              onBack={() => setScreen(user.profile_complete ? 'home' : 'onboarding')}
+            />
           ) : null}
 
           {screen === 'new-loan' ? (
             <View style={{ gap: 14 }}>
-              <ScreenHeader title="New loan" onBack={() => setScreen('home')} />
+              <ScreenHeader title="New loan" onBack={() => setScreen('loans')} />
               <Card>
                 <Text style={styles.muted}>Shared record only. Money still moves outside the app.</Text>
                 <SectionLabel>Friend</SectionLabel>
                 {friends.length === 0 ? (
-                  <EmptyState title="No friends yet" body="Add a friend from Home before creating a loan." />
+                  <EmptyState title="No friends yet" body="Add a friend from Loans before creating a loan." />
                 ) : (
                   friends.map((friend) => (
                     <Pressable
@@ -1265,10 +1306,14 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                 <SectionLabel>Terms</SectionLabel>
                 <Field label="Principal" value={principal} onChange={setPrincipal} keyboardType="decimal-pad" />
                 <Field label="Flat interest %" value={interest} onChange={setInterest} keyboardType="decimal-pad" />
-                <Field label="Currency" value={currency} onChange={setCurrency} placeholder="ETB or USD" />
-                <Field label="Due date" value={dueDate} onChange={setDueDate} placeholder="YYYY-MM-DD" />
+                <SearchSelect label="Currency" value={currency} onChange={setCurrency} options={CURRENCIES} placeholder="Select currency" />
+                <DateField label="Due date" value={dueDate} onChange={setDueDate} />
                 <Field label="Note" value={note} onChange={setNote} />
-                <PrimaryButton label={busy ? 'Working…' : 'Send for acceptance'} onPress={onCreateLoan} disabled={busy || !loanFriendId} />
+                <PrimaryButton
+                  label={busy ? 'Working…' : 'Send for acceptance'}
+                  onPress={onCreateLoan}
+                  disabled={busy || !loanFriendId || !currency || !principal}
+                />
               </Card>
             </View>
           ) : null}
@@ -1277,7 +1322,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
             <View style={{ gap: 14 }}>
               <ScreenHeader
                 title={selectedLoan.reference_code}
-                onBack={() => setScreen('home')}
+                onBack={() => setScreen('loans')}
                 right={<StatusPill status={selectedLoan.status} />}
               />
               <Card>
@@ -1328,8 +1373,8 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                   <SectionLabel>Propose or update terms</SectionLabel>
                   <Field label="Principal" value={principal} onChange={setPrincipal} keyboardType="decimal-pad" />
                   <Field label="Flat interest %" value={interest} onChange={setInterest} keyboardType="decimal-pad" />
-                  <Field label="Currency" value={currency} onChange={setCurrency} placeholder="ETB or USD" />
-                  <Field label="Due date" value={dueDate} onChange={setDueDate} placeholder="YYYY-MM-DD" />
+                  <SearchSelect label="Currency" value={currency} onChange={setCurrency} options={CURRENCIES} />
+                  <DateField label="Due date" value={dueDate} onChange={setDueDate} />
                   <Field label="Note" value={note} onChange={setNote} />
                   <PrimaryButton label={busy ? 'Working…' : 'Send terms'} onPress={onProposeTerms} disabled={busy} />
                 </Card>
@@ -1440,65 +1485,9 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
             </View>
           ) : null}
 
-          {screen === 'activity' && user ? (
-            <View style={{ gap: 14 }}>
-              <ScreenHeader
-                title="Inbox"
-                onBack={() => setScreen('home')}
-                right={
-                  unreadCount > 0 ? (
-                    <Pressable onPress={onMarkAllNotificationsRead} disabled={busy}>
-                      <Text style={styles.link}>Mark all read</Text>
-                    </Pressable>
-                  ) : null
-                }
-              />
-              <Card>
-                <Text style={styles.muted}>Friends, loans, repayments, and due reminders.</Text>
-                {notifications.length === 0 ? (
-                  <EmptyState title="All quiet" body="When something needs your attention, it shows up here." />
-                ) : (
-                  notifications.map((n) => (
-                    <Pressable
-                      key={n.id}
-                      style={[styles.row, { alignItems: 'flex-start', paddingVertical: 10 }]}
-                      onPress={() => {
-                        if (!n.read_at) {
-                          onMarkNotificationRead(n.id);
-                        }
-                        if (n.loan_id) {
-                          openLoan(n.loan_id);
-                        }
-                      }}
-                      accessibilityRole="button"
-                      accessibilityLabel={`${n.title}. ${n.read_at ? 'Read' : 'Unread'}`}
-                    >
-                      <View
-                        style={{
-                          width: 8,
-                          height: 8,
-                          borderRadius: 4,
-                          marginTop: 6,
-                          backgroundColor: n.read_at ? 'transparent' : '#1FA8A8',
-                        }}
-                      />
-                      <View style={styles.flex}>
-                        <Text style={styles.rowTitle}>{n.title}</Text>
-                        <Text style={styles.muted}>{n.body}</Text>
-                        <Text style={styles.muted}>
-                          {new Date(n.created_at).toLocaleString(user.locale || 'en')}
-                        </Text>
-                      </View>
-                    </Pressable>
-                  ))
-                )}
-              </Card>
-            </View>
-          ) : null}
-
           {screen === 'banks' && user ? (
             <View style={{ gap: 14 }}>
-              <ScreenHeader title="Payment profiles" onBack={() => { setRevealedNumber(null); setScreen('home'); }} />
+              <ScreenHeader title="Payment profiles" onBack={() => { setRevealedNumber(null); setScreen('settings'); }} />
               <Card>
                 <Text style={styles.muted}>
                   Encrypted destinations for any rail worldwide. Lists show last 4 only.
@@ -1563,15 +1552,37 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
 
               <Card>
                 <SectionLabel>Add payment account</SectionLabel>
-                <Field label="Account country (ISO)" value={bankCountry} onChange={setBankCountry} placeholder="ET, US, …" />
+                <SearchSelect label="Account country" value={bankCountry} onChange={setBankCountry} options={COUNTRIES} />
                 <SecondaryButton
-                  label={paymentRails.length ? `Refresh types (${paymentRails.length})` : 'Load global payment types'}
+                  label={paymentRails.length ? `Refresh types (${paymentRails.length})` : 'Load payment types'}
                   onPress={() => {
                     api.listPaymentRails().then((res) => setPaymentRails(res.rails ?? [])).catch((e) => setError(e instanceof Error ? e.message : 'Could not load rails'));
                   }}
                 />
-                <View style={[styles.row, { flexWrap: 'wrap' }]}>
-                  {(paymentRails.length
+                <SearchSelect
+                  label="Payment type"
+                  value={selectedRail}
+                  onChange={(code) => {
+                    const rail =
+                      paymentRails.find((r) => r.code === code) ??
+                      [
+                        { code: 'bank_local', label: 'Local bank', profile_type: 'bank_account' },
+                        { code: 'iban', label: 'IBAN', profile_type: 'iban' },
+                        { code: 'swift', label: 'SWIFT', profile_type: 'swift' },
+                        { code: 'mobile_money', label: 'Mobile money', profile_type: 'mobile_money' },
+                        { code: 'paypal', label: 'PayPal', profile_type: 'paypal' },
+                        { code: 'wise', label: 'Wise', profile_type: 'wise' },
+                        { code: 'crypto_wallet', label: 'Crypto', profile_type: 'crypto_wallet' },
+                        { code: 'other', label: 'Other', profile_type: 'other' },
+                      ].find((r) => r.code === code);
+                    setSelectedRail(code);
+                    setBankRailCode(code);
+                    if (rail) {
+                      setBankType(rail.profile_type);
+                      setBankLabel(rail.label);
+                    }
+                  }}
+                  options={(paymentRails.length
                     ? paymentRails
                     : [
                         { code: 'bank_local', label: 'Local bank', profile_type: 'bank_account' },
@@ -1583,23 +1594,9 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                         { code: 'crypto_wallet', label: 'Crypto', profile_type: 'crypto_wallet' },
                         { code: 'other', label: 'Other', profile_type: 'other' },
                       ]
-                  ).map((rail) => (
-                    <Pressable
-                      key={rail.code}
-                      style={selectedRail === rail.code ? styles.smallButton : styles.ghostButton}
-                      onPress={() => {
-                        setSelectedRail(rail.code);
-                        setBankRailCode(rail.code);
-                        setBankType(rail.profile_type);
-                        setBankLabel(rail.label);
-                      }}
-                    >
-                      <Text style={selectedRail === rail.code ? styles.smallButtonText : styles.ghostButtonText}>
-                        {rail.label}
-                      </Text>
-                    </Pressable>
-                  ))}
-                </View>
+                  ).map((r) => ({ id: r.code, label: r.label, keywords: `${r.code} ${r.label}`.toLowerCase() }))}
+                  placeholder="Select payment type"
+                />
                 <Field label="Label" value={bankLabel} onChange={setBankLabel} />
                 <Field label="Institution" value={bankInstitution} onChange={setBankInstitution} />
                 <Field label="Account or wallet number" value={bankIdentifier} onChange={setBankIdentifier} />
@@ -1617,7 +1614,11 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                     ))}
                   </>
                 ) : null}
-                <PrimaryButton label={busy ? 'Working…' : 'Save encrypted profile'} onPress={onCreateBank} disabled={busy || !bankIdentifier.trim()} />
+                <PrimaryButton
+                  label={busy ? 'Working…' : 'Save encrypted profile'}
+                  onPress={onCreateBank}
+                  disabled={busy || !bankIdentifier.trim() || !bankCountry || !selectedRail}
+                />
               </Card>
 
               {outgoingShares.filter((s) => !s.revoked_at).length > 0 ? (
@@ -1655,71 +1656,6 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               ) : null}
             </View>
           ) : null}
-
-          {screen === 'register' ? (
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>Create account</Text>
-              <Text style={styles.muted}>One shared ledger for friends who lend each other money.</Text>
-              <Field label="Display name" value={displayName} onChange={setDisplayName} />
-              <Field label="Email" value={email} onChange={setEmail} keyboardType="email-address" />
-              <Field label="Password" value={password} onChange={setPassword} secure />
-              <Text style={styles.disclaimer}>{DISCLAIMER}</Text>
-              <CheckRow
-                checked={acceptedDisclaimer}
-                label="I understand Lony is a shared ledger, not a bank or escrow."
-                onPress={() => setAcceptedDisclaimer((v) => !v)}
-              />
-              <PrimaryButton label={busy ? 'Working…' : 'Register'} onPress={onRegister} disabled={busy || !acceptedDisclaimer} />
-              <Pressable onPress={() => setScreen('login')} accessibilityRole="link" accessibilityLabel="Go to sign in">
-                <Text style={styles.link}>Already have an account? Sign in</Text>
-              </Pressable>
-            </View>
-          ) : null}
-
-          {screen === 'login' ? (
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>Sign in</Text>
-              <Text style={styles.muted}>Continue with email, Google, or Telegram.</Text>
-              <Field label="Email" value={email} onChange={setEmail} keyboardType="email-address" />
-              <Field label="Password" value={password} onChange={setPassword} secure />
-              <PrimaryButton label={busy ? 'Working…' : 'Sign in'} onPress={onLogin} disabled={busy} />
-              <View style={styles.divider} />
-              <Text style={styles.dividerLabel}>or</Text>
-              <SecondaryButton
-                label="Continue with Google"
-                onPress={onGoogleSignIn}
-                disabled={busy || !acceptedDisclaimer}
-              />
-              <SecondaryButton
-                label="Continue with Telegram"
-                onPress={onTelegramSignIn}
-                disabled={busy || !acceptedDisclaimer}
-              />
-              <CheckRow
-                checked={acceptedDisclaimer}
-                label="Accept disclaimer (needed for Google / Telegram)"
-                onPress={() => setAcceptedDisclaimer((v) => !v)}
-              />
-              <Pressable onPress={() => setScreen('register')}>
-                <Text style={styles.link}>New here? Create an account</Text>
-              </Pressable>
-            </View>
-          ) : null}
-
-          {screen === 'verify' ? (
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>Verify email</Text>
-              <Text style={styles.muted}>
-                Enter the 6-digit code for {email || 'your account'}.
-              </Text>
-              {devCode ? <Text style={styles.dev}>Dev code: {devCode}</Text> : null}
-              <Field label="Code" value={code} onChange={setCode} keyboardType="number-pad" />
-              <PrimaryButton label={busy ? 'Working…' : 'Verify and continue'} onPress={onVerify} disabled={busy} />
-              <Pressable onPress={() => setScreen('login')}>
-                <Text style={styles.link}>Back to sign in</Text>
-              </Pressable>
-            </View>
-          ) : null}
         </ScrollView>
         )}
         {showNav ? (
@@ -1727,10 +1663,15 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
             active={tabFromScreen(screen)}
             unread={unreadCount}
             onChange={goTab}
-            onCreate={() => {
-              setLoanFriendId(friends[0]?.peer.id ?? '');
-              setScreen('new-loan');
-            }}
+            onCreate={
+              screen === 'loans'
+                ? () => {
+                    setLoanFriendId(friends[0]?.peer.id ?? '');
+                    setCurrency(user?.default_currency_code ?? '');
+                    setScreen('new-loan');
+                  }
+                : undefined
+            }
           />
         ) : null}
       </KeyboardAvoidingView>

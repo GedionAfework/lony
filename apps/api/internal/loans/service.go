@@ -238,9 +238,9 @@ func (s *Service) List(ctx context.Context, actor uuid.UUID, q ListQuery) ([]Loa
 			"role": "must be borrower or lender",
 		})
 	}
-	if q.Currency != "" && q.Currency != "ETB" && q.Currency != "USD" {
+	if q.Currency != "" && !isCurrencyCode(q.Currency) {
 		return nil, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
-			"currency": "must be ETB or USD",
+			"currency": "must be a 3-letter currency code",
 		})
 	}
 	if q.Filter != "" && !validListFilter(q.Filter) {
@@ -322,8 +322,8 @@ func (s *Service) parseTerms(in TermsInput) (Terms, error) {
 		fields["interest_rate_percent"] = "must be between 0 and 100"
 	}
 	currency := strings.ToUpper(strings.TrimSpace(in.CurrencyCode))
-	if currency != "ETB" && currency != "USD" {
-		fields["currency_code"] = "must be ETB or USD"
+	if !isCurrencyCode(currency) {
+		fields["currency_code"] = "must be a 3-letter currency code"
 	}
 	if in.DueAt.IsZero() || !in.DueAt.After(s.now()) {
 		fields["due_at"] = "must be in the future"
@@ -562,6 +562,18 @@ func termsSnapshot(rec Record) map[string]any {
 }
 
 const refAlphabet = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+
+func isCurrencyCode(code string) bool {
+	if len(code) != 3 {
+		return false
+	}
+	for _, c := range code {
+		if c < 'A' || c > 'Z' {
+			return false
+		}
+	}
+	return true
+}
 
 func randomRef() string {
 	b := make([]byte, 6)

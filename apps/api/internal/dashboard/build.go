@@ -12,8 +12,6 @@ import (
 
 const DueSoonWindow = loans.DueSoonWindow
 
-var currencies = []string{"ETB", "USD"}
-
 type Summary struct {
 	PendingRequests      int             `json:"pending_requests"`
 	PendingConfirmations int             `json:"pending_confirmations"`
@@ -55,11 +53,7 @@ type friendAcc struct {
 func Build(actor uuid.UUID, now time.Time, rows []loans.Record, parties map[uuid.UUID]loans.Party) Summary {
 	now = now.UTC()
 	by := map[string]*bucket{}
-	for _, c := range currencies {
-		by[c] = newBucket()
-	}
 	pendingAll := 0
-
 	pendingConfirm := 0
 
 	for _, row := range rows {
@@ -107,12 +101,20 @@ func Build(actor uuid.UUID, now time.Time, rows []loans.Record, parties map[uuid
 		}
 	}
 
+	codes := make([]string, 0, len(by))
+	for code, b := range by {
+		if b.open > 0 || b.pending > 0 {
+			codes = append(codes, code)
+		}
+	}
+	sort.Strings(codes)
+
 	out := Summary{
 		PendingRequests:      pendingAll,
 		PendingConfirmations: pendingConfirm,
-		ByCurrency:           make([]CurrencySlice, 0, len(currencies)),
+		ByCurrency:           make([]CurrencySlice, 0, len(codes)),
 	}
-	for _, code := range currencies {
+	for _, code := range codes {
 		b := by[code]
 		slice := CurrencySlice{
 			CurrencyCode:    code,

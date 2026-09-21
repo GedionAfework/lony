@@ -40,12 +40,6 @@
       "expo-font",
       "expo-audio",
       [
-        "expo-notifications",
-        {
-          "color": "#0D9488"
-        }
-      ],
-      [
         "expo-image-picker",
         {
           "photosPermission": "Allow Lony to access photos for your profile picture and repayment proofs."

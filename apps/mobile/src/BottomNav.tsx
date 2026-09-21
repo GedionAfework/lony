@@ -1,27 +1,23 @@
 import { Pressable, Text, View } from 'react-native';
 import { fonts, radii, useTheme } from './theme';
 
-export type TabId = 'dashboard' | 'loans' | 'chats' | 'banks' | 'activity';
+export type TabId = 'home' | 'loans' | 'chats';
 
 type Props = {
   active: TabId;
   unread?: number;
   onChange: (tab: TabId) => void;
-  onCreate: () => void;
+  onCreate?: () => void;
 };
 
-const TABS: { id: TabId; label: string }[] = [
-  { id: 'dashboard', label: 'Home' },
-  { id: 'loans', label: 'Loans' },
-  { id: 'chats', label: 'Chats' },
-  { id: 'banks', label: 'Banks' },
-  { id: 'activity', label: 'Inbox' },
+const TABS: { id: TabId; icon: string; label: string }[] = [
+  { id: 'home', icon: '⌂', label: 'Home' },
+  { id: 'loans', icon: '⇄', label: 'Loans' },
+  { id: 'chats', icon: '💬', label: 'Chat' },
 ];
 
 export function BottomNav({ active, unread = 0, onChange, onCreate }: Props) {
   const { colors } = useTheme();
-  const left = TABS.slice(0, 2);
-  const right = TABS.slice(2);
 
   return (
     <View
@@ -33,49 +29,35 @@ export function BottomNav({ active, unread = 0, onChange, onCreate }: Props) {
         paddingTop: 8,
       }}
     >
-      <View style={{ flexDirection: 'row', alignItems: 'flex-end', paddingHorizontal: 4 }}>
-        {left.map((tab) => (
-          <TabButton key={tab.id} tab={tab} active={active === tab.id} onPress={() => onChange(tab.id)} colors={colors} />
+      <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 8 }}>
+        {TABS.map((tab) => (
+          <TabButton
+            key={tab.id}
+            tab={tab}
+            active={active === tab.id}
+            badge={tab.id === 'chats' && unread > 0 ? unread : undefined}
+            onPress={() => onChange(tab.id)}
+            colors={colors}
+          />
         ))}
-        <View style={{ width: 70, alignItems: 'center', marginTop: -20 }}>
+        {onCreate ? (
           <Pressable
             style={{
-              width: 54,
-              height: 54,
+              width: 48,
+              height: 48,
               borderRadius: radii.full,
               backgroundColor: colors.primary,
               alignItems: 'center',
               justifyContent: 'center',
-              borderWidth: 4,
-              borderColor: colors.fabBorder,
+              marginHorizontal: 6,
             }}
             onPress={onCreate}
             accessibilityRole="button"
             accessibilityLabel="New loan"
           >
-            <Text style={{ color: colors.onPrimary, fontSize: 26, fontFamily: fonts.uiBold, marginTop: -2 }}>+</Text>
+            <Text style={{ color: colors.onPrimary, fontSize: 24, fontFamily: fonts.uiBold, marginTop: -2 }}>+</Text>
           </Pressable>
-          <Text
-            style={{
-              color: colors.muted,
-              fontFamily: fonts.uiMedium,
-              fontSize: 10,
-              marginTop: 2,
-            }}
-          >
-            New
-          </Text>
-        </View>
-        {right.map((tab) => (
-          <TabButton
-            key={tab.id}
-            tab={tab}
-            active={active === tab.id}
-            badge={tab.id === 'activity' && unread > 0 ? unread : undefined}
-            onPress={() => onChange(tab.id)}
-            colors={colors}
-          />
-        ))}
+        ) : null}
       </View>
     </View>
   );
@@ -88,7 +70,7 @@ function TabButton({
   onPress,
   colors,
 }: {
-  tab: { id: TabId; label: string };
+  tab: { id: TabId; icon: string; label: string };
   active: boolean;
   badge?: number;
   onPress: () => void;
@@ -96,35 +78,19 @@ function TabButton({
 }) {
   return (
     <Pressable
-      style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 4, minHeight: 48, position: 'relative' }}
+      style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: 2, minHeight: 48, position: 'relative' }}
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={tab.label}
       accessibilityState={{ selected: active }}
     >
-      <View
-        style={{
-          width: 28,
-          height: 3,
-          borderRadius: 2,
-          backgroundColor: active ? colors.primary : 'transparent',
-        }}
-      />
-      <Text
-        style={{
-          color: active ? colors.primary : colors.muted,
-          fontFamily: active ? fonts.uiSemi : fonts.uiMedium,
-          fontSize: 12,
-        }}
-      >
-        {tab.label}
-      </Text>
+      <Text style={{ fontSize: 22, opacity: active ? 1 : 0.55 }}>{tab.icon}</Text>
       {badge ? (
         <View
           style={{
             position: 'absolute',
             top: 2,
-            right: '18%',
+            right: '22%',
             backgroundColor: colors.secondary,
             borderRadius: radii.full,
             minWidth: 16,

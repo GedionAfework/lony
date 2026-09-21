@@ -192,6 +192,11 @@ export const api = {
     return request<{ loans: Loan[] }>(`/loans${suffix}`, { method: 'GET' }, token);
   },
   dashboard: (token: string) => request<{ dashboard: Dashboard }>(`/dashboard`, { method: 'GET' }, token),
+  fxRates: (base: string) =>
+    request<{ base: string; as_of: string; rates: Record<string, string> }>(
+      `/fx/rates?base=${encodeURIComponent(base)}`,
+      { method: 'GET' },
+    ),
   getLoan: (token: string, id: string) => request<{ loan: Loan }>(`/loans/${id}`, { method: 'GET' }, token),
   createLoan: (token: string, body: CreateLoanBody) =>
     request<{ loan: Loan }>('/loans', {
