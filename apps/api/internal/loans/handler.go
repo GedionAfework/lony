@@ -20,21 +20,34 @@ func NewHandler(svc *Service) *Handler {
 }
 
 type createBody struct {
-	CounterpartyID      uuid.UUID  `json:"counterparty_id"`
-	Role                string     `json:"role"`
-	Principal           *string    `json:"principal"`
-	CurrencyCode        *string    `json:"currency_code"`
-	InterestRatePercent *string    `json:"interest_rate_percent"`
-	DueAt               *time.Time `json:"due_at"`
-	Note                *string    `json:"note"`
+	CounterpartyID       uuid.UUID   `json:"counterparty_id"`
+	CoLenderIDs          []uuid.UUID `json:"co_lender_ids"`
+	Role                 string      `json:"role"`
+	Principal            *string     `json:"principal"`
+	CurrencyCode         *string     `json:"currency_code"`
+	InterestRatePercent  *string     `json:"interest_rate_percent"`
+	DueAt                *time.Time  `json:"due_at"`
+	Note                 *string     `json:"note"`
+	LoanKind             *string     `json:"loan_kind"`
+	InterestPeriodMonths *int32      `json:"interest_period_months"`
+	InstallmentCount     *int32      `json:"installment_count"`
+	InstitutionLabel     *string     `json:"institution_label"`
+	InstitutionType      *string     `json:"institution_type"`
+	PartyMode            *string     `json:"party_mode"`
+	StartAt              *time.Time  `json:"start_at"`
 }
 
 type termsBody struct {
-	Principal           string    `json:"principal"`
-	CurrencyCode        string    `json:"currency_code"`
-	InterestRatePercent string    `json:"interest_rate_percent"`
-	DueAt               time.Time `json:"due_at"`
-	Note                *string   `json:"note"`
+	Principal            string     `json:"principal"`
+	CurrencyCode         string     `json:"currency_code"`
+	InterestRatePercent  string     `json:"interest_rate_percent"`
+	DueAt                time.Time  `json:"due_at"`
+	Note                 *string    `json:"note"`
+	LoanKind             string     `json:"loan_kind"`
+	InterestPeriodMonths *int32     `json:"interest_period_months"`
+	InstallmentCount     *int32     `json:"installment_count"`
+	InstitutionLabel     *string    `json:"institution_label"`
+	StartAt              *time.Time `json:"start_at"`
 }
 
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
@@ -44,13 +57,21 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := h.svc.Create(r.Context(), auth.UserIDFrom(r.Context()), CreateInput{
-		CounterpartyID:      body.CounterpartyID,
-		Role:                body.Role,
-		Principal:           body.Principal,
-		CurrencyCode:        body.CurrencyCode,
-		InterestRatePercent: body.InterestRatePercent,
-		DueAt:               body.DueAt,
-		Note:                body.Note,
+		CounterpartyID:       body.CounterpartyID,
+		CoLenderIDs:          body.CoLenderIDs,
+		Role:                 body.Role,
+		Principal:            body.Principal,
+		CurrencyCode:         body.CurrencyCode,
+		InterestRatePercent:  body.InterestRatePercent,
+		DueAt:                body.DueAt,
+		Note:                 body.Note,
+		LoanKind:             body.LoanKind,
+		InterestPeriodMonths: body.InterestPeriodMonths,
+		InstallmentCount:     body.InstallmentCount,
+		InstitutionLabel:     body.InstitutionLabel,
+		InstitutionType:      body.InstitutionType,
+		PartyMode:            body.PartyMode,
+		StartAt:              body.StartAt,
 	})
 	if err != nil {
 		httpx.Error(w, err)

@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useMemo, useRef, useState } from 'react';
+import { FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { fonts, radii, space, useTheme } from './theme';
 
 const MONTHS = [
@@ -16,6 +16,8 @@ const MONTHS = [
   'November',
   'December',
 ];
+
+const CHIP_W = 56;
 
 type Props = {
   label: string;
@@ -49,22 +51,33 @@ export function DateField({ label, value, onChange, placeholder = 'Select date' 
   const [year, setYear] = useState(parsed?.y ?? now.getFullYear());
   const [month, setMonth] = useState(parsed?.m ?? now.getMonth() + 1);
   const [day, setDay] = useState(parsed?.d ?? now.getDate());
+  const yearListRef = useRef<FlatList<number>>(null);
+  const monthListRef = useRef<FlatList<number>>(null);
 
   const years = useMemo(() => {
     const start = now.getFullYear() - 1;
     return Array.from({ length: 12 }, (_, i) => start + i);
-  }, [now]);
+  }, []);
 
+  const monthIndexes = useMemo(() => Array.from({ length: 12 }, (_, i) => i + 1), []);
   const maxDay = daysInMonth(year, month);
   const days = useMemo(() => Array.from({ length: maxDay }, (_, i) => i + 1), [maxDay]);
 
   function openPicker() {
     const p = parseIso(value);
-    setYear(p?.y ?? now.getFullYear());
-    setMonth(p?.m ?? now.getMonth() + 1);
-    setDay(Math.min(p?.d ?? now.getDate(), daysInMonth(p?.y ?? now.getFullYear(), p?.m ?? now.getMonth() + 1)));
+    const y = p?.y ?? now.getFullYear();
+    const m = p?.m ?? now.getMonth() + 1;
+    const d = Math.min(p?.d ?? now.getDate(), daysInMonth(y, m));
+    setYear(y);
+    setMonth(m);
+    setDay(d);
     setManual(false);
     setOpen(true);
+    requestAnimationFrame(() => {
+      const yi = Math.max(0, years.indexOf(y));
+      yearListRef.current?.scrollToIndex({ index: yi, animated: false, viewPosition: 0.5 });
+      monthListRef.current?.scrollToIndex({ index: m - 1, animated: false, viewPosition: 0.5 });
+    });
   }
 
   function apply() {
@@ -126,29 +139,54 @@ export function DateField({ label, value, onChange, placeholder = 'Select date' 
             {!manual ? (
               <>
                 <Text style={{ color: colors.muted, fontFamily: fonts.uiSemi, fontSize: 12 }}>Year</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ maxHeight: 48 }}>
-                  <View style={{ flexDirection: 'row', gap: 8 }}>
-                    {years.map((y) => (
-                      <Chip key={y} label={String(y)} active={y === year} onPress={() => setYear(y)} />
-                    ))}
-                  </View>
-                </ScrollView>
+                <FlatList
+                  ref={yearListRef}
+                  horizontal
+                  data={years}
+                  keyExtractor={(y) => String(y)}
+                  showsHorizontalScrollIndicator={false}
+                  style={{ maxHeight: 48 }}
+                  getItemLayout={(_, index) => ({ length: CHIP_W + 8, offset: (CHIP_W + 8) * index, index })}
+                  onScrollToIndexFailed={(info) => {
+                    yearListRef.current?.scrollToOffset({
+                      offset: info.averageItemLength * info.index,
+                      animated: false,
+                    });
+                  }}
+                  renderItem={({ item: y }) => (
+                    <View style={{ marginRight: 8 }}>
+                      <Chip label={String(y)} active={y === year} onPress={() => setYear(y)} />
+                    </View>
+                  )}
+                />
                 <Text style={{ color: colors.muted, fontFamily: fonts.uiSemi, fontSize: 12 }}>Month</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ maxHeight: 48 }}>
-                  <View style={{ flexDirection: 'row', gap: 8 }}>
-                    {MONTHS.map((name, i) => (
+                <FlatList
+                  ref={monthListRef}
+                  horizontal
+                  data={monthIndexes}
+                  keyExtractor={(m) => String(m)}
+                  showsHorizontalScrollIndicator={false}
+                  style={{ maxHeight: 48 }}
+                  getItemLayout={(_, index) => ({ length: CHIP_W + 8, offset: (CHIP_W + 8) * index, index })}
+                  onScrollToIndexFailed={(info) => {
+                    monthListRef.current?.scrollToOffset({
+                      offset: info.averageItemLength * info.index,
+                      animated: false,
+                    });
+                  }}
+                  renderItem={({ item: m }) => (
+                    <View style={{ marginRight: 8 }}>
                       <Chip
-                        key={name}
-                        label={name.slice(0, 3)}
-                        active={i + 1 === month}
+                        label={MONTHS[m - 1].slice(0, 3)}
+                        active={m === month}
                         onPress={() => {
-                          setMonth(i + 1);
-                          setDay((d) => Math.min(d, daysInMonth(year, i + 1)));
+                          setMonth(m);
+                          setDay((d) => Math.min(d, daysInMonth(year, m)));
                         }}
                       />
-                    ))}
-                  </View>
-                </ScrollView>
+                    </View>
+                  )}
+                />
                 <Text style={{ color: colors.muted, fontFamily: fonts.uiSemi, fontSize: 12 }}>Day</Text>
                 <ScrollView style={{ maxHeight: 160 }}>
                   <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
@@ -233,7 +271,7 @@ function Chip({ label, active, onPress }: { label: string; active: boolean; onPr
         backgroundColor: active ? colors.primary : colors.surfaceMuted,
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: active ? colors.primary : colors.border,
-        minWidth: 40,
+        minWidth: CHIP_W,
         alignItems: 'center',
       }}
     >

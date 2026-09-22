@@ -155,6 +155,43 @@ func (s *SQLStore) ListOutgoing(ctx context.Context, userID uuid.UUID) ([]friend
 	return mapFriendships(rows), nil
 }
 
+func (s *SQLStore) UpsertPhoneInvite(ctx context.Context, inviterID uuid.UUID, phoneE164 string) error {
+	_, err := s.pool.Exec(ctx, `
+INSERT INTO phone_invites (inviter_id, phone_e164)
+VALUES ($1, $2)
+ON CONFLICT (inviter_id, phone_e164) DO UPDATE
+SET resolved_at = NULL, resolved_user_id = NULL
+WHERE phone_invites.resolved_at IS NOT NULL`, inviterID, phoneE164)
+	return err
+}
+
+func (s *SQLStore) ListOpenInvitesByPhone(ctx context.Context, phoneE164 string) ([]friends.PhoneInvite, error) {
+	const q = `SELECT id, inviter_id, phone_e164 FROM phone_invites
+		WHERE phone_e164 = $1 AND resolved_at IS NULL`
+	rows, err := s.pool.Query(ctx, q, phoneE164)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []friends.PhoneInvite{}
+	for rows.Next() {
+		var inv friends.PhoneInvite
+		if err := rows.Scan(&inv.ID, &inv.InviterID, &inv.PhoneE164); err != nil {
+			return nil, err
+		}
+		out = append(out, inv)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLStore) MarkPhoneInviteResolved(ctx context.Context, id, resolvedUserID uuid.UUID) error {
+	_, err := s.pool.Exec(ctx, `
+UPDATE phone_invites
+SET resolved_at = now(), resolved_user_id = $2
+WHERE id = $1 AND resolved_at IS NULL`, id, resolvedUserID)
+	return err
+}
+
 func mapUserRef(row sqlc.User) friends.UserRef {
 	return friends.UserRef{
 		ID:          row.ID,

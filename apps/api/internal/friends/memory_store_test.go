@@ -173,3 +173,11 @@ func (m *memoryStore) list(userID uuid.UUID, status string, incoming bool) ([]Re
 	}
 	return out, nil
 }
+
+func (m *memoryStore) UpsertPhoneInvite(context.Context, uuid.UUID, string) error { return nil }
+func (m *memoryStore) ListOpenInvitesByPhone(context.Context, string) ([]PhoneInvite, error) {
+	return nil, nil
+}
+func (m *memoryStore) MarkPhoneInviteResolved(context.Context, uuid.UUID, uuid.UUID) error {
+	return nil
+}

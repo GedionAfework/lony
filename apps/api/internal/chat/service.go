@@ -40,7 +40,7 @@ type MoneyLink struct {
 type LoanParty interface {
 	LoanPeer(ctx context.Context, actor, loanID uuid.UUID) (peerID uuid.UUID, ref string, err error)
 	MoneyForLoan(ctx context.Context, actor, loanID uuid.UUID) (*MoneyLink, error)
-	ActiveMoneyBetween(ctx context.Context, actor, peerID uuid.UUID) (*MoneyLink, error)
+	ActiveMoneyBetween(ctx context.Context, actor, peerID uuid.UUID) ([]MoneyLink, error)
 }
 
 type Peer struct {
@@ -93,6 +93,8 @@ type Store interface {
 	GetConversationByPair(ctx context.Context, low, high uuid.UUID) (Conversation, error)
 	GetConversationByLoan(ctx context.Context, loanID uuid.UUID) (Conversation, error)
 	GetConversationByID(ctx context.Context, id uuid.UUID) (Conversation, error)
+	ListConversationsForPair(ctx context.Context, low, high uuid.UUID) ([]Conversation, error)
+	ListLoanScopedForUser(ctx context.Context, userID uuid.UUID) ([]Conversation, error)
 	InsertConversation(ctx context.Context, low, high uuid.UUID, loanID *uuid.UUID) (Conversation, error)
 	InsertMembers(ctx context.Context, conversationID, a, b uuid.UUID) error
 	IsMember(ctx context.Context, conversationID, userID uuid.UUID) (bool, error)
@@ -100,6 +102,10 @@ type Store interface {
 	TouchConversation(ctx context.Context, id uuid.UUID, at time.Time) error
 	MarkConversationRead(ctx context.Context, conversationID, userID uuid.UUID, at time.Time) error
 	GetMemberLastRead(ctx context.Context, conversationID, userID uuid.UUID) (*time.Time, error)
+	MoveMessages(ctx context.Context, fromID, toID uuid.UUID) error
+	MergeMemberReads(ctx context.Context, fromID, toID uuid.UUID) error
+	ClearConversationLoanID(ctx context.Context, id uuid.UUID) error
+	DeleteConversation(ctx context.Context, id uuid.UUID) error
 	InsertMessage(ctx context.Context, msg Message) (Message, error)
 	GetMessage(ctx context.Context, id uuid.UUID) (Message, error)
 	ListMessages(ctx context.Context, conversationID uuid.UUID, after *time.Time, limit int32) ([]Message, error)
@@ -133,21 +139,31 @@ func (s *Service) SetLoans(loans LoanParty) {
 }
 
 type ConversationDTO struct {
-	ID                 uuid.UUID  `json:"id"`
-	Peer               Peer       `json:"peer"`
-	LoanID             *uuid.UUID `json:"loan_id,omitempty"`
-	ActiveLoanID       *uuid.UUID `json:"active_loan_id,omitempty"`
-	MoneyRole          *string    `json:"money_role,omitempty"` // "lent" | "borrowed"
-	MoneyAmount        *string    `json:"money_amount,omitempty"`
-	MoneyCurrency      *string    `json:"money_currency,omitempty"`
-	MoneyDueAt         *time.Time `json:"money_due_at,omitempty"`
-	MoneyRef           *string    `json:"money_ref,omitempty"`
-	LastMessagePreview string     `json:"last_message_preview,omitempty"`
-	LastMessageAt      *time.Time `json:"last_message_at,omitempty"`
-	LastMessageMine    bool       `json:"last_message_mine"`
-	LastMessageRead    bool       `json:"last_message_read"`
-	UnreadCount        int        `json:"unread_count"`
-	CreatedAt          time.Time  `json:"created_at"`
+	ID                 uuid.UUID      `json:"id"`
+	Peer               Peer           `json:"peer"`
+	LoanID             *uuid.UUID     `json:"loan_id,omitempty"`
+	ActiveLoanID       *uuid.UUID     `json:"active_loan_id,omitempty"`
+	MoneyRole          *string        `json:"money_role,omitempty"` // "lent" | "borrowed" (first item; prefer money[])
+	MoneyAmount        *string        `json:"money_amount,omitempty"`
+	MoneyCurrency      *string        `json:"money_currency,omitempty"`
+	MoneyDueAt         *time.Time     `json:"money_due_at,omitempty"`
+	MoneyRef           *string        `json:"money_ref,omitempty"`
+	Money              []MoneyItemDTO `json:"money,omitempty"`
+	LastMessagePreview string         `json:"last_message_preview,omitempty"`
+	LastMessageAt      *time.Time     `json:"last_message_at,omitempty"`
+	LastMessageMine    bool           `json:"last_message_mine"`
+	LastMessageRead    bool           `json:"last_message_read"`
+	UnreadCount        int            `json:"unread_count"`
+	CreatedAt          time.Time      `json:"created_at"`
+}
+
+type MoneyItemDTO struct {
+	LoanID   uuid.UUID  `json:"loan_id"`
+	Role     string     `json:"role"` // "lent" | "borrowed"
+	Amount   *string    `json:"amount,omitempty"`
+	Currency *string    `json:"currency,omitempty"`
+	DueAt    *time.Time `json:"due_at,omitempty"`
+	Ref      string     `json:"ref,omitempty"`
 }
 
 type ReactionDTO struct {
@@ -200,16 +216,17 @@ func (s *Service) OpenOrCreate(ctx context.Context, actor, peerID uuid.UUID) (Co
 		return ConversationDTO{}, httpx.E(404, "NOT_FOUND", "user not found")
 	}
 	low, high := CanonicalPair(actor, peerID)
-	conv, err := s.store.GetConversationByPair(ctx, low, high)
-	if err == nil {
-		return s.toConversationDTO(ctx, actor, ConversationListRow{Conversation: conv})
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if merged, err := s.mergeConversationsForPair(ctx, low, high); err == nil {
+		return s.toConversationDTO(ctx, actor, ConversationListRow{Conversation: merged})
+	} else if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return ConversationDTO{}, err
 	}
-	conv, err = s.store.InsertConversation(ctx, low, high, nil)
+	conv, err := s.store.InsertConversation(ctx, low, high, nil)
 	if err != nil {
 		// Race or leftover DB check: if a thread already exists, open it.
+		if existing, gerr := s.mergeConversationsForPair(ctx, low, high); gerr == nil {
+			return s.toConversationDTO(ctx, actor, ConversationListRow{Conversation: existing})
+		}
 		if existing, gerr := s.store.GetConversationByPair(ctx, low, high); gerr == nil {
 			return s.toConversationDTO(ctx, actor, ConversationListRow{Conversation: existing})
 		}
@@ -221,46 +238,82 @@ func (s *Service) OpenOrCreate(ctx context.Context, actor, peerID uuid.UUID) (Co
 	return s.toConversationDTO(ctx, actor, ConversationListRow{Conversation: conv})
 }
 
-// OpenForLoan opens the existing friend DM when present; otherwise reuses a
-// legacy loan-scoped thread or creates a new pair DM (not a separate loan chat).
+// OpenForLoan opens the existing friend DM for the loan parties.
+// It never creates a loan-scoped thread and does not seed system messages.
 func (s *Service) OpenForLoan(ctx context.Context, actor, loanID uuid.UUID) (ConversationDTO, error) {
 	if s.loans == nil {
 		return ConversationDTO{}, httpx.E(500, "LOANS_UNAVAILABLE", "loan chat is not configured")
 	}
-	peerID, ref, err := s.loans.LoanPeer(ctx, actor, loanID)
+	peerID, _, err := s.loans.LoanPeer(ctx, actor, loanID)
 	if err != nil {
 		return ConversationDTO{}, err
 	}
 	low, high := CanonicalPair(actor, peerID)
-
-	// Prefer the working friend DM for this pair.
-	if conv, err := s.store.GetConversationByPair(ctx, low, high); err == nil {
-		return s.toConversationDTO(ctx, actor, ConversationListRow{Conversation: conv})
-	} else if !errors.Is(err, pgx.ErrNoRows) {
+	if _, err := s.mergeConversationsForPair(ctx, low, high); err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return ConversationDTO{}, err
 	}
+	return s.OpenOrCreate(ctx, actor, peerID)
+}
 
-	// Legacy: reuse an existing loan-scoped thread if one already exists.
-	if conv, err := s.store.GetConversationByLoan(ctx, loanID); err == nil {
-		return s.toConversationDTO(ctx, actor, ConversationListRow{Conversation: conv})
-	} else if !errors.Is(err, pgx.ErrNoRows) {
-		return ConversationDTO{}, err
-	}
-
-	// No chat yet — create a normal pair DM and seed a loan notice.
-	conv, err := s.store.InsertConversation(ctx, low, high, nil)
+// consolidateUserChats merges any loan-scoped duplicates into one DM per pair.
+func (s *Service) consolidateUserChats(ctx context.Context, actor uuid.UUID) error {
+	loanScoped, err := s.store.ListLoanScopedForUser(ctx, actor)
 	if err != nil {
-		if existing, gerr := s.store.GetConversationByPair(ctx, low, high); gerr == nil {
-			return s.toConversationDTO(ctx, actor, ConversationListRow{Conversation: existing})
+		return err
+	}
+	seen := map[string]struct{}{}
+	for _, c := range loanScoped {
+		key := c.UserLowID.String() + "|" + c.UserHighID.String()
+		if _, ok := seen[key]; ok {
+			continue
 		}
-		return ConversationDTO{}, err
+		seen[key] = struct{}{}
+		if _, err := s.mergeConversationsForPair(ctx, c.UserLowID, c.UserHighID); err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
 	}
-	if err := s.store.InsertMembers(ctx, conv.ID, actor, peerID); err != nil {
-		return ConversationDTO{}, err
+	return nil
+}
+
+// mergeConversationsForPair folds every thread for a pair into one friend DM.
+func (s *Service) mergeConversationsForPair(ctx context.Context, low, high uuid.UUID) (Conversation, error) {
+	all, err := s.store.ListConversationsForPair(ctx, low, high)
+	if err != nil {
+		return Conversation{}, err
 	}
-	body := fmt.Sprintf("Loan %s is open. Money still moves outside Lony.", ref)
-	_, _ = s.Send(ctx, actor, conv.ID, SendInput{Body: &body})
-	return s.toConversationDTO(ctx, actor, ConversationListRow{Conversation: conv})
+	if len(all) == 0 {
+		return Conversation{}, pgx.ErrNoRows
+	}
+	primary := all[0]
+	for _, c := range all {
+		if c.LoanID == nil {
+			primary = c
+			break
+		}
+	}
+	for _, other := range all {
+		if other.ID == primary.ID {
+			continue
+		}
+		if err := s.store.MoveMessages(ctx, other.ID, primary.ID); err != nil {
+			return Conversation{}, err
+		}
+		_ = s.store.MergeMemberReads(ctx, other.ID, primary.ID)
+		if err := s.store.DeleteConversation(ctx, other.ID); err != nil {
+			return Conversation{}, err
+		}
+	}
+	if primary.LoanID != nil {
+		if err := s.store.ClearConversationLoanID(ctx, primary.ID); err != nil {
+			return Conversation{}, err
+		}
+		primary.LoanID = nil
+	}
+	// Refresh last_message_at from newest message if needed.
+	if refreshed, err := s.store.GetConversationByID(ctx, primary.ID); err == nil {
+		return refreshed, nil
+	}
+	return primary, nil
 }
 
 // NotifyBankSharedInChat opens the friend DM and posts a masked payment-profile note (never the full account).
@@ -288,12 +341,22 @@ func (s *Service) CanAccessMedia(ctx context.Context, actor uuid.UUID, objectKey
 }
 
 func (s *Service) List(ctx context.Context, actor uuid.UUID) ([]ConversationDTO, error) {
+	_ = s.consolidateUserChats(ctx, actor)
 	rows, err := s.store.ListConversations(ctx, actor)
 	if err != nil {
 		return nil, err
 	}
 	out := make([]ConversationDTO, 0, len(rows))
+	seenPeer := map[uuid.UUID]struct{}{}
 	for _, row := range rows {
+		peerID := row.UserHighID
+		if peerID == actor {
+			peerID = row.UserLowID
+		}
+		if _, ok := seenPeer[peerID]; ok {
+			continue
+		}
+		seenPeer[peerID] = struct{}{}
 		dto, err := s.toConversationDTO(ctx, actor, row)
 		if err != nil {
 			return nil, err
@@ -475,37 +538,63 @@ func (s *Service) toConversationDTO(ctx context.Context, actor uuid.UUID, row Co
 		UnreadCount:        int(row.UnreadCount),
 		CreatedAt:          row.CreatedAt,
 	}
-	if link := s.moneyForConversation(ctx, actor, peerID, row.LoanID); link != nil {
-		role := link.Role
+	links := s.moneyLinksForConversation(ctx, actor, peerID, row.LoanID)
+	if len(links) > 0 {
+		items := make([]MoneyItemDTO, 0, len(links))
+		for _, link := range links {
+			items = append(items, MoneyItemDTO{
+				LoanID:   link.LoanID,
+				Role:     link.Role,
+				Amount:   link.Amount,
+				Currency: link.CurrencyCode,
+				DueAt:    link.DueAt,
+				Ref:      link.ReferenceCode,
+			})
+		}
+		dto.Money = items
+		first := links[0]
+		role := first.Role
 		dto.MoneyRole = &role
-		lid := link.LoanID
+		lid := first.LoanID
 		dto.ActiveLoanID = &lid
-		dto.MoneyAmount = link.Amount
-		dto.MoneyCurrency = link.CurrencyCode
-		dto.MoneyDueAt = link.DueAt
-		ref := link.ReferenceCode
+		dto.MoneyAmount = first.Amount
+		dto.MoneyCurrency = first.CurrencyCode
+		dto.MoneyDueAt = first.DueAt
+		ref := first.ReferenceCode
 		dto.MoneyRef = &ref
 	}
 	return dto, nil
 }
 
-func (s *Service) moneyForConversation(ctx context.Context, actor, peerID uuid.UUID, loanID *uuid.UUID) *MoneyLink {
+func (s *Service) moneyLinksForConversation(ctx context.Context, actor, peerID uuid.UUID, loanID *uuid.UUID) []MoneyLink {
 	if s.loans == nil {
 		return nil
 	}
+	out := []MoneyLink{}
+	seen := map[uuid.UUID]struct{}{}
+	add := func(link *MoneyLink) {
+		if link == nil {
+			return
+		}
+		if _, ok := seen[link.LoanID]; ok {
+			return
+		}
+		seen[link.LoanID] = struct{}{}
+		out = append(out, *link)
+	}
 	if loanID != nil {
-		if link, err := s.loans.MoneyForLoan(ctx, actor, *loanID); err == nil && link != nil {
-			return link
+		if link, err := s.loans.MoneyForLoan(ctx, actor, *loanID); err == nil {
+			add(link)
 		}
 	}
-	if peerID == actor {
-		return nil
+	if peerID != actor {
+		if links, err := s.loans.ActiveMoneyBetween(ctx, actor, peerID); err == nil {
+			for i := range links {
+				add(&links[i])
+			}
+		}
 	}
-	link, err := s.loans.ActiveMoneyBetween(ctx, actor, peerID)
-	if err != nil {
-		return nil
-	}
-	return link
+	return out
 }
 
 func (s *Service) mapMessages(ctx context.Context, actor uuid.UUID, rows []Message) ([]MessageDTO, error) {

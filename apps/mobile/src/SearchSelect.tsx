@@ -18,14 +18,25 @@ type Props = {
   options: CatalogOption[];
   placeholder?: string;
   disabled?: boolean;
+  /** When false, show only the human label (default true keeps "USD · US Dollar"). */
+  showId?: boolean;
 };
 
-export function SearchSelect({ label, value, onChange, options, placeholder = 'Select…', disabled }: Props) {
+export function SearchSelect({
+  label,
+  value,
+  onChange,
+  options,
+  placeholder = 'Select…',
+  disabled,
+  showId = true,
+}: Props) {
   const { colors } = useTheme();
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const filtered = useMemo(() => filterCatalog(options, query), [options, query]);
   const selected = options.find((o) => o.id === value);
+  const display = selected ? (showId ? `${selected.id} · ${selected.label}` : selected.label) : placeholder;
 
   return (
     <View style={{ gap: 6 }}>
@@ -59,7 +70,7 @@ export function SearchSelect({ label, value, onChange, options, placeholder = 'S
         accessibilityLabel={label}
       >
         <Text style={{ color: selected ? colors.text : colors.muted, fontFamily: fonts.ui, fontSize: 16 }}>
-          {selected ? `${selected.id} · ${selected.label}` : placeholder}
+          {display}
         </Text>
       </Pressable>
 
@@ -129,10 +140,16 @@ export function SearchSelect({ label, value, onChange, options, placeholder = 'S
                       borderBottomColor: colors.border,
                     }}
                   >
-                    <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>
-                      {item.id}
-                    </Text>
-                    <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>{item.label}</Text>
+                    {showId ? (
+                      <>
+                        <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>
+                          {item.id}
+                        </Text>
+                        <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>{item.label}</Text>
+                      </>
+                    ) : (
+                      <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>{item.label}</Text>
+                    )}
                   </Pressable>
                 );
               }}

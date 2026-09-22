@@ -38,6 +38,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 	authH := auth.NewHandler(authSvc).WithMedia(mediaStore, sqlStore)
 	friendsSvc := friends.NewService(sqlStore)
 	friendsH := friends.NewHandler(friendsSvc)
+	authSvc.SetPhoneHook(friendsSvc.ResolvePhoneInvites)
 	loansSvc := loans.NewService(sqlStore, friendsSvc)
 	loansH := loans.NewHandler(loansSvc)
 	dashH := dashboard.NewHandler(dashboard.NewService(loansSvc))
@@ -117,6 +118,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 
 			r.Get("/users/search", friendsH.Search)
 			r.Get("/users/lookup-phone", friendsH.LookupPhone)
+			r.With(idem.Handler("friends.invite-phone")).Post("/users/invite-phone", friendsH.InvitePhone)
 			r.With(idem.Handler("friends.block")).Post("/users/{userID}/block", friendsH.Block)
 			r.Get("/friends", friendsH.ListFriends)
 			r.With(idem.Handler("friends.request")).Post("/friend-requests", friendsH.Request)

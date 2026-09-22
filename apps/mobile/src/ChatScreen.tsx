@@ -7,10 +7,13 @@ import {
   useAudioRecorderState,
 } from 'expo-audio';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
+import { EncodingType, readAsStringAsync } from 'expo-file-system/legacy';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   FlatList,
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
@@ -21,7 +24,9 @@ import {
   api,
   type ChatMessage,
   type Conversation,
+  type ConversationMoney,
 } from './api';
+import { formatMoney } from './amountFormat';
 import { apiBaseUrl, fonts, useTheme, type ThemeColors } from './theme';
 import { IconAttach, IconBack, IconEmoji, IconLoans, IconMic, IconSend } from './icons';
 
@@ -66,7 +71,7 @@ export function ChatScreen({
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
-  const recorderState = useAudioRecorderState(audioRecorder);
+  const recorderState = useAudioRecorderState(audioRecorder, 200);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [active, setActive] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -78,6 +83,13 @@ export function ChatScreen({
   const listRef = useRef<FlatList<ChatMessage>>(null);
   const lastCreated = useRef<string | undefined>(undefined);
   const recordStartedAt = useRef<number>(0);
+
+  useEffect(() => {
+    const sub = Keyboard.addListener('keyboardDidShow', () => {
+      requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
+    });
+    return () => sub.remove();
+  }, []);
 
   async function loadConversations() {
     const res = await api.listConversations(token);
@@ -239,9 +251,7 @@ export function ChatScreen({
     const asset = picked.assets[0];
     setBusy(true);
     try {
-      const b64 = await FileSystem.readAsStringAsync(asset.uri, {
-        encoding: 'base64',
-      });
+      const b64 = await readAsStringAsync(asset.uri, { encoding: EncodingType.Base64 });
       const kind = (asset.mimeType ?? '').startsWith('image/') ? 'image' : 'file';
       const res = await api.sendMessage(token, active.id, {
         reply_to_message_id: replyTo?.id,
@@ -266,24 +276,39 @@ export function ChatScreen({
       return;
     }
     try {
-      if (recorderState.isRecording) {
+      if (recorderState.isRecording || audioRecorder.isRecording) {
         await audioRecorder.stop();
-        const uri = audioRecorder.uri;
+        // URI is set after stop resolves; poll briefly if needed.
+        let uri = audioRecorder.uri;
+        for (let i = 0; !uri && i < 8; i++) {
+          await new Promise((r) => setTimeout(r, 40));
+          uri = audioRecorder.uri;
+        }
         if (!uri) {
+          onError('Recording produced no audio file');
           return;
         }
         setBusy(true);
-        const b64 = await FileSystem.readAsStringAsync(uri, {
-          encoding: 'base64',
-        });
-        const duration = Math.max(500, Date.now() - (recordStartedAt.current || Date.now()));
+        const b64 = await readAsStringAsync(uri, { encoding: EncodingType.Base64 });
+        if (!b64) {
+          setBusy(false);
+          onError('Could not read voice recording');
+          return;
+        }
+        const status = audioRecorder.getStatus();
+        const fromRecorderMs = Math.max(0, Math.round(status.durationMillis || 0));
+        const duration = Math.max(
+          500,
+          fromRecorderMs || Date.now() - (recordStartedAt.current || Date.now()),
+        );
+        const durationMs = Math.min(duration, 2_147_483_647);
         const res = await api.sendMessage(token, active.id, {
           reply_to_message_id: replyTo?.id,
           attachment_kind: 'voice',
           attachment_name: 'voice.m4a',
-          attachment_mime: 'audio/m4a',
+          attachment_mime: 'audio/mp4',
           attachment_base64: b64,
-          voice_duration_ms: duration,
+          voice_duration_ms: durationMs,
         });
         setReplyTo(null);
         setMessages((prev) => [...prev, res.message]);
@@ -300,8 +325,9 @@ export function ChatScreen({
       await setAudioModeAsync({
         allowsRecording: true,
         playsInSilentMode: true,
+        shouldPlayInBackground: false,
       });
-      await audioRecorder.prepareToRecordAsync();
+      await audioRecorder.prepareToRecordAsync(RecordingPresets.HIGH_QUALITY);
       audioRecorder.record();
       recordStartedAt.current = Date.now();
     } catch (e) {
@@ -349,7 +375,17 @@ export function ChatScreen({
   if (!active) {
     const peerIds = new Set(conversations.map((c) => c.peer.id));
     const startRows = friends.filter((f) => !peerIds.has(f.peer.id));
-    const threadRows = conversations.filter((c) => c.peer.id !== userId);
+    const threadRows = (() => {
+      const rows = conversations.filter((c) => c.peer.id !== userId);
+      const byPeer = new Map<string, Conversation>();
+      for (const c of rows) {
+        const existing = byPeer.get(c.peer.id);
+        if (!existing || (!c.loan_id && existing.loan_id)) {
+          byPeer.set(c.peer.id, c);
+        }
+      }
+      return Array.from(byPeer.values());
+    })();
 
     return (
       <View style={styles.shell}>
@@ -403,8 +439,7 @@ export function ChatScreen({
             c.peer.id === userId || c.peer.display_name === 'Self' || c.peer.display_name === 'Saved Messages'
               ? 'Self'
               : c.peer.display_name;
-          const moneyLabel = formatMoneyLabel(c.money_amount, c.money_currency);
-          const lent = c.money_role === 'lent';
+          const moneyItems = conversationMoneyItems(c);
           return (
             <Pressable
               key={c.id}
@@ -430,27 +465,35 @@ export function ChatScreen({
                     <Text style={styles.rowTitle} numberOfLines={1}>
                       {name}
                     </Text>
-                    {moneyLabel && c.money_role ? (
-                      <View
-                        style={[
-                          styles.moneyChip,
-                          {
-                            backgroundColor: lent ? colors.successSoft : colors.warningSoft,
-                            borderColor: lent ? colors.success : colors.warning,
-                          },
-                        ]}
-                      >
-                        <Text style={[styles.moneyChipText, { color: lent ? colors.success : colors.warning }]}>
-                          {moneyLabel}
-                        </Text>
-                      </View>
-                    ) : null}
+                    {moneyItems.map((m) => {
+                      const lent = m.role === 'lent';
+                      const label = formatMoneyLabel(m.amount, m.currency);
+                      if (!label) {
+                        return null;
+                      }
+                      return (
+                        <View
+                          key={m.loan_id}
+                          style={[
+                            styles.moneyChip,
+                            {
+                              backgroundColor: lent ? colors.successSoft : colors.warningSoft,
+                              borderColor: lent ? colors.success : colors.warning,
+                            },
+                          ]}
+                        >
+                          <Text style={[styles.moneyChipText, { color: lent ? colors.success : colors.warning }]}>
+                            {label}
+                          </Text>
+                        </View>
+                      );
+                    })}
                   </View>
                   <View style={styles.metaCol}>
                     <Text style={styles.rowTime}>{formatChatListTime(c.last_message_at)}</Text>
                     {c.last_message_mine ? (
-                      <Text style={[styles.ticks, c.last_message_read && { color: colors.tertiary }]}>
-                        {c.last_message_read ? '✓✓' : '✓'}
+                      <Text style={[styles.ticks, { color: c.last_message_read ? '#34B7F1' : colors.muted }]}>
+                        ✓
                       </Text>
                     ) : c.unread_count > 0 ? (
                       <View style={styles.unreadBadge}>
@@ -475,7 +518,11 @@ export function ChatScreen({
   const peerInitial = isSelfChat ? selfInitial : active.peer.display_name.slice(0, 1).toUpperCase();
 
   return (
-    <View style={[styles.shell, styles.threadShell]}>
+    <KeyboardAvoidingView
+      style={[styles.shell, styles.threadShell]}
+      behavior="padding"
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
+    >
       <View style={styles.threadHeader}>
         <Pressable
           onPress={() => {
@@ -519,50 +566,43 @@ export function ChatScreen({
         )}
       </View>
 
-      {active.money_role ? (
-        <Pressable
-          style={[
-            styles.moneyBlock,
-            {
-              backgroundColor: active.money_role === 'lent' ? colors.successSoft : colors.warningSoft,
-              borderColor: active.money_role === 'lent' ? colors.success : colors.warning,
-            },
-          ]}
-          onPress={() => {
-            const loanId = active.active_loan_id || active.loan_id;
-            if (loanId && onOpenLoan) {
-              onOpenLoan(loanId);
-            }
-          }}
-          accessibilityRole="button"
-          accessibilityLabel={active.money_role === 'lent' ? 'Money you lent' : 'Money you borrowed'}
-        >
-          <Text
-            style={[
-              styles.moneyBlockAmount,
-              { color: active.money_role === 'lent' ? colors.success : colors.warning },
-            ]}
-            numberOfLines={1}
-          >
-            {formatMoneyLabel(active.money_amount, active.money_currency) || 'Loan'}
-          </Text>
-          <Text
-            style={[
-              styles.moneyBlockDays,
-              { color: active.money_role === 'lent' ? colors.success : colors.warning },
-            ]}
-            numberOfLines={1}
-          >
-            {formatDaysLeft(active.money_due_at)}
-          </Text>
-        </Pressable>
+      {conversationMoneyItems(active).length ? (
+        <View style={styles.moneyPinRow}>
+          {conversationMoneyItems(active).map((m) => {
+            const lent = m.role === 'lent';
+            const tone = lent ? colors.success : colors.warning;
+            return (
+              <Pressable
+                key={m.loan_id}
+                style={[styles.moneyOutlineBubble, { borderColor: tone }]}
+                onPress={() => {
+                  if (onOpenLoan) {
+                    onOpenLoan(m.loan_id);
+                  }
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={lent ? 'Money you lent' : 'Money you borrowed'}
+              >
+                <Text style={[styles.moneyBlockAmount, { color: tone }]} numberOfLines={1}>
+                  {formatMoneyLabel(m.amount, m.currency) || 'Loan'}
+                </Text>
+                <Text style={[styles.moneyBlockDays, { color: tone }]} numberOfLines={1}>
+                  {formatDaysLeft(m.due_at)}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
       ) : null}
 
       <FlatList
         ref={listRef}
+        style={{ flex: 1 }}
         data={messages}
         keyExtractor={(m) => m.id}
         contentContainerStyle={styles.thread}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
         onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
         renderItem={({ item }) => (
           <Pressable
@@ -579,29 +619,39 @@ export function ChatScreen({
                 </Text>
               </View>
             ) : null}
-            {item.body ? <Text style={[styles.bubbleText, item.mine && styles.mineText]}>{item.body}</Text> : null}
-            {item.attachment_kind === 'voice' ? (
-              <Pressable onPress={() => playVoice(item)}>
-                <Text style={[styles.bubbleText, item.mine && styles.mineText]}>
-                  Voice · {Math.round((item.voice_duration_ms ?? 0) / 1000)}s · tap to play
+            <View style={styles.bubbleBody}>
+              <Text style={[styles.bubbleText, item.mine && styles.mineText]}>
+                {item.body
+                  ? item.body
+                  : item.attachment_kind === 'voice'
+                    ? `Voice · ${Math.round((item.voice_duration_ms ?? 0) / 1000)}s`
+                    : item.attachment_kind === 'image'
+                      ? `Image · ${item.attachment_name || 'Attachment'}`
+                      : item.attachment_kind === 'file'
+                        ? `File · ${item.attachment_name || 'Attachment'}`
+                        : ''}
+                <Text style={styles.timeGhost}>
+                  {'  '}
+                  {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  {item.mine ? ' ✓' : ''}
                 </Text>
+              </Text>
+              <View style={styles.timeCornerRow}>
+                <Text style={[styles.timeCorner, item.mine && styles.mineTime]}>
+                  {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </Text>
+                {item.mine ? (
+                  <Text style={[styles.tickMark, { color: item.read ? '#34B7F1' : item.mine ? 'rgba(255,255,255,0.55)' : colors.muted }]}>
+                    ✓
+                  </Text>
+                ) : null}
+              </View>
+            </View>
+            {item.attachment_kind === 'voice' ? (
+              <Pressable onPress={() => playVoice(item)} hitSlop={8}>
+                <Text style={[styles.playHint, item.mine && styles.mineTime]}>Tap to play</Text>
               </Pressable>
             ) : null}
-            {item.attachment_kind === 'image' || item.attachment_kind === 'file' ? (
-              <Text style={[styles.bubbleText, item.mine && styles.mineText]}>
-                {item.attachment_kind === 'image' ? 'Image' : 'File'} · {item.attachment_name || 'Attachment'}
-              </Text>
-            ) : null}
-            <View style={styles.metaColEnd}>
-              <Text style={[styles.time, item.mine && styles.mineTime]}>
-                {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              </Text>
-              {item.mine ? (
-                <Text style={[styles.ticksInline, item.mine && styles.mineTime, item.read && styles.ticksRead]}>
-                  {item.read ? '✓✓' : '✓'}
-                </Text>
-              ) : null}
-            </View>
             {item.reactions?.length ? (
               <View style={styles.reactionRow}>
                 {item.reactions.map((r) => (
@@ -662,6 +712,9 @@ export function ChatScreen({
             placeholder="Message"
             placeholderTextColor={colors.muted}
             multiline
+            onFocus={() => {
+              setTimeout(() => listRef.current?.scrollToEnd({ animated: true }), 120);
+            }}
           />
         </View>
         <Pressable onPress={sendFile} accessibilityLabel="Attach file" style={styles.sideIconBtn}>
@@ -681,7 +734,7 @@ export function ChatScreen({
           </Pressable>
         )}
       </View>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -698,22 +751,27 @@ function attachmentLabel(msg: ChatMessage): string {
   return 'Message';
 }
 
+function conversationMoneyItems(c: Conversation): ConversationMoney[] {
+  if (c.money?.length) {
+    return c.money;
+  }
+  if (c.money_role && (c.active_loan_id || c.loan_id)) {
+    return [
+      {
+        loan_id: c.active_loan_id || c.loan_id || '',
+        role: c.money_role,
+        amount: c.money_amount,
+        currency: c.money_currency,
+        due_at: c.money_due_at,
+        ref: c.money_ref || undefined,
+      },
+    ];
+  }
+  return [];
+}
+
 function formatMoneyLabel(amount?: string | null, currency?: string | null): string {
-  if (!amount) {
-    return '';
-  }
-  const trimmed = amount.replace(/\.00$/, '');
-  const code = (currency || '').toUpperCase();
-  if (code === 'USD' || code === '') {
-    return `$${trimmed}`;
-  }
-  if (code === 'EUR') {
-    return `€${trimmed}`;
-  }
-  if (code === 'GBP') {
-    return `£${trimmed}`;
-  }
-  return `${trimmed} ${code}`;
+  return formatMoney(amount, currency);
 }
 
 function formatDaysLeft(iso?: string | null): string {
@@ -878,20 +936,28 @@ function makeStyles(colors: ThemeColors) {
     },
     moneyChipText: { fontSize: 11, fontFamily: fonts.uiBold },
     muted: { color: colors.muted, fontSize: 13, fontFamily: fonts.ui },
-    moneyBlock: {
-      marginHorizontal: 12,
+    moneyPinRow: {
+      flexDirection: 'row',
+      flexWrap: 'wrap',
+      gap: 8,
+      paddingHorizontal: 12,
       marginBottom: 8,
+    },
+    moneyOutlineBubble: {
+      flexGrow: 1,
+      flexBasis: '46%',
       borderRadius: 12,
-      borderWidth: StyleSheet.hairlineWidth,
-      paddingHorizontal: 14,
-      paddingVertical: 12,
+      borderWidth: 1,
+      backgroundColor: 'transparent',
+      paddingHorizontal: 12,
+      paddingVertical: 10,
       flexDirection: 'row',
       alignItems: 'center',
       justifyContent: 'space-between',
-      gap: 12,
+      gap: 8,
     },
-    moneyBlockAmount: { fontSize: 15, fontFamily: fonts.uiBold, flexShrink: 1 },
-    moneyBlockDays: { fontSize: 13, fontFamily: fonts.uiSemi },
+    moneyBlockAmount: { fontSize: 14, fontFamily: fonts.uiBold, flexShrink: 1 },
+    moneyBlockDays: { fontSize: 12, fontFamily: fonts.uiSemi },
     thread: { paddingHorizontal: 12, paddingTop: 8, paddingBottom: 20, gap: 2 },
     bubbleWrap: {
       maxWidth: '78%',
@@ -920,7 +986,26 @@ function makeStyles(colors: ThemeColors) {
     },
     bubbleText: { color: colors.text, fontSize: 15, lineHeight: 21, fontFamily: fonts.ui },
     mineText: { color: colors.onPrimary },
-    time: { color: colors.muted, fontSize: 10, alignSelf: 'flex-end', fontFamily: fonts.ui },
+    bubbleBody: { position: 'relative' },
+    timeGhost: { fontSize: 9, lineHeight: 21, opacity: 0, fontFamily: fonts.ui },
+    timeCornerRow: {
+      position: 'absolute',
+      right: 0,
+      bottom: -2,
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 3,
+    },
+    timeCorner: {
+      color: colors.muted,
+      fontSize: 9,
+      lineHeight: 12,
+      fontFamily: fonts.ui,
+    },
+    tickMark: { fontSize: 11, lineHeight: 12, fontFamily: fonts.ui },
+    timeInline: { color: colors.muted, fontSize: 9, fontFamily: fonts.ui },
+    playHint: { color: colors.muted, fontSize: 11, fontFamily: fonts.ui, marginTop: 2 },
+    time: { color: colors.muted, fontSize: 9, alignSelf: 'flex-end', fontFamily: fonts.ui },
     mineTime: { color: colors.onPrimary, opacity: 0.72 },
     replyBox: {
       borderLeftWidth: 2,

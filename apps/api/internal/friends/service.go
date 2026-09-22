@@ -80,6 +80,47 @@ func (s *Service) LookupPhone(ctx context.Context, viewer uuid.UUID, phone strin
 	}, nil
 }
 
+// InvitePhone remembers a non-user phone so a friend request can sync when they join.
+func (s *Service) InvitePhone(ctx context.Context, actor uuid.UUID, phone string) error {
+	phone = normalizePhoneE164(phone)
+	if phone == "" {
+		return httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"phone": "must be an E.164 phone number",
+		})
+	}
+	if _, err := s.store.LookupByPhone(ctx, phone); err == nil {
+		return httpx.E(http.StatusConflict, "ALREADY_USER", "this phone already has an account")
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return err
+	}
+	return s.store.UpsertPhoneInvite(ctx, actor, phone)
+}
+
+// ResolvePhoneInvites turns open invites for this phone into pending friend requests.
+func (s *Service) ResolvePhoneInvites(ctx context.Context, userID uuid.UUID, phone string) error {
+	phone = normalizePhoneE164(phone)
+	if phone == "" {
+		return nil
+	}
+	invites, err := s.store.ListOpenInvitesByPhone(ctx, phone)
+	if err != nil {
+		return err
+	}
+	for _, inv := range invites {
+		if inv.InviterID == userID {
+			_ = s.store.MarkPhoneInviteResolved(ctx, inv.ID, userID)
+			continue
+		}
+		uid := userID
+		if _, err := s.Request(ctx, inv.InviterID, "", "", "", &uid); err != nil {
+			_ = s.store.MarkPhoneInviteResolved(ctx, inv.ID, userID)
+			continue
+		}
+		_ = s.store.MarkPhoneInviteResolved(ctx, inv.ID, userID)
+	}
+	return nil
+}
+
 func (s *Service) Request(ctx context.Context, actor uuid.UUID, email, username, phone string, userID *uuid.UUID) (FriendDTO, error) {
 	target, err := s.resolveTarget(ctx, actor, email, username, phone, userID)
 	if err != nil {

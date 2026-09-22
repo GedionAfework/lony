@@ -44,6 +44,21 @@ func (h *Handler) LookupPhone(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, out)
 }
 
+func (h *Handler) InvitePhone(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Phone string `json:"phone"`
+	}
+	if err := httpx.Decode(r, &body); err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	if err := h.svc.InvitePhone(r.Context(), auth.UserIDFrom(r.Context()), body.Phone); err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusCreated, map[string]any{"invited": true, "phone": body.Phone})
+}
+
 func (h *Handler) Request(w http.ResponseWriter, r *http.Request) {
 	var body requestBody
 	if err := httpx.Decode(r, &body); err != nil {

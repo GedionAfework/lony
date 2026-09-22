@@ -23,11 +23,13 @@ const (
 	TypeRepaymentConfirmed   = "repayment_confirmed"
 	TypeRepaymentRejected    = "repayment_rejected"
 
-	KindDueSoon7d = "due_soon_7d"
-	KindDueSoon3d = "due_soon_3d"
-	KindDueSoon1d = "due_soon_1d"
-	KindDueToday  = "due_today"
-	KindOverdue   = "overdue"
+	KindDueSoon7d     = "due_soon_7d"
+	KindDueSoon3d     = "due_soon_3d"
+	KindDueSoon1d     = "due_soon_1d"
+	KindDueToday      = "due_today"
+	KindOverdue       = "overdue"
+	KindInstallmentDue = "installment_due"
+	KindInstallmentOverdue = "installment_overdue"
 
 	PushPending = "pending"
 	PushSent    = "sent"

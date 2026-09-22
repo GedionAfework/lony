@@ -82,6 +82,31 @@ func (m *memoryStore) GetConversationByID(_ context.Context, id uuid.UUID) (Conv
 	}
 	return c, nil
 }
+func (m *memoryStore) ListConversationsForPair(_ context.Context, low, high uuid.UUID) ([]Conversation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []Conversation{}
+	for _, c := range m.conversations {
+		if c.UserLowID == low && c.UserHighID == high {
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
+func (m *memoryStore) ListLoanScopedForUser(_ context.Context, userID uuid.UUID) ([]Conversation, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []Conversation{}
+	for id, c := range m.conversations {
+		if c.LoanID == nil {
+			continue
+		}
+		if _, ok := m.members[id][userID]; ok {
+			out = append(out, c)
+		}
+	}
+	return out, nil
+}
 func (m *memoryStore) InsertConversation(_ context.Context, low, high uuid.UUID, loanID *uuid.UUID) (Conversation, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -134,6 +159,58 @@ func (m *memoryStore) GetMemberLastRead(_ context.Context, conversationID, userI
 	}
 	cp := at
 	return &cp, nil
+}
+func (m *memoryStore) MoveMessages(_ context.Context, fromID, toID uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, msg := range m.messages {
+		if msg.ConversationID == fromID {
+			msg.ConversationID = toID
+			m.messages[id] = msg
+		}
+	}
+	return nil
+}
+func (m *memoryStore) MergeMemberReads(_ context.Context, fromID, toID uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for key, at := range m.readAt {
+		prefix := fromID.String() + "|"
+		if len(key) > len(prefix) && key[:len(prefix)] == prefix {
+			userPart := key[len(prefix):]
+			dst := toID.String() + "|" + userPart
+			if existing, ok := m.readAt[dst]; !ok || at.After(existing) {
+				m.readAt[dst] = at
+			}
+		}
+	}
+	return nil
+}
+func (m *memoryStore) ClearConversationLoanID(_ context.Context, id uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c, ok := m.conversations[id]
+	if !ok {
+		return pgx.ErrNoRows
+	}
+	c.LoanID = nil
+	m.conversations[id] = c
+	m.byPair[pairKey(c.UserLowID, c.UserHighID)] = id
+	return nil
+}
+func (m *memoryStore) DeleteConversation(_ context.Context, id uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	c, ok := m.conversations[id]
+	if !ok {
+		return nil
+	}
+	delete(m.conversations, id)
+	delete(m.members, id)
+	if c.LoanID == nil {
+		delete(m.byPair, pairKey(c.UserLowID, c.UserHighID))
+	}
+	return nil
 }
 func (m *memoryStore) InsertMessage(_ context.Context, msg Message) (Message, error) {
 	m.mu.Lock()
@@ -314,7 +391,7 @@ func (m memLoans) LoanPeer(context.Context, uuid.UUID, uuid.UUID) (uuid.UUID, st
 func (m memLoans) MoneyForLoan(context.Context, uuid.UUID, uuid.UUID) (*MoneyLink, error) {
 	return nil, nil
 }
-func (m memLoans) ActiveMoneyBetween(context.Context, uuid.UUID, uuid.UUID) (*MoneyLink, error) {
+func (m memLoans) ActiveMoneyBetween(context.Context, uuid.UUID, uuid.UUID) ([]MoneyLink, error) {
 	return nil, nil
 }
 
@@ -339,20 +416,40 @@ func TestOpenForLoanReusesPairChat(t *testing.T) {
 	}
 }
 
-func TestOpenForLoanCreatesPairWhenMissing(t *testing.T) {
+func TestOpenForLoanMergesLoanScoped(t *testing.T) {
 	a, b := uuid.New(), uuid.New()
 	store := newMem(a, b)
 	svc := NewService(store, memMedia{}, memGate{ok: true})
-	svc.SetLoans(memLoans{peer: b, ref: "LN-2"})
+	svc.SetLoans(memLoans{peer: b, ref: "LN-3"})
 	ctx := context.Background()
 
-	opened, err := svc.OpenForLoan(ctx, a, uuid.New())
+	low, high := CanonicalPair(a, b)
+	lid := uuid.New()
+	loanConv, err := store.InsertConversation(ctx, low, high, &lid)
 	if err != nil {
 		t.Fatal(err)
 	}
-	again, err := svc.OpenOrCreate(ctx, a, b)
-	if err != nil || again.ID != opened.ID {
-		t.Fatalf("loan open should create reusable pair DM %+v %+v %v", opened, again, err)
+	_ = store.InsertMembers(ctx, loanConv.ID, a, b)
+	body := "loan thread"
+	_, err = svc.Send(ctx, a, loanConv.ID, SendInput{Body: &body})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dm, err := svc.OpenOrCreate(ctx, a, b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := svc.OpenForLoan(ctx, a, lid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opened.ID != dm.ID {
+		t.Fatalf("expected merged into DM %s got %s", dm.ID, opened.ID)
+	}
+	msgs, err := svc.ListMessages(ctx, a, dm.ID, nil, 50)
+	if err != nil || len(msgs) == 0 {
+		t.Fatalf("expected loan messages merged %+v %v", msgs, err)
 	}
 }
 

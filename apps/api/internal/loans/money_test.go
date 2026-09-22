@@ -2,6 +2,7 @@ package loans
 
 import (
 	"testing"
+	"time"
 
 	"github.com/shopspring/decimal"
 )
@@ -25,5 +26,24 @@ func TestComputeExpected(t *testing.T) {
 		if total.StringFixed(4) != tc.total {
 			t.Fatalf("principal=%s rate=%s total=%s want %s", tc.principal, tc.rate, total.StringFixed(4), tc.total)
 		}
+	}
+}
+
+func TestComputeEMI(t *testing.T) {
+	p, _ := decimal.NewFromString("100000")
+	r, _ := decimal.NewFromString("12")
+	emi := ComputeEMI(p, r, 12)
+	if emi.LessThanOrEqual(decimal.Zero) {
+		t.Fatalf("expected positive EMI, got %s", emi)
+	}
+	zeroRate := ComputeEMI(p, decimal.Zero, 10)
+	want, _ := decimal.NewFromString("10000.0000")
+	if !zeroRate.Equal(want) {
+		t.Fatalf("zero-rate EMI=%s want %s", zeroRate, want)
+	}
+	start, _ := time.Parse(time.RFC3339, "2026-01-15T00:00:00Z")
+	plan := BuildInstallmentSchedule(p, r, emi, 12, start)
+	if len(plan) != 12 {
+		t.Fatalf("want 12 installments, got %d", len(plan))
 	}
 }

@@ -23,10 +23,11 @@ import (
 )
 
 type Service struct {
-	store  Store
-	cfg    config.Config
-	mail   mailer.Sender
-	now    func() time.Time
+	store      Store
+	cfg        config.Config
+	mail       mailer.Sender
+	now        func() time.Time
+	onPhoneSet func(ctx context.Context, userID uuid.UUID, phoneE164 string) error
 }
 
 func NewService(store Store, cfg config.Config) *Service {
@@ -43,6 +44,11 @@ func NewService(store Store, cfg config.Config) *Service {
 		),
 		now: time.Now,
 	}
+}
+
+// SetPhoneHook runs after a user sets/updates their phone (e.g. resolve invites).
+func (s *Service) SetPhoneHook(fn func(ctx context.Context, userID uuid.UUID, phoneE164 string) error) {
+	s.onPhoneSet = fn
 }
 
 // WithMailer overrides the email sender (tests).
@@ -394,6 +400,9 @@ func (s *Service) UpdateAccount(ctx context.Context, userID uuid.UUID, in Accoun
 			})
 		}
 		return users.PublicUser{}, err
+	}
+	if s.onPhoneSet != nil && in.PhoneE164 != nil && *in.PhoneE164 != "" {
+		_ = s.onPhoneSet(ctx, userID, *in.PhoneE164)
 	}
 	return ToPublic(user), nil
 }

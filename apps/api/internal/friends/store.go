@@ -65,4 +65,14 @@ type Store interface {
 	ListAccepted(ctx context.Context, userID uuid.UUID) ([]Record, error)
 	ListIncoming(ctx context.Context, userID uuid.UUID) ([]Record, error)
 	ListOutgoing(ctx context.Context, userID uuid.UUID) ([]Record, error)
+
+	UpsertPhoneInvite(ctx context.Context, inviterID uuid.UUID, phoneE164 string) error
+	ListOpenInvitesByPhone(ctx context.Context, phoneE164 string) ([]PhoneInvite, error)
+	MarkPhoneInviteResolved(ctx context.Context, id, resolvedUserID uuid.UUID) error
+}
+
+type PhoneInvite struct {
+	ID        uuid.UUID
+	InviterID uuid.UUID
+	PhoneE164 string
 }

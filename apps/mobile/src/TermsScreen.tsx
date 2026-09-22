@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { api } from './api';
+import { IconBack } from './icons';
 import { fonts, space, useTheme, type ThemeColors } from './theme';
-import { PrimaryButton, SecondaryButton } from './ui';
+import { PrimaryButton } from './ui';
 
 type Props = {
   token?: string | null;
@@ -58,7 +59,28 @@ export function TermsScreen({ token, onAccepted, onBack, requireAccept }: Props)
         {requireAccept ? (
           <PrimaryButton label={busy ? 'Saving…' : 'Accept Terms'} onPress={accept} disabled={busy} />
         ) : null}
-        {onBack ? <SecondaryButton label="Back" onPress={onBack} disabled={busy} /> : null}
+        {onBack ? (
+          <Pressable
+            onPress={onBack}
+            disabled={busy}
+            accessibilityRole="button"
+            accessibilityLabel="Back"
+            style={{
+              width: 42,
+              height: 42,
+              borderRadius: 21,
+              alignItems: 'center',
+              justifyContent: 'center',
+              alignSelf: 'flex-start',
+              opacity: busy ? 0.45 : 1,
+              borderWidth: 1,
+              borderColor: colors.border,
+              backgroundColor: colors.surface,
+            }}
+          >
+            <IconBack size={18} color={colors.text} />
+          </Pressable>
+        ) : null}
         {!requireAccept && !onBack ? (
           <Pressable onPress={onAccepted}>
             <Text style={styles.link}>Close</Text>

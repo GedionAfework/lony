@@ -149,12 +149,10 @@ CREATE TABLE loans (
   accepted_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now(),
-  CHECK (borrower_id <> lender_id),
   CHECK (initiator_id IN (borrower_id, lender_id)),
   CHECK (status IN ('pending', 'active', 'overdue', 'repayment_pending', 'rejected', 'cancelled', 'completed')),
   CHECK (principal_amount IS NULL OR principal_amount > 0),
-  CHECK (interest_rate_percent IS NULL OR (interest_rate_percent >= 0 AND interest_rate_percent <= 100)),
-  CHECK (currency_code IS NULL OR currency_code IN ('ETB', 'USD'))
+  CHECK (interest_rate_percent IS NULL OR (interest_rate_percent >= 0 AND interest_rate_percent <= 100))
 );
 
 CREATE TABLE loan_terms (
@@ -162,7 +160,7 @@ CREATE TABLE loan_terms (
   loan_id uuid NOT NULL REFERENCES loans(id),
   version int NOT NULL,
   principal_amount numeric(20,4) NOT NULL CHECK (principal_amount > 0),
-  currency_code char(3) NOT NULL CHECK (currency_code IN ('ETB', 'USD')),
+  currency_code char(3) NOT NULL,
   interest_rate_percent numeric(8,4) NOT NULL CHECK (interest_rate_percent >= 0 AND interest_rate_percent <= 100),
   interest_amount numeric(20,4) NOT NULL CHECK (interest_amount >= 0),
   expected_total numeric(20,4) NOT NULL CHECK (expected_total >= principal_amount),

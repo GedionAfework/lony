@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -110,11 +111,14 @@ func (s *Service) Notify(ctx context.Context, userID uuid.UUID, typ string, loan
 }
 
 func (s *Service) ScheduleLoanReminders(ctx context.Context, loan loans.Record) error {
+	if loan.LoanKind == loans.KindLongTerm {
+		return s.scheduleInstallmentReminders(ctx, loan)
+	}
 	if loan.DueAt == nil {
 		return nil
 	}
 	due := loan.DueAt.UTC()
-	users := []uuid.UUID{loan.BorrowerID, loan.LenderID}
+	users := reminderUsers(loan)
 	kinds := []struct {
 		kind string
 		at   time.Time
@@ -141,6 +145,86 @@ func (s *Service) ScheduleLoanReminders(ctx context.Context, loan loans.Record) 
 		}
 	}
 	return nil
+}
+
+func (s *Service) scheduleInstallmentReminders(ctx context.Context, loan loans.Record) error {
+	users := reminderUsers(loan)
+	dues := installmentDueDates(loan)
+	if len(dues) == 0 && loan.DueAt != nil {
+		dues = []struct {
+			seq int
+			at  time.Time
+		}{{1, loan.DueAt.UTC()}}
+	}
+	limit := 60
+	if len(dues) < limit {
+		limit = len(dues)
+	}
+	for i := 0; i < limit; i++ {
+		due := dues[i]
+		seq := fmt.Sprintf("%d", due.seq)
+		for _, userID := range users {
+			for _, k := range []struct {
+				kind string
+				at   time.Time
+				ms   string
+			}{
+				{KindInstallmentDue, due.at.Add(-24 * time.Hour), "inst-" + seq + "-1d"},
+				{KindInstallmentDue, due.at, "inst-" + seq + "-due"},
+				{KindInstallmentOverdue, due.at.Add(24 * time.Hour), "inst-" + seq + "-overdue"},
+			} {
+				_, _, err := s.store.InsertJob(ctx, Job{
+					JobKey: JobKey(loan.ID, userID, k.ms),
+					UserID: userID,
+					LoanID: loan.ID,
+					Kind:   k.kind,
+					RunAt:  k.at,
+					Status: JobPending,
+				})
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func installmentDueDates(loan loans.Record) []struct {
+	seq int
+	at  time.Time
+} {
+	if loan.InstallmentCount == nil || loan.Principal == nil || loan.InterestRatePercent == nil {
+		return nil
+	}
+	months := int(*loan.InstallmentCount)
+	start := time.Now().UTC()
+	if loan.StartAt != nil {
+		start = loan.StartAt.UTC()
+	}
+	emi := loans.ComputeEMI(*loan.Principal, *loan.InterestRatePercent, months)
+	if loan.InstallmentAmount != nil {
+		emi = *loan.InstallmentAmount
+	}
+	plan := loans.BuildInstallmentSchedule(*loan.Principal, *loan.InterestRatePercent, emi, months, start)
+	out := make([]struct {
+		seq int
+		at  time.Time
+	}, 0, len(plan))
+	for _, p := range plan {
+		out = append(out, struct {
+			seq int
+			at  time.Time
+		}{p.Sequence, p.DueAt})
+	}
+	return out
+}
+
+func reminderUsers(loan loans.Record) []uuid.UUID {
+	if loan.IsInstitutional() {
+		return []uuid.UUID{loan.BorrowerID}
+	}
+	return []uuid.UUID{loan.BorrowerID, loan.LenderID}
 }
 
 func milestoneOf(kind string) string {
@@ -252,6 +336,10 @@ func reminderCopy(kind, ref string) (title, body, typ string) {
 		return "Due today", "Loan "+ref+" is due today.", TypeDueToday
 	case KindOverdue:
 		return "Overdue", "Loan "+ref+" is overdue.", TypeOverdue
+	case KindInstallmentDue:
+		return "Installment due", "A monthly payment for "+ref+" is due.", TypeDueToday
+	case KindInstallmentOverdue:
+		return "Installment overdue", "A monthly payment for "+ref+" is overdue.", TypeOverdue
 	default:
 		return "Reminder", "Loan "+ref+" needs attention.", TypeDueSoon
 	}

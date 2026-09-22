@@ -96,6 +96,38 @@ func TestPendingWithoutTermsCountsAsRequest(t *testing.T) {
 	}
 }
 
+func TestBuildInstitutionalDebtIsPayable(t *testing.T) {
+	actor := uuid.New()
+	now := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
+	usd := "USD"
+	amt := dec("10000")
+	due := now.Add(30 * 24 * time.Hour)
+	row := loans.Record{
+		BorrowerID:        actor,
+		LenderID:          actor,
+		Status:            loans.StatusActive,
+		PartyMode:         loans.PartyAlone,
+		CurrencyCode:      &usd,
+		ExpectedTotal:     &amt,
+		OutstandingAmount: &amt,
+		DueAt:             &due,
+		InstitutionLabel:  strPtr("HSBC"),
+	}
+	got := Build(actor, now, []loans.Record{row}, nil)
+	if len(got.ByCurrency) != 1 {
+		t.Fatalf("currencies %+v", got.ByCurrency)
+	}
+	s := got.ByCurrency[0]
+	if s.Receivables != "0.0000" || s.Payables != "10000.0000" || s.Net != "-10000.0000" {
+		t.Fatalf("institutional money %+v", s)
+	}
+	if len(s.Friends) != 0 {
+		t.Fatalf("institutional should not appear as peer balance %+v", s.Friends)
+	}
+}
+
+func strPtr(s string) *string { return &s }
+
 func openLoan(actor, peer uuid.UUID, actorIsLender bool, currency *string, amount *decimal.Decimal, due *time.Time, status string) loans.Record {
 	rec := loans.Record{
 		Status: status, CurrencyCode: currency, ExpectedTotal: amount, OutstandingAmount: amount, DueAt: due,

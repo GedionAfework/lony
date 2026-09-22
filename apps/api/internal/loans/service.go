@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -50,37 +51,101 @@ func (s *Service) Create(ctx context.Context, actor uuid.UUID, in CreateInput) (
 			"role": "must be borrower or lender",
 		})
 	}
-	if in.CounterpartyID == uuid.Nil || in.CounterpartyID == actor {
+	institution := strings.TrimSpace(strVal(in.InstitutionLabel))
+	instType := strings.TrimSpace(strVal(in.InstitutionType))
+	kind := normalizeLoanKind(strVal(in.LoanKind))
+	partyMode := normalizePartyMode(strVal(in.PartyMode), kind)
+
+	lenders := uniqueUUIDs(in.CoLenderIDs)
+	if in.CounterpartyID != uuid.Nil && in.CounterpartyID != actor {
+		lenders = uniqueUUIDs(append([]uuid.UUID{in.CounterpartyID}, lenders...))
+	}
+	filtered := make([]uuid.UUID, 0, len(lenders))
+	for _, id := range lenders {
+		if id != actor && id != uuid.Nil {
+			filtered = append(filtered, id)
+		}
+	}
+	lenders = filtered
+
+	hasInstitution := institution != "" || instType != ""
+	// Any long-term alone mode, or any request that names an institution without peers,
+	// is institutional debt — never require a Lony counterparty.
+	alone := (kind == KindLongTerm && partyMode == PartyAlone) ||
+		(hasInstitution && len(lenders) == 0) ||
+		(kind == KindLongTerm && len(lenders) == 0)
+	if alone {
+		kind = KindLongTerm
+		partyMode = PartyAlone
+		lenders = nil
+		if institution == "" && instType != "" {
+			institution = humanizeInstitutionType(instType)
+		}
+		if institution == "" {
+			return LoanDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+				"institution_label": "select a financial institution",
+			})
+		}
+	} else if kind == KindLongTerm && len(lenders) >= 1 {
+		partyMode = PartyShared
+	} else if len(lenders) == 0 {
 		return LoanDTO{}, httpx.E(http.StatusUnprocessableEntity, "VALIDATION", "choose someone as the other party")
 	}
-	if _, err := s.store.GetParty(ctx, in.CounterpartyID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return LoanDTO{}, httpx.E(http.StatusNotFound, "NOT_FOUND", "user not found")
+
+	for _, id := range lenders {
+		if _, err := s.store.GetParty(ctx, id); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return LoanDTO{}, httpx.E(http.StatusNotFound, "NOT_FOUND", "user not found")
+			}
+			return LoanDTO{}, err
 		}
-		return LoanDTO{}, err
 	}
 
 	rec := Record{
 		ReferenceCode: randomRef(),
 		InitiatorID:   actor,
 		Status:        StatusPending,
+		LoanKind:      kind,
+		PartyMode:     partyMode,
 	}
-	if role == RoleBorrower {
+	if alone {
+		role = RoleBorrower
 		rec.BorrowerID = actor
-		rec.LenderID = in.CounterpartyID
+		rec.LenderID = actor
+		rec.InstitutionLabel = &institution
+	} else if role == RoleBorrower {
+		rec.BorrowerID = actor
+		rec.LenderID = lenders[0]
+		if len(lenders) > 1 {
+			rec.CoLenderIDs = lenders[1:]
+		}
 	} else {
 		rec.LenderID = actor
-		rec.BorrowerID = in.CounterpartyID
+		rec.BorrowerID = lenders[0]
+		if len(lenders) > 1 {
+			rec.CoLenderIDs = lenders[1:]
+		}
+	}
+	if institution != "" && rec.InstitutionLabel == nil {
+		rec.InstitutionLabel = &institution
+	}
+	if instType != "" {
+		rec.InstitutionType = &instType
 	}
 
 	var terms *Terms
 	if hasAnyTerms(in) {
 		parsed, err := s.parseTerms(TermsInput{
-			Principal:           strVal(in.Principal),
-			CurrencyCode:        strVal(in.CurrencyCode),
-			InterestRatePercent: strVal(in.InterestRatePercent),
-			DueAt:               timeVal(in.DueAt),
-			Note:                in.Note,
+			Principal:            strVal(in.Principal),
+			CurrencyCode:         strVal(in.CurrencyCode),
+			InterestRatePercent:  strVal(in.InterestRatePercent),
+			DueAt:                timeVal(in.DueAt),
+			Note:                 in.Note,
+			LoanKind:             kind,
+			InterestPeriodMonths: in.InterestPeriodMonths,
+			InstallmentCount:     in.InstallmentCount,
+			InstitutionLabel:     rec.InstitutionLabel,
+			StartAt:              in.StartAt,
 		})
 		if err != nil {
 			return LoanDTO{}, err
@@ -98,18 +163,41 @@ func (s *Service) Create(ctx context.Context, actor uuid.UUID, in CreateInput) (
 		rec.Note = note
 	}
 
-	payload, _ := json.Marshal(map[string]any{"role": role})
+	payload, _ := json.Marshal(map[string]any{"role": role, "loan_kind": kind, "party_mode": partyMode})
 	events := []Event{{ActorID: &actor, Type: EventCreated, Payload: payload}}
 	if terms != nil {
 		termPayload, _ := json.Marshal(termsSnapshot(rec))
 		events = append(events, Event{ActorID: &actor, Type: EventTermsProposed, Payload: termPayload})
 	}
+
+	if alone && terms != nil {
+		now := s.now().UTC()
+		rec.Status = StatusActive
+		rec.AcceptedAt = &now
+		events = append(events, Event{ActorID: &actor, Type: EventAccepted, Payload: json.RawMessage(`{"institutional":true}`)})
+	}
+
 	created, err := s.store.InsertLoan(ctx, rec, terms, events)
 	if err != nil {
 		return LoanDTO{}, err
 	}
+	if len(rec.CoLenderIDs) > 0 {
+		if err := s.store.ReplaceCoLenders(ctx, created.ID, rec.CoLenderIDs); err != nil {
+			return LoanDTO{}, err
+		}
+		created.CoLenderIDs = rec.CoLenderIDs
+	}
+	if alone && terms != nil {
+		created, err = s.materializeSchedule(ctx, created)
+		if err != nil {
+			return LoanDTO{}, err
+		}
+	}
 	if s.hooks != nil {
 		_ = s.hooks.AfterCreate(ctx, created)
+		if created.Status == StatusActive {
+			_ = s.hooks.AfterAccept(ctx, created)
+		}
 	}
 	return s.toDTO(ctx, actor, created, true)
 }
@@ -169,6 +257,10 @@ func (s *Service) Accept(ctx context.Context, actor, loanID uuid.UUID, acceptedD
 	snap["disclaimer_version"] = legal.Version
 	payload, _ := json.Marshal(snap)
 	updated, err := s.store.ApplyTransition(ctx, rec, rec.CurrentTermsID, Event{ActorID: &actor, Type: EventAccepted, Payload: payload})
+	if err != nil {
+		return LoanDTO{}, err
+	}
+	updated, err = s.materializeSchedule(ctx, updated)
 	if err != nil {
 		return LoanDTO{}, err
 	}
@@ -302,29 +394,36 @@ func (s *Service) MoneyForLoan(ctx context.Context, actor, loanID uuid.UUID) (*c
 	return moneyLinkFromRecord(actor, rec), nil
 }
 
-// ActiveMoneyBetween finds the most recently updated open loan between actor and peer.
-func (s *Service) ActiveMoneyBetween(ctx context.Context, actor, peerID uuid.UUID) (*chat.MoneyLink, error) {
+// ActiveMoneyBetween returns all open loans between actor and peer (newest first).
+func (s *Service) ActiveMoneyBetween(ctx context.Context, actor, peerID uuid.UUID) ([]chat.MoneyLink, error) {
 	rows, err := s.store.ListLoans(ctx, actor, "", "")
 	if err != nil {
 		return nil, err
 	}
-	var best *Record
+	type ranked struct {
+		link chat.MoneyLink
+		at   time.Time
+	}
+	var rankedRows []ranked
 	for i := range rows {
-		rec := &rows[i]
+		rec := rows[i]
 		if rec.OtherParty(actor) != peerID {
 			continue
 		}
-		if !isOpenMoneyStatus(rec.Status) {
+		link := moneyLinkFromRecord(actor, rec)
+		if link == nil {
 			continue
 		}
-		if best == nil || rec.UpdatedAt.After(best.UpdatedAt) {
-			best = rec
-		}
+		rankedRows = append(rankedRows, ranked{link: *link, at: rec.UpdatedAt})
 	}
-	if best == nil {
-		return nil, nil
+	sort.Slice(rankedRows, func(i, j int) bool {
+		return rankedRows[i].at.After(rankedRows[j].at)
+	})
+	out := make([]chat.MoneyLink, 0, len(rankedRows))
+	for _, r := range rankedRows {
+		out = append(out, r.link)
 	}
-	return moneyLinkFromRecord(actor, *best), nil
+	return out, nil
 }
 
 func isOpenMoneyStatus(status string) bool {
@@ -391,26 +490,149 @@ func (s *Service) parseTerms(in TermsInput) (Terms, error) {
 	if !isCurrencyCode(currency) {
 		fields["currency_code"] = "must be a 3-letter currency code"
 	}
-	if in.DueAt.IsZero() || !in.DueAt.After(s.now()) {
-		fields["due_at"] = "must be in the future"
-	}
 	note, err := normalizeNote(in.Note)
 	if err != nil {
 		fields["note"] = "must be 500 characters or fewer"
+	}
+	kind := normalizeLoanKind(in.LoanKind)
+	var institution *string
+	if label := strings.TrimSpace(strVal(in.InstitutionLabel)); label != "" {
+		if utf8.RuneCountInString(label) > 120 {
+			fields["institution_label"] = "must be 120 characters or fewer"
+		} else {
+			institution = &label
+		}
+	}
+	start := s.now().UTC()
+	if in.StartAt != nil && !in.StartAt.IsZero() {
+		start = in.StartAt.UTC()
+	}
+
+	if kind == KindLongTerm {
+		months := int32(0)
+		if in.InstallmentCount != nil {
+			months = *in.InstallmentCount
+		} else if in.InterestPeriodMonths != nil {
+			months = *in.InterestPeriodMonths
+		}
+		if months < 2 || months > 480 {
+			fields["installment_count"] = "must be between 2 and 480 months"
+		}
+		if len(fields) > 0 {
+			return Terms{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", fields)
+		}
+		emi := ComputeEMI(principal, rate, int(months))
+		plan := BuildInstallmentSchedule(principal, rate, emi, int(months), start)
+		totalInterest := zero
+		total := zero
+		for _, p := range plan {
+			totalInterest = totalInterest.Add(p.InterestPortion)
+			total = total.Add(p.Amount)
+		}
+		due := plan[len(plan)-1].DueAt
+		nextDue := plan[0].DueAt
+		_ = nextDue
+		count := months
+		period := months
+		return Terms{
+			Principal:            principal,
+			CurrencyCode:         currency,
+			InterestRatePercent:  rate,
+			InterestAmount:       NormalizeAmount(totalInterest),
+			ExpectedTotal:        NormalizeAmount(total),
+			DueAt:                due,
+			Note:                 note,
+			LoanKind:             KindLongTerm,
+			InterestPeriodMonths: &period,
+			InstallmentCount:     &count,
+			InstallmentAmount:    &emi,
+			InstitutionLabel:     institution,
+			StartAt:              &start,
+		}, nil
+	}
+
+	dueAt := in.DueAt
+	if dueAt.IsZero() && in.InterestPeriodMonths != nil && *in.InterestPeriodMonths > 0 {
+		dueAt = start.AddDate(0, int(*in.InterestPeriodMonths), 0)
+	}
+	if !rate.Equal(zero) {
+		if in.InterestPeriodMonths == nil || *in.InterestPeriodMonths < 1 {
+			months := int32(1)
+			if !dueAt.IsZero() {
+				y1, m1, _ := start.Date()
+				y2, m2, _ := dueAt.Date()
+				diff := int32((y2-y1)*12 + int(m2-m1))
+				if diff > 1 {
+					months = diff
+				}
+			}
+			in.InterestPeriodMonths = &months
+		}
+		if *in.InterestPeriodMonths < 1 || *in.InterestPeriodMonths > 480 {
+			fields["interest_period_months"] = "must be between 1 and 480 months"
+		}
+	}
+	if dueAt.IsZero() || !dueAt.After(s.now()) {
+		fields["due_at"] = "must be in the future"
 	}
 	if len(fields) > 0 {
 		return Terms{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", fields)
 	}
 	interest, total := ComputeExpected(principal, rate)
 	return Terms{
-		Principal:           principal,
-		CurrencyCode:        currency,
-		InterestRatePercent: rate,
-		InterestAmount:      interest,
-		ExpectedTotal:       total,
-		DueAt:               in.DueAt.UTC(),
-		Note:                note,
+		Principal:            principal,
+		CurrencyCode:         currency,
+		InterestRatePercent:  rate,
+		InterestAmount:       interest,
+		ExpectedTotal:        total,
+		DueAt:                dueAt.UTC(),
+		Note:                 note,
+		LoanKind:             KindOneTime,
+		InterestPeriodMonths: in.InterestPeriodMonths,
+		InstitutionLabel:     institution,
+		StartAt:              &start,
 	}, nil
+}
+
+func (s *Service) materializeSchedule(ctx context.Context, rec Record) (Record, error) {
+	if rec.LoanKind != KindLongTerm || rec.Principal == nil || rec.InterestRatePercent == nil || rec.InstallmentCount == nil {
+		return rec, nil
+	}
+	months := int(*rec.InstallmentCount)
+	if months < 2 {
+		return rec, nil
+	}
+	start := s.now().UTC()
+	if rec.StartAt != nil {
+		start = rec.StartAt.UTC()
+	}
+	emi := ComputeEMI(*rec.Principal, *rec.InterestRatePercent, months)
+	if rec.InstallmentAmount != nil {
+		emi = *rec.InstallmentAmount
+	}
+	plan := BuildInstallmentSchedule(*rec.Principal, *rec.InterestRatePercent, emi, months, start)
+	rows := make([]Installment, 0, len(plan))
+	for _, p := range plan {
+		rows = append(rows, Installment{
+			Sequence:         int32(p.Sequence),
+			DueAt:            p.DueAt,
+			Amount:           p.Amount,
+			PrincipalPortion: p.PrincipalPortion,
+			InterestPortion:  p.InterestPortion,
+			Status:           InstallmentScheduled,
+		})
+	}
+	if err := s.store.ReplaceInstallments(ctx, rec.ID, rows); err != nil {
+		return Record{}, err
+	}
+	if len(plan) > 0 {
+		next := plan[0].DueAt
+		rec.DueAt = &next
+		emiCopy := emi
+		rec.InstallmentAmount = &emiCopy
+		return s.store.SaveScheduleMeta(ctx, rec)
+	}
+	return rec, nil
 }
 
 func (s *Service) toDTO(ctx context.Context, actor uuid.UUID, rec Record, detail bool) (LoanDTO, error) {
@@ -423,30 +645,67 @@ func (s *Service) toDTO(ctx context.Context, actor uuid.UUID, rec Record, detail
 		return LoanDTO{}, err
 	}
 	awaiting := rec.AwaitingUserID()
+	basis := InterestBasis
+	if rec.LoanKind == KindLongTerm {
+		basis = "reducing_balance_monthly"
+	}
+	kind := rec.LoanKind
+	if kind == "" {
+		kind = KindOneTime
+	}
 	dto := LoanDTO{
-		ID:                  rec.ID,
-		ReferenceCode:       rec.ReferenceCode,
-		Status:              rec.Status,
-		Borrower:            borrower,
-		Lender:              lender,
-		YourRole:            rec.RoleOf(actor),
-		InterestBasis:       InterestBasis,
-		Principal:           decStr(rec.Principal),
-		CurrencyCode:        rec.CurrencyCode,
-		InterestRatePercent: decStr(rec.InterestRatePercent),
-		InterestAmount:      decStr(rec.InterestAmount),
-		ExpectedTotal:       decStr(rec.ExpectedTotal),
-		DueAt:               rec.DueAt,
-		Note:                rec.Note,
-		TermsVersion:        rec.TermsVersion,
-		ProposedByUserID:    rec.ProposedByUserID,
-		AwaitingUserID:      awaiting,
-		AcceptedAt:          rec.AcceptedAt,
-		CreatedAt:           rec.CreatedAt,
-		CanAccept:           rec.Status == StatusPending && rec.CurrentTermsID != nil && awaiting != nil && *awaiting == actor,
-		CanReject:           rec.Status == StatusPending && (rec.ProposedByUserID == nil || *rec.ProposedByUserID != actor),
-		CanCancel:           rec.Status == StatusPending,
-		CanProposeTerms:     rec.Status == StatusPending,
+		ID:                   rec.ID,
+		ReferenceCode:        rec.ReferenceCode,
+		Status:               rec.Status,
+		Borrower:             borrower,
+		Lender:               lender,
+		YourRole:             rec.RoleOf(actor),
+		InterestBasis:        basis,
+		LoanKind:             kind,
+		Principal:            decStr(rec.Principal),
+		CurrencyCode:         rec.CurrencyCode,
+		InterestRatePercent:  decStr(rec.InterestRatePercent),
+		InterestAmount:       decStr(rec.InterestAmount),
+		ExpectedTotal:        decStr(rec.ExpectedTotal),
+		DueAt:                rec.DueAt,
+		Note:                 rec.Note,
+		InterestPeriodMonths: rec.InterestPeriodMonths,
+		InstallmentCount:     rec.InstallmentCount,
+		InstallmentAmount:    decStr(rec.InstallmentAmount),
+		InstitutionLabel:     rec.InstitutionLabel,
+		InstitutionType:      rec.InstitutionType,
+		PartyMode:            rec.PartyMode,
+		StartAt:              rec.StartAt,
+		TermsVersion:         rec.TermsVersion,
+		ProposedByUserID:     rec.ProposedByUserID,
+		AwaitingUserID:       awaiting,
+		AcceptedAt:           rec.AcceptedAt,
+		CreatedAt:            rec.CreatedAt,
+		CanAccept:            rec.Status == StatusPending && rec.CurrentTermsID != nil && awaiting != nil && *awaiting == actor,
+		CanReject:            rec.Status == StatusPending && !rec.IsInstitutional() && (rec.ProposedByUserID == nil || *rec.ProposedByUserID != actor),
+		CanCancel:            rec.Status == StatusPending,
+		CanProposeTerms:      rec.Status == StatusPending,
+	}
+	if dto.PartyMode == "" {
+		if dto.LoanKind == KindLongTerm && rec.IsInstitutional() {
+			dto.PartyMode = PartyAlone
+		} else {
+			dto.PartyMode = PartyPeer
+		}
+	}
+	coIDs := rec.CoLenderIDs
+	if len(coIDs) == 0 {
+		coIDs, _ = s.store.ListCoLenders(ctx, rec.ID)
+	}
+	if len(coIDs) > 0 {
+		dto.CoLenders = make([]Party, 0, len(coIDs))
+		for _, id := range coIDs {
+			p, err := s.store.GetParty(ctx, id)
+			if err != nil {
+				continue
+			}
+			dto.CoLenders = append(dto.CoLenders, p)
+		}
 	}
 	if !detail {
 		return dto, nil
@@ -457,20 +716,34 @@ func (s *Service) toDTO(ctx context.Context, actor uuid.UUID, rec Record, detail
 	}
 	dto.Terms = make([]TermsDTO, 0, len(terms))
 	for _, term := range terms {
+		termKind := term.LoanKind
+		if termKind == "" {
+			termKind = KindOneTime
+		}
+		termBasis := InterestBasis
+		if termKind == KindLongTerm {
+			termBasis = "reducing_balance_monthly"
+		}
 		dto.Terms = append(dto.Terms, TermsDTO{
-			ID:                  term.ID,
-			Version:             term.Version,
-			Status:              term.Status,
-			InterestBasis:       InterestBasis,
-			Principal:           term.Principal.StringFixed(Scale),
-			CurrencyCode:        term.CurrencyCode,
-			InterestRatePercent: term.InterestRatePercent.StringFixed(Scale),
-			InterestAmount:      term.InterestAmount.StringFixed(Scale),
-			ExpectedTotal:       term.ExpectedTotal.StringFixed(Scale),
-			DueAt:               term.DueAt,
-			Note:                term.Note,
-			ProposedByUserID:    term.ProposedByUserID,
-			CreatedAt:           term.CreatedAt,
+			ID:                   term.ID,
+			Version:              term.Version,
+			Status:               term.Status,
+			InterestBasis:        termBasis,
+			LoanKind:             termKind,
+			Principal:            term.Principal.StringFixed(Scale),
+			CurrencyCode:         term.CurrencyCode,
+			InterestRatePercent:  term.InterestRatePercent.StringFixed(Scale),
+			InterestAmount:       term.InterestAmount.StringFixed(Scale),
+			ExpectedTotal:        term.ExpectedTotal.StringFixed(Scale),
+			DueAt:                term.DueAt,
+			Note:                 term.Note,
+			InterestPeriodMonths: term.InterestPeriodMonths,
+			InstallmentCount:     term.InstallmentCount,
+			InstallmentAmount:    decStr(term.InstallmentAmount),
+			InstitutionLabel:     term.InstitutionLabel,
+			StartAt:              term.StartAt,
+			ProposedByUserID:     term.ProposedByUserID,
+			CreatedAt:            term.CreatedAt,
 		})
 	}
 	events, err := s.store.ListEvents(ctx, rec.ID)
@@ -487,6 +760,23 @@ func (s *Service) toDTO(ctx context.Context, actor uuid.UUID, rec Record, detail
 			CreatedAt: ev.CreatedAt,
 		})
 	}
+	installments, err := s.store.ListInstallments(ctx, rec.ID)
+	if err != nil {
+		return LoanDTO{}, err
+	}
+	dto.Installments = make([]InstallmentDTO, 0, len(installments))
+	for _, row := range installments {
+		dto.Installments = append(dto.Installments, InstallmentDTO{
+			ID:               row.ID,
+			Sequence:         row.Sequence,
+			DueAt:            row.DueAt,
+			Amount:           row.Amount.StringFixed(Scale),
+			PrincipalPortion: row.PrincipalPortion.StringFixed(Scale),
+			InterestPortion:  row.InterestPortion.StringFixed(Scale),
+			Status:           row.Status,
+			PaidAt:           row.PaidAt,
+		})
+	}
 	return dto, nil
 }
 
@@ -501,10 +791,77 @@ func applyTerms(rec *Record, terms Terms) {
 	rec.Note = terms.Note
 	rec.TermsVersion = &terms.Version
 	rec.ProposedByUserID = &terms.ProposedByUserID
+	rec.LoanKind = terms.LoanKind
+	if rec.LoanKind == "" {
+		rec.LoanKind = KindOneTime
+	}
+	rec.InterestPeriodMonths = terms.InterestPeriodMonths
+	rec.InstallmentCount = terms.InstallmentCount
+	rec.InstallmentAmount = terms.InstallmentAmount
+	if terms.InstitutionLabel != nil {
+		rec.InstitutionLabel = terms.InstitutionLabel
+	}
+	rec.StartAt = terms.StartAt
 }
 
 func hasAnyTerms(in CreateInput) bool {
-	return strVal(in.Principal) != "" || strVal(in.CurrencyCode) != "" || strVal(in.InterestRatePercent) != "" || in.DueAt != nil
+	return strVal(in.Principal) != "" || strVal(in.CurrencyCode) != "" || strVal(in.InterestRatePercent) != "" || in.DueAt != nil || strVal(in.LoanKind) == KindLongTerm || in.InstallmentCount != nil
+}
+
+func normalizeLoanKind(raw string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case KindLongTerm, "long-term", "longterm", "emi":
+		return KindLongTerm
+	default:
+		return KindOneTime
+	}
+}
+
+func normalizePartyMode(raw, kind string) string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case PartyAlone, "solo", "myself":
+		return PartyAlone
+	case PartyShared, "with_others", "with-someone", "group":
+		return PartyShared
+	case PartyPeer:
+		return PartyPeer
+	default:
+		if kind == KindLongTerm {
+			return PartyAlone
+		}
+		return PartyPeer
+	}
+}
+
+func humanizeInstitutionType(raw string) string {
+	v := strings.TrimSpace(strings.ReplaceAll(raw, "_", " "))
+	if v == "" {
+		return "Institution"
+	}
+	parts := strings.Fields(v)
+	for i, p := range parts {
+		if len(p) == 0 {
+			continue
+		}
+		parts[i] = strings.ToUpper(p[:1]) + strings.ToLower(p[1:])
+	}
+	return strings.Join(parts, " ")
+}
+
+func uniqueUUIDs(ids []uuid.UUID) []uuid.UUID {
+	seen := map[uuid.UUID]struct{}{}
+	out := make([]uuid.UUID, 0, len(ids))
+	for _, id := range ids {
+		if id == uuid.Nil {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 func parsePositiveDecimal(raw string) (decimal.Decimal, error) {
@@ -617,13 +974,19 @@ func timeVal(v *time.Time) time.Time {
 
 func termsSnapshot(rec Record) map[string]any {
 	return map[string]any{
-		"principal":             decStr(rec.Principal),
-		"currency_code":         rec.CurrencyCode,
-		"interest_basis":        InterestBasis,
-		"interest_rate_percent": decStr(rec.InterestRatePercent),
-		"interest_amount":       decStr(rec.InterestAmount),
-		"expected_total":        decStr(rec.ExpectedTotal),
-		"due_at":                rec.DueAt,
+		"principal":              decStr(rec.Principal),
+		"currency_code":          rec.CurrencyCode,
+		"interest_basis":         InterestBasis,
+		"interest_rate_percent":  decStr(rec.InterestRatePercent),
+		"interest_amount":        decStr(rec.InterestAmount),
+		"expected_total":         decStr(rec.ExpectedTotal),
+		"due_at":                 rec.DueAt,
+		"loan_kind":              rec.LoanKind,
+		"interest_period_months": rec.InterestPeriodMonths,
+		"installment_count":      rec.InstallmentCount,
+		"installment_amount":     decStr(rec.InstallmentAmount),
+		"institution_label":      rec.InstitutionLabel,
+		"start_at":               rec.StartAt,
 	}
 }
 

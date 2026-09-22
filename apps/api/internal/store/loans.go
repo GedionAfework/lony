@@ -10,6 +10,7 @@ import (
 	"equilend/api/internal/store/sqlc"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/shopspring/decimal"
 )
 
@@ -40,6 +41,7 @@ func (s *SQLStore) InsertLoan(ctx context.Context, rec loans.Record, terms *loan
 		return loans.Record{}, err
 	}
 	mapped := mapLoan(row)
+	copySchedule(&mapped, rec)
 	if terms != nil {
 		termRow, err := q.InsertLoanTerms(ctx, insertTermsParams(row.ID, *terms))
 		if err != nil {
@@ -56,11 +58,31 @@ func (s *SQLStore) InsertLoan(ctx context.Context, rec loans.Record, terms *loan
 		mapped.Note = rec.Note
 		mapped.TermsVersion = rec.TermsVersion
 		mapped.ProposedByUserID = rec.ProposedByUserID
+		mapped.AcceptedTermsID = rec.AcceptedTermsID
+		mapped.AcceptedAt = rec.AcceptedAt
+		mapped.Status = rec.Status
+		copySchedule(&mapped, rec)
+		if mapped.Status == loans.StatusActive && mapped.CurrentTermsID != nil {
+			mapped.AcceptedTermsID = mapped.CurrentTermsID
+			if _, err := q.AcceptLoanTerms(ctx, *mapped.CurrentTermsID); err != nil {
+				return loans.Record{}, err
+			}
+		}
 		updated, err := q.UpdateLoan(ctx, updateLoanParams(mapped))
 		if err != nil {
 			return loans.Record{}, err
 		}
 		mapped = mapLoan(updated)
+		copySchedule(&mapped, rec)
+		if mapped.Status == loans.StatusActive && mapped.CurrentTermsID != nil {
+			mapped.AcceptedTermsID = mapped.CurrentTermsID
+		}
+		if err := patchScheduleMetaTx(ctx, tx, mapped); err != nil {
+			return loans.Record{}, err
+		}
+		if err := patchTermsScheduleTx(ctx, tx, termRow.ID, *terms); err != nil {
+			return loans.Record{}, err
+		}
 	} else if rec.Note != nil {
 		mapped.Note = rec.Note
 		updated, err := q.UpdateLoan(ctx, updateLoanParams(mapped))
@@ -68,6 +90,14 @@ func (s *SQLStore) InsertLoan(ctx context.Context, rec loans.Record, terms *loan
 			return loans.Record{}, err
 		}
 		mapped = mapLoan(updated)
+		copySchedule(&mapped, rec)
+		if err := patchScheduleMetaTx(ctx, tx, mapped); err != nil {
+			return loans.Record{}, err
+		}
+	} else if hasSchedule(rec) {
+		if err := patchScheduleMetaTx(ctx, tx, mapped); err != nil {
+			return loans.Record{}, err
+		}
 	}
 	if err := insertEvents(ctx, q, row.ID, events); err != nil {
 		return loans.Record{}, err
@@ -75,6 +105,7 @@ func (s *SQLStore) InsertLoan(ctx context.Context, rec loans.Record, terms *loan
 	if err := tx.Commit(ctx); err != nil {
 		return loans.Record{}, err
 	}
+	_ = loadScheduleMeta(ctx, s, &mapped)
 	return mapped, nil
 }
 
@@ -83,7 +114,9 @@ func (s *SQLStore) GetLoan(ctx context.Context, id uuid.UUID) (loans.Record, err
 	if err != nil {
 		return loans.Record{}, err
 	}
-	return mapLoan(row), nil
+	mapped := mapLoan(row)
+	_ = loadScheduleMeta(ctx, s, &mapped)
+	return mapped, nil
 }
 
 func (s *SQLStore) ListLoans(ctx context.Context, userID uuid.UUID, status, role string) ([]loans.Record, error) {
@@ -97,7 +130,9 @@ func (s *SQLStore) ListLoans(ctx context.Context, userID uuid.UUID, status, role
 	}
 	out := make([]loans.Record, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, mapLoan(row))
+		mapped := mapLoan(row)
+		_ = loadScheduleMeta(ctx, s, &mapped)
+		out = append(out, mapped)
 	}
 	return out, nil
 }
@@ -152,8 +187,22 @@ func (s *SQLStore) ProposeTerms(ctx context.Context, rec loans.Record, terms loa
 		return loans.Record{}, err
 	}
 	rec.CurrentTermsID = &termRow.ID
+	rec.LoanKind = terms.LoanKind
+	rec.InterestPeriodMonths = terms.InterestPeriodMonths
+	rec.InstallmentCount = terms.InstallmentCount
+	rec.InstallmentAmount = terms.InstallmentAmount
+	rec.InstitutionLabel = terms.InstitutionLabel
+	rec.StartAt = terms.StartAt
 	updated, err := q.UpdateLoan(ctx, updateLoanParams(rec))
 	if err != nil {
+		return loans.Record{}, err
+	}
+	mapped := mapLoan(updated)
+	copySchedule(&mapped, rec)
+	if err := patchScheduleMetaTx(ctx, tx, mapped); err != nil {
+		return loans.Record{}, err
+	}
+	if err := patchTermsScheduleTx(ctx, tx, termRow.ID, terms); err != nil {
 		return loans.Record{}, err
 	}
 	if err := insertEvents(ctx, q, rec.ID, []loans.Event{event}); err != nil {
@@ -162,7 +211,7 @@ func (s *SQLStore) ProposeTerms(ctx context.Context, rec loans.Record, terms loa
 	if err := tx.Commit(ctx); err != nil {
 		return loans.Record{}, err
 	}
-	return mapLoan(updated), nil
+	return mapped, nil
 }
 
 func (s *SQLStore) ApplyTransition(ctx context.Context, rec loans.Record, acceptedTermsID *uuid.UUID, event loans.Event) (loans.Record, error) {
@@ -181,13 +230,90 @@ func (s *SQLStore) ApplyTransition(ctx context.Context, rec loans.Record, accept
 	if err != nil {
 		return loans.Record{}, err
 	}
+	mapped := mapLoan(updated)
+	copySchedule(&mapped, rec)
+	if err := patchScheduleMetaTx(ctx, tx, mapped); err != nil {
+		return loans.Record{}, err
+	}
 	if err := insertEvents(ctx, q, rec.ID, []loans.Event{event}); err != nil {
 		return loans.Record{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return loans.Record{}, err
 	}
-	return mapLoan(updated), nil
+	return mapped, nil
+}
+
+func (s *SQLStore) SaveScheduleMeta(ctx context.Context, rec loans.Record) (loans.Record, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return loans.Record{}, err
+	}
+	defer tx.Rollback(ctx)
+	q := s.q.WithTx(tx)
+	updated, err := q.UpdateLoan(ctx, updateLoanParams(rec))
+	if err != nil {
+		return loans.Record{}, err
+	}
+	mapped := mapLoan(updated)
+	copySchedule(&mapped, rec)
+	if err := patchScheduleMetaTx(ctx, tx, mapped); err != nil {
+		return loans.Record{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return loans.Record{}, err
+	}
+	return mapped, nil
+}
+
+func (s *SQLStore) ListInstallments(ctx context.Context, loanID uuid.UUID) ([]loans.Installment, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, loan_id, sequence_no, due_at, amount::text, principal_portion::text, interest_portion::text, status, paid_at, created_at
+		FROM loan_installments
+		WHERE loan_id = $1
+		ORDER BY sequence_no ASC
+	`, loanID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []loans.Installment
+	for rows.Next() {
+		var row loans.Installment
+		var amount, principal, interest string
+		if err := rows.Scan(
+			&row.ID, &row.LoanID, &row.Sequence, &row.DueAt,
+			&amount, &principal, &interest, &row.Status, &row.PaidAt, &row.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		row.Amount = mustDec(amount)
+		row.PrincipalPortion = mustDec(principal)
+		row.InterestPortion = mustDec(interest)
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLStore) ReplaceInstallments(ctx context.Context, loanID uuid.UUID, rows []loans.Installment) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `DELETE FROM loan_installments WHERE loan_id = $1`, loanID); err != nil {
+		return err
+	}
+	for _, row := range rows {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO loan_installments (
+				loan_id, sequence_no, due_at, amount, principal_portion, interest_portion, status
+			) VALUES ($1, $2, $3, $4, $5, $6, $7)
+		`, loanID, row.Sequence, row.DueAt, row.Amount.StringFixed(loans.Scale), row.PrincipalPortion.StringFixed(loans.Scale), row.InterestPortion.StringFixed(loans.Scale), row.Status); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *SQLStore) MarkOverdue(ctx context.Context, now time.Time) (int, error) {
@@ -282,6 +408,7 @@ func mapLoan(row sqlc.Loan) loans.Record {
 		OutstandingAmount:   parseDec(row.OutstandingAmount),
 		DueAt:               row.DueAt,
 		Note:                row.Note,
+		LoanKind:            loans.KindOneTime,
 		CurrentTermsID:      row.CurrentTermsID,
 		AcceptedTermsID:     row.AcceptedTermsID,
 		TermsVersion:        row.TermsVersion,
@@ -308,10 +435,156 @@ func mapTerms(row sqlc.LoanTerm) loans.Terms {
 		ExpectedTotal:       total,
 		DueAt:               row.DueAt,
 		Note:                row.Note,
+		LoanKind:            loans.KindOneTime,
 		ProposedByUserID:    row.ProposedByUserID,
 		Status:              row.Status,
 		CreatedAt:           row.CreatedAt,
 	}
+}
+
+func copySchedule(dst *loans.Record, src loans.Record) {
+	if src.LoanKind != "" {
+		dst.LoanKind = src.LoanKind
+	}
+	dst.InterestPeriodMonths = src.InterestPeriodMonths
+	dst.InstallmentCount = src.InstallmentCount
+	dst.InstallmentAmount = src.InstallmentAmount
+	dst.InstitutionLabel = src.InstitutionLabel
+	dst.InstitutionType = src.InstitutionType
+	if src.PartyMode != "" {
+		dst.PartyMode = src.PartyMode
+	}
+	dst.StartAt = src.StartAt
+	dst.CoLenderIDs = src.CoLenderIDs
+}
+
+func hasSchedule(rec loans.Record) bool {
+	return rec.LoanKind != "" && rec.LoanKind != loans.KindOneTime ||
+		rec.InterestPeriodMonths != nil ||
+		rec.InstallmentCount != nil ||
+		rec.InstitutionLabel != nil ||
+		rec.StartAt != nil
+}
+
+func patchScheduleMetaTx(ctx context.Context, tx pgx.Tx, rec loans.Record) error {
+	kind := rec.LoanKind
+	if kind == "" {
+		kind = loans.KindOneTime
+	}
+	mode := rec.PartyMode
+	if mode == "" {
+		mode = loans.PartyPeer
+	}
+	_, err := tx.Exec(ctx, `
+		UPDATE loans SET
+			loan_kind = $2,
+			interest_period_months = $3,
+			installment_count = $4,
+			installment_amount = $5,
+			institution_label = $6,
+			start_at = $7,
+			institution_type = $8,
+			party_mode = $9,
+			updated_at = now()
+		WHERE id = $1
+	`, rec.ID, kind, rec.InterestPeriodMonths, rec.InstallmentCount, decPtr(rec.InstallmentAmount), rec.InstitutionLabel, rec.StartAt, rec.InstitutionType, mode)
+	return err
+}
+
+func patchTermsScheduleTx(ctx context.Context, tx pgx.Tx, termID uuid.UUID, terms loans.Terms) error {
+	kind := terms.LoanKind
+	if kind == "" {
+		kind = loans.KindOneTime
+	}
+	_, err := tx.Exec(ctx, `
+		UPDATE loan_terms SET
+			loan_kind = $2,
+			interest_period_months = $3,
+			installment_count = $4,
+			installment_amount = $5,
+			institution_label = $6,
+			start_at = $7
+		WHERE id = $1
+	`, termID, kind, terms.InterestPeriodMonths, terms.InstallmentCount, decPtr(terms.InstallmentAmount), terms.InstitutionLabel, terms.StartAt)
+	return err
+}
+
+func loadScheduleMeta(ctx context.Context, s *SQLStore, rec *loans.Record) error {
+	var kind string
+	var period, count *int32
+	var amount *string
+	var institution *string
+	var instType *string
+	var partyMode string
+	var start *time.Time
+	err := s.pool.QueryRow(ctx, `
+		SELECT loan_kind, interest_period_months, installment_count, installment_amount::text,
+		       institution_label, start_at, institution_type, party_mode
+		FROM loans WHERE id = $1
+	`, rec.ID).Scan(&kind, &period, &count, &amount, &institution, &start, &instType, &partyMode)
+	if err != nil {
+		return err
+	}
+	if kind == "" {
+		kind = loans.KindOneTime
+	}
+	rec.LoanKind = kind
+	rec.InterestPeriodMonths = period
+	rec.InstallmentCount = count
+	rec.InstallmentAmount = parseDec(amount)
+	rec.InstitutionLabel = institution
+	rec.InstitutionType = instType
+	rec.PartyMode = partyMode
+	rec.StartAt = start
+	ids, _ := s.ListCoLenders(ctx, rec.ID)
+	rec.CoLenderIDs = ids
+	return nil
+}
+
+func (s *SQLStore) ListCoLenders(ctx context.Context, loanID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT user_id FROM loan_co_lenders WHERE loan_id = $1 ORDER BY position ASC, user_id ASC
+	`, loanID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLStore) ReplaceCoLenders(ctx context.Context, loanID uuid.UUID, userIDs []uuid.UUID) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `DELETE FROM loan_co_lenders WHERE loan_id = $1`, loanID); err != nil {
+		return err
+	}
+	for i, id := range userIDs {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO loan_co_lenders (loan_id, user_id, position) VALUES ($1, $2, $3)
+		`, loanID, id, i); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func mustDec(raw string) decimal.Decimal {
+	d, err := decimal.NewFromString(raw)
+	if err != nil {
+		return decimal.Zero
+	}
+	return d
 }
 
 func parseDec(raw *string) *decimal.Decimal {

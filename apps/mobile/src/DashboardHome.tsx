@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { api, type Dashboard, type User } from './api';
+import { IconAnalytics } from './icons';
 import { fonts, radii, space, useTheme } from './theme';
 import { Banner, Card, EmptyState, Money } from './ui';
 
@@ -23,7 +24,6 @@ function convert(amount: number, from: string, to: string, rates: Record<string,
 export function DashboardHome({ user, dashboard, token, onOpenAnalytics, formatMoney }: Props) {
   const { colors } = useTheme();
   const slices = dashboard?.by_currency ?? [];
-  // Only the user's chosen currency — never invent USD.
   const preferred = (user.default_currency_code || '').toUpperCase();
   const displayCurrency =
     preferred ||
@@ -55,19 +55,21 @@ export function DashboardHome({ user, dashboard, token, onOpenAnalytics, formatM
 
   const totals = useMemo(() => {
     if (!displayCurrency) {
-      return { receivables: 0, payables: 0, net: 0, dueSoon: 0, dueSoonCount: 0, openLoans: 0, pending: 0 };
+      return { receivables: 0, payables: 0, net: 0, dueSoon: 0, dueSoonCount: 0, openLoans: 0, pending: 0, currencies: 0 };
     }
     let recv = 0;
     let pay = 0;
     let due = 0;
     let dueCount = 0;
     let open = 0;
+    let currencyCount = 0;
     for (const s of slices) {
       const code = (s.currency_code || displayCurrency).toUpperCase();
       const r = convert(Number(s.receivables || 0), code, displayCurrency, rates);
       const p = convert(Number(s.payables || 0), code, displayCurrency, rates);
       const d = convert(Number(s.due_soon || 0), code, displayCurrency, rates);
       if (!Number.isFinite(r) || !Number.isFinite(p)) continue;
+      currencyCount += 1;
       recv += r;
       pay += p;
       if (Number.isFinite(d)) due += d;
@@ -82,6 +84,7 @@ export function DashboardHome({ user, dashboard, token, onOpenAnalytics, formatM
       dueSoonCount: dueCount,
       openLoans: open,
       pending: dashboard?.pending_requests ?? 0,
+      currencies: currencyCount,
     };
   }, [slices, displayCurrency, rates, dashboard?.pending_requests]);
 
@@ -91,7 +94,27 @@ export function DashboardHome({ user, dashboard, token, onOpenAnalytics, formatM
 
   return (
     <View style={{ gap: space.md }}>
-      <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>Dashboard</Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+        <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>Dashboard</Text>
+        <Pressable
+          onPress={onOpenAnalytics}
+          accessibilityRole="button"
+          accessibilityLabel="Full analytics"
+          hitSlop={8}
+          style={{
+            width: 42,
+            height: 42,
+            borderRadius: 21,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: colors.surfaceMuted,
+            borderWidth: 1,
+            borderColor: colors.border,
+          }}
+        >
+          <IconAnalytics size={18} color={colors.text} />
+        </Pressable>
+      </View>
 
       {!displayCurrency ? (
         <Card>
@@ -127,7 +150,7 @@ export function DashboardHome({ user, dashboard, token, onOpenAnalytics, formatM
               tone={netTone}
             />
             <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
-              {totals.net > 0 ? 'You are owed' : totals.net < 0 ? 'You owe' : 'Balanced'}
+              {totals.net > 0 ? 'You are owed overall' : totals.net < 0 ? 'You owe overall' : 'Balanced'}
             </Text>
             <View style={{ flexDirection: 'row', gap: 10 }}>
               <Stat
@@ -149,6 +172,23 @@ export function DashboardHome({ user, dashboard, token, onOpenAnalytics, formatM
             <MiniStat label="Due soon" value={String(totals.dueSoonCount)} />
           </View>
 
+          <Card>
+            <Text style={{ color: colors.muted, fontFamily: fonts.uiSemi, fontSize: 12, textTransform: 'uppercase' }}>
+              Coming due
+            </Text>
+            <Money
+              value={formatMoney(totals.dueSoon.toFixed(2), displayCurrency, user.locale)}
+              size="md"
+              tone={totals.dueSoonCount > 0 ? 'negative' : 'muted'}
+            />
+            <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
+              {totals.dueSoonCount > 0
+                ? `${totals.dueSoonCount} loan${totals.dueSoonCount === 1 ? '' : 's'} in the next week`
+                : 'Nothing due in the next week'}
+              {totals.currencies > 1 ? ` · ${totals.currencies} currencies` : ''}
+            </Text>
+          </Card>
+
           {pendingConfirm > 0 ? (
             <Banner
               tone="secondary"
@@ -156,15 +196,6 @@ export function DashboardHome({ user, dashboard, token, onOpenAnalytics, formatM
               body={`${pendingConfirm} claim${pendingConfirm === 1 ? '' : 's'} waiting`}
             />
           ) : null}
-
-          <Pressable onPress={onOpenAnalytics}>
-            <Card>
-              <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>Analytics</Text>
-              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
-                Full breakdown by friend and currency
-              </Text>
-            </Card>
-          </Pressable>
         </>
       )}
     </View>

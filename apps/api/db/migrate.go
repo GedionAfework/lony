@@ -47,7 +47,10 @@ func Migrate(ctx context.Context, databaseURL string) error {
 		if _, err := tx.Exec(ctx, `INSERT INTO schema_migrations (version) VALUES ('00001'), ('00002'), ('00003'), ('00004'), ('00005'), ('00006'), ('00007'), ('00008'), ('00009'), ('00010'), ('00011')`); err != nil {
 			return fmt.Errorf("record baseline: %w", err)
 		}
-		return tx.Commit(ctx)
+		if err := tx.Commit(ctx); err != nil {
+			return err
+		}
+		return applyLaterMigrations(ctx, pool)
 	}
 
 	if err := applyMigration(ctx, pool, "00002", "migrations/00002_friendships.sql"); err != nil {
@@ -77,7 +80,23 @@ func Migrate(ctx context.Context, databaseURL string) error {
 	if err := applyMigration(ctx, pool, "00010", "migrations/00010_account_profile.sql"); err != nil {
 		return err
 	}
-	return applyMigration(ctx, pool, "00011", "migrations/00011_notes_chat.sql")
+	if err := applyMigration(ctx, pool, "00011", "migrations/00011_notes_chat.sql"); err != nil {
+		return err
+	}
+	return applyLaterMigrations(ctx, pool)
+}
+
+func applyLaterMigrations(ctx context.Context, pool *pgxpool.Pool) error {
+	if err := applyMigration(ctx, pool, "00012", "migrations/00012_phone_invites.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00013", "migrations/00013_long_term_loans.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00014", "migrations/00014_institution_co_lenders.sql"); err != nil {
+		return err
+	}
+	return applyMigration(ctx, pool, "00015", "migrations/00015_alone_loans_and_currencies.sql")
 }
 
 func applyMigration(ctx context.Context, pool *pgxpool.Pool, version, path string) error {

@@ -1,4 +1,5 @@
 import { Pressable, Text, View } from 'react-native';
+import { IconBack } from './icons';
 import { fonts, radii, space, useTheme } from './theme';
 import { Card, PrimaryButton, SecondaryButton } from './ui';
 
@@ -22,8 +23,22 @@ export function PeerProfileScreen({ peer, isSelf, selfInitial, onBack, onMessage
   const avatarLetter = (isSelf ? selfInitial : peer.display_name.slice(0, 1))?.toUpperCase() || '?';
   return (
     <View style={{ gap: space.md }}>
-      <Pressable onPress={onBack}>
-        <Text style={{ color: colors.tertiary, fontFamily: fonts.uiSemi, fontSize: 15 }}>Back</Text>
+      <Pressable
+        onPress={onBack}
+        accessibilityRole="button"
+        accessibilityLabel="Back"
+        style={{
+          width: 42,
+          height: 42,
+          borderRadius: 21,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: colors.surface,
+          borderWidth: 1,
+          borderColor: colors.border,
+        }}
+      >
+        <IconBack size={18} color={colors.text} />
       </Pressable>
       <Card>
         <View style={{ alignItems: 'center', gap: 12, paddingVertical: 12 }}>
@@ -44,14 +59,12 @@ export function PeerProfileScreen({ peer, isSelf, selfInitial, onBack, onMessage
           <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>
             {isSelf ? 'Self' : peer.display_name}
           </Text>
-          {peer.username && !isSelf ? (
+          {peer.username ? (
             <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 14 }}>@{peer.username}</Text>
           ) : null}
         </View>
         <PrimaryButton label="Message" onPress={onMessage} />
-        {!isSelf && onCreateLoan ? (
-          <SecondaryButton label="Create loan" onPress={onCreateLoan} />
-        ) : null}
+        {onCreateLoan ? <SecondaryButton label="New loan" onPress={onCreateLoan} /> : null}
       </Card>
     </View>
   );

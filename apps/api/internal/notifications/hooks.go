@@ -14,6 +14,9 @@ type LoanHooks struct {
 }
 
 func (h LoanHooks) AfterCreate(ctx context.Context, loan loans.Record) error {
+	if loan.IsInstitutional() || loan.Status == loans.StatusActive {
+		return nil
+	}
 	other := loan.BorrowerID
 	if loan.InitiatorID == loan.BorrowerID {
 		other = loan.LenderID
@@ -24,6 +27,9 @@ func (h LoanHooks) AfterCreate(ctx context.Context, loan loans.Record) error {
 func (h LoanHooks) AfterAccept(ctx context.Context, loan loans.Record) error {
 	if err := h.Svc.ScheduleLoanReminders(ctx, loan); err != nil {
 		return err
+	}
+	if loan.IsInstitutional() {
+		return nil
 	}
 	if loan.ProposedByUserID != nil {
 		return h.Svc.NotifyLoanAccepted(ctx, *loan.ProposedByUserID, loan.ID, loan.ReferenceCode)

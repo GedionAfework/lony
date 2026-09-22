@@ -13,6 +13,7 @@
   "dependencies": {
     "@expo-google-fonts/jetbrains-mono": "^0.4.1",
     "@expo-google-fonts/manrope": "^0.4.2",
+    "@expo/vector-icons": "^15.0.2",
     "expo": "~57.0.24",
     "expo-audio": "~57.0.5",
     "expo-auth-session": "~57.0.12",

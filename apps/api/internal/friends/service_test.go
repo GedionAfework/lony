@@ -20,7 +20,7 @@ func TestRequestAcceptList(t *testing.T) {
 	a, b, svc := testUsers()
 	ctx := context.Background()
 
-	req, err := svc.Request(ctx, a.ID, b.Email, "", nil)
+	req, err := svc.Request(ctx, a.ID, b.Email, "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func TestRequestAcceptList(t *testing.T) {
 
 func TestCannotFriendSelf(t *testing.T) {
 	a, _, svc := testUsers()
-	_, err := svc.Request(context.Background(), a.ID, a.Email, "", nil)
+	_, err := svc.Request(context.Background(), a.ID, a.Email, "", "", nil)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -62,14 +62,14 @@ func TestCannotFriendSelf(t *testing.T) {
 func TestDuplicateAccepted(t *testing.T) {
 	a, b, svc := testUsers()
 	ctx := context.Background()
-	req, err := svc.Request(ctx, a.ID, "", "sara", nil)
+	req, err := svc.Request(ctx, a.ID, "", "sara", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.Accept(ctx, b.ID, req.ID); err != nil {
 		t.Fatal(err)
 	}
-	_, err = svc.Request(ctx, a.ID, b.Email, "", nil)
+	_, err = svc.Request(ctx, a.ID, b.Email, "", "", nil)
 	if err == nil {
 		t.Fatal("expected already friends")
 	}
@@ -81,7 +81,7 @@ func TestBlockPreventsRequestAndLoan(t *testing.T) {
 	if _, err := svc.Block(ctx, a.ID, b.ID); err != nil {
 		t.Fatal(err)
 	}
-	_, err := svc.Request(ctx, b.ID, a.Email, "", nil)
+	_, err := svc.Request(ctx, b.ID, a.Email, "", "", nil)
 	if err == nil {
 		t.Fatal("blocked user should not send request")
 	}
@@ -97,7 +97,7 @@ func TestBlockPreventsRequestAndLoan(t *testing.T) {
 func TestRemoveKeepsHistory(t *testing.T) {
 	a, b, svc := testUsers()
 	ctx := context.Background()
-	req, _ := svc.Request(ctx, a.ID, b.Email, "", nil)
+	req, _ := svc.Request(ctx, a.ID, b.Email, "", "", nil)
 	acc, _ := svc.Accept(ctx, b.ID, req.ID)
 	removed, err := svc.Remove(ctx, a.ID, acc.ID)
 	if err != nil {
@@ -115,10 +115,10 @@ func TestRemoveKeepsHistory(t *testing.T) {
 func TestIncomingAcceptShortcut(t *testing.T) {
 	a, b, svc := testUsers()
 	ctx := context.Background()
-	if _, err := svc.Request(ctx, a.ID, b.Email, "", nil); err != nil {
+	if _, err := svc.Request(ctx, a.ID, b.Email, "", "", nil); err != nil {
 		t.Fatal(err)
 	}
-	out, err := svc.Request(ctx, b.ID, a.Email, "", nil)
+	out, err := svc.Request(ctx, b.ID, a.Email, "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

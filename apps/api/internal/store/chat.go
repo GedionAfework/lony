@@ -32,6 +32,46 @@ func (s *SQLStore) GetConversationByID(ctx context.Context, id uuid.UUID) (chat.
 	return c, err
 }
 
+func (s *SQLStore) ListConversationsForPair(ctx context.Context, low, high uuid.UUID) ([]chat.Conversation, error) {
+	const q = `SELECT id, user_low_id, user_high_id, loan_id, last_message_at, created_at
+		FROM conversations WHERE user_low_id=$1 AND user_high_id=$2 ORDER BY created_at ASC`
+	rows, err := s.pool.Query(ctx, q, low, high)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []chat.Conversation{}
+	for rows.Next() {
+		var c chat.Conversation
+		if err := rows.Scan(&c.ID, &c.UserLowID, &c.UserHighID, &c.LoanID, &c.LastMessageAt, &c.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLStore) ListLoanScopedForUser(ctx context.Context, userID uuid.UUID) ([]chat.Conversation, error) {
+	const q = `SELECT c.id, c.user_low_id, c.user_high_id, c.loan_id, c.last_message_at, c.created_at
+		FROM conversations c
+		JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = $1
+		WHERE c.loan_id IS NOT NULL`
+	rows, err := s.pool.Query(ctx, q, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []chat.Conversation{}
+	for rows.Next() {
+		var c chat.Conversation
+		if err := rows.Scan(&c.ID, &c.UserLowID, &c.UserHighID, &c.LoanID, &c.LastMessageAt, &c.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 func (s *SQLStore) InsertConversation(ctx context.Context, low, high uuid.UUID, loanID *uuid.UUID) (chat.Conversation, error) {
 	const q = `INSERT INTO conversations (user_low_id, user_high_id, loan_id) VALUES ($1,$2,$3)
 		RETURNING id, user_low_id, user_high_id, loan_id, last_message_at, created_at`
@@ -121,6 +161,37 @@ func (s *SQLStore) GetMemberLastRead(ctx context.Context, conversationID, userID
 		return nil, err
 	}
 	return at, nil
+}
+
+func (s *SQLStore) MoveMessages(ctx context.Context, fromID, toID uuid.UUID) error {
+	_, err := s.pool.Exec(ctx, `UPDATE messages SET conversation_id=$2 WHERE conversation_id=$1`, fromID, toID)
+	return err
+}
+
+func (s *SQLStore) MergeMemberReads(ctx context.Context, fromID, toID uuid.UUID) error {
+	const q = `
+UPDATE conversation_members dst
+SET last_read_at = GREATEST(
+  COALESCE(dst.last_read_at, '-infinity'::timestamptz),
+  COALESCE(src.last_read_at, '-infinity'::timestamptz)
+)
+FROM conversation_members src
+WHERE dst.conversation_id = $2
+  AND src.conversation_id = $1
+  AND dst.user_id = src.user_id
+  AND src.last_read_at IS NOT NULL`
+	_, err := s.pool.Exec(ctx, q, fromID, toID)
+	return err
+}
+
+func (s *SQLStore) ClearConversationLoanID(ctx context.Context, id uuid.UUID) error {
+	_, err := s.pool.Exec(ctx, `UPDATE conversations SET loan_id = NULL WHERE id = $1`, id)
+	return err
+}
+
+func (s *SQLStore) DeleteConversation(ctx context.Context, id uuid.UUID) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM conversations WHERE id = $1`, id)
+	return err
 }
 
 func (s *SQLStore) CanAccessMediaKey(ctx context.Context, userID uuid.UUID, objectKey string) (bool, error) {

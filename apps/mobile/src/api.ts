@@ -160,6 +160,12 @@ export const api = {
       friendship_status?: string;
       user?: SearchHit;
     }>(`/users/lookup-phone?phone=${encodeURIComponent(phone)}`, { method: 'GET' }, token),
+  invitePhone: (token: string, phone: string) =>
+    request<{ invited: boolean; phone: string }>('/users/invite-phone', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('invite-phone') },
+      body: JSON.stringify({ phone }),
+    }, token),
   listFriends: (token: string) => request<{ friends: Friendship[] }>('/friends', { method: 'GET' }, token),
   listIncoming: (token: string) =>
     request<{ requests: Friendship[] }>('/friend-requests', { method: 'GET' }, token),
@@ -393,6 +399,7 @@ export type Loan = {
   lender: LoanParty;
   your_role: 'borrower' | 'lender';
   interest_basis: string;
+  loan_kind?: 'one_time' | 'long_term';
   principal: string | null;
   currency_code: string | null;
   interest_rate_percent: string | null;
@@ -400,21 +407,49 @@ export type Loan = {
   expected_total: string | null;
   due_at: string | null;
   note: string | null;
+  interest_period_months?: number | null;
+  installment_count?: number | null;
+  installment_amount?: string | null;
+  institution_label?: string | null;
+  institution_type?: string | null;
+  party_mode?: string;
+  start_at?: string | null;
   can_accept: boolean;
   can_reject: boolean;
   can_cancel: boolean;
   can_propose_terms: boolean;
+  co_lenders?: LoanParty[];
   events?: { id: string; event_type: string; created_at: string }[];
+  installments?: LoanInstallment[];
+};
+
+export type LoanInstallment = {
+  id: string;
+  sequence: number;
+  due_at: string;
+  amount: string;
+  principal_portion: string;
+  interest_portion: string;
+  status: string;
+  paid_at?: string | null;
 };
 
 export type CreateLoanBody = {
-  counterparty_id: string;
+  counterparty_id?: string;
+  co_lender_ids?: string[];
   role: 'borrower' | 'lender';
   principal?: string;
   currency_code?: string;
   interest_rate_percent?: string;
   due_at?: string;
   note?: string;
+  loan_kind?: 'one_time' | 'long_term';
+  party_mode?: 'peer' | 'alone' | 'shared';
+  interest_period_months?: number;
+  installment_count?: number;
+  institution_label?: string;
+  institution_type?: string;
+  start_at?: string;
 };
 
 export type LoanTermsBody = {
@@ -423,6 +458,11 @@ export type LoanTermsBody = {
   interest_rate_percent: string;
   due_at: string;
   note?: string;
+  loan_kind?: 'one_time' | 'long_term';
+  interest_period_months?: number;
+  installment_count?: number;
+  institution_label?: string;
+  start_at?: string;
 };
 
 export type DashboardFriend = {
@@ -537,6 +577,15 @@ export type DeviceToken = {
   created_at: string;
 };
 
+export type ConversationMoney = {
+  loan_id: string;
+  role: 'lent' | 'borrowed';
+  amount?: string | null;
+  currency?: string | null;
+  due_at?: string | null;
+  ref?: string;
+};
+
 export type Conversation = {
   id: string;
   peer: { id: string; display_name: string };
@@ -547,6 +596,7 @@ export type Conversation = {
   money_currency?: string | null;
   money_due_at?: string | null;
   money_ref?: string | null;
+  money?: ConversationMoney[];
   last_message_preview?: string;
   last_message_at?: string | null;
   last_message_mine?: boolean;

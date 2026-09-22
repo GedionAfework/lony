@@ -79,6 +79,17 @@ func Build(actor uuid.UUID, now time.Time, rows []loans.Record, parties map[uuid
 			continue
 		}
 		b.open++
+		// Alone / bank debt: borrower == lender placeholder. That is money YOU owe, never receivables.
+		if row.IsInstitutional() {
+			if row.BorrowerID == actor {
+				b.pay = b.pay.Add(amt)
+			}
+			if isDueSoon(row, now) {
+				b.due = b.due.Add(amt)
+				b.dueCount++
+			}
+			continue
+		}
 		peerID := row.OtherParty(actor)
 		fa := b.friends[peerID]
 		if fa == nil {

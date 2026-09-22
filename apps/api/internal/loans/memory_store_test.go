@@ -11,19 +11,23 @@ import (
 )
 
 type memoryStore struct {
-	mu     sync.Mutex
-	users  map[uuid.UUID]Party
-	loans  map[uuid.UUID]Record
-	terms  map[uuid.UUID][]Terms
-	events map[uuid.UUID][]Event
+	mu           sync.Mutex
+	users        map[uuid.UUID]Party
+	loans        map[uuid.UUID]Record
+	terms        map[uuid.UUID][]Terms
+	events       map[uuid.UUID][]Event
+	installments map[uuid.UUID][]Installment
+	coLenders    map[uuid.UUID][]uuid.UUID
 }
 
 func newMemoryStore(users ...Party) *memoryStore {
 	m := &memoryStore{
-		users:  map[uuid.UUID]Party{},
-		loans:  map[uuid.UUID]Record{},
-		terms:  map[uuid.UUID][]Terms{},
-		events: map[uuid.UUID][]Event{},
+		users:        map[uuid.UUID]Party{},
+		loans:        map[uuid.UUID]Record{},
+		terms:        map[uuid.UUID][]Terms{},
+		events:       map[uuid.UUID][]Event{},
+		installments: map[uuid.UUID][]Installment{},
+		coLenders:    map[uuid.UUID][]uuid.UUID{},
 	}
 	for _, u := range users {
 		m.users[u.ID] = u
@@ -102,6 +106,56 @@ func (m *memoryStore) ListEvents(_ context.Context, loanID uuid.UUID) ([]Event, 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]Event{}, m.events[loanID]...), nil
+}
+
+func (m *memoryStore) ListInstallments(_ context.Context, loanID uuid.UUID) ([]Installment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]Installment{}, m.installments[loanID]...), nil
+}
+
+func (m *memoryStore) ReplaceInstallments(_ context.Context, loanID uuid.UUID, rows []Installment) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	copied := make([]Installment, 0, len(rows))
+	for _, row := range rows {
+		row.ID = uuid.New()
+		row.LoanID = loanID
+		if row.CreatedAt.IsZero() {
+			row.CreatedAt = time.Now()
+		}
+		copied = append(copied, row)
+	}
+	m.installments[loanID] = copied
+	return nil
+}
+
+func (m *memoryStore) ListCoLenders(_ context.Context, loanID uuid.UUID) ([]uuid.UUID, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]uuid.UUID{}, m.coLenders[loanID]...), nil
+}
+
+func (m *memoryStore) ReplaceCoLenders(_ context.Context, loanID uuid.UUID, userIDs []uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.coLenders[loanID] = append([]uuid.UUID{}, userIDs...)
+	if rec, ok := m.loans[loanID]; ok {
+		rec.CoLenderIDs = append([]uuid.UUID{}, userIDs...)
+		m.loans[loanID] = rec
+	}
+	return nil
+}
+
+func (m *memoryStore) SaveScheduleMeta(_ context.Context, rec Record) (Record, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.loans[rec.ID]; !ok {
+		return Record{}, pgx.ErrNoRows
+	}
+	rec.UpdatedAt = time.Now()
+	m.loans[rec.ID] = rec
+	return rec, nil
 }
 
 func (m *memoryStore) ProposeTerms(_ context.Context, rec Record, terms Terms, event Event) (Record, error) {

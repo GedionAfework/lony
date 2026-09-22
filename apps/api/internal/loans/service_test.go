@@ -1,4 +1,4 @@
-﻿package loans
+package loans
 
 import (
 	"context"
@@ -15,6 +15,66 @@ func setup() (Party, Party, Party, *Service) {
 	svc := NewService(newMemoryStore(a, b, c), staticGate{ok: true})
 	svc.now = func() time.Time { return time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC) }
 	return a, b, c, svc
+}
+
+func TestCreateInstitutionInfersLongTermAlone(t *testing.T) {
+	a, _, _, svc := setup()
+	ctx := context.Background()
+	label := "JPMorgan Chase"
+	typ := "bank"
+	months := int32(36)
+	// No loan_kind / party_mode — institution alone must still work.
+	created, err := svc.Create(ctx, a.ID, CreateInput{
+		Role:                RoleBorrower,
+		Principal:           ptr("50000"),
+		CurrencyCode:        ptr("USD"),
+		InterestRatePercent: ptr("6.5"),
+		InstitutionLabel:    &label,
+		InstitutionType:     &typ,
+		InstallmentCount:    &months,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Status != StatusActive {
+		t.Fatalf("status %s", created.Status)
+	}
+	if created.LoanKind != KindLongTerm {
+		t.Fatalf("kind %s", created.LoanKind)
+	}
+}
+
+func TestCreateLongTermAloneNoCounterparty(t *testing.T) {
+	a, _, _, svc := setup()
+	ctx := context.Background()
+	kind := KindLongTerm
+	mode := PartyAlone
+	label := "HSBC"
+	typ := "bank"
+	months := int32(24)
+	created, err := svc.Create(ctx, a.ID, CreateInput{
+		Role:                RoleBorrower,
+		Principal:           ptr("100000"),
+		CurrencyCode:        ptr("USD"),
+		InterestRatePercent: ptr("8"),
+		LoanKind:            &kind,
+		PartyMode:           &mode,
+		InstitutionLabel:    &label,
+		InstitutionType:     &typ,
+		InstallmentCount:    &months,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Status != StatusActive {
+		t.Fatalf("status %s want active", created.Status)
+	}
+	if created.LoanKind != KindLongTerm {
+		t.Fatalf("kind %s", created.LoanKind)
+	}
+	if created.InstitutionLabel == nil || *created.InstitutionLabel != label {
+		t.Fatalf("institution %+v", created.InstitutionLabel)
+	}
 }
 
 func futureDue() time.Time {

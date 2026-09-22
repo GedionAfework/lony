@@ -1,6 +1,6 @@
-import { useMemo } from 'react';
+import { useMemo, type Ref } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View, type TextInputProps, type ViewStyle } from 'react-native';
-import { IconMoon, IconSun } from './icons';
+import { IconMoon, IconSun, IconBack } from './icons';
 import { fonts, radii, space, useTheme, type ThemeColors } from './theme';
 
 export function Screen({ children, style }: { children: React.ReactNode; style?: ViewStyle }) {
@@ -129,6 +129,71 @@ export function StatusPill({ status }: { status: string }) {
     >
       <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: s.fg }} />
       <Text style={{ color: s.fg, fontFamily: fonts.mono, fontSize: 10, letterSpacing: 0.3 }}>{s.label}</Text>
+    </View>
+  );
+}
+
+export function DueDatePill({
+  dueAt,
+  status,
+  locale,
+}: {
+  dueAt?: string | null;
+  status: string;
+  locale?: string | null;
+}) {
+  const { colors } = useTheme();
+  if (!dueAt) {
+    const pending = status === 'pending';
+    return (
+      <View
+        style={{
+          borderRadius: radii.full,
+          backgroundColor: pending ? colors.warningSoft : colors.surfaceMuted,
+          paddingHorizontal: 10,
+          paddingVertical: 5,
+        }}
+      >
+        <Text
+          style={{
+            color: pending ? colors.warning : colors.muted,
+            fontFamily: fonts.mono,
+            fontSize: 10,
+            letterSpacing: 0.3,
+          }}
+        >
+          {pending ? 'Pending' : '—'}
+        </Text>
+      </View>
+    );
+  }
+  const due = new Date(dueAt);
+  const label = due.toLocaleDateString(locale || 'en', { month: 'short', day: 'numeric' });
+  const startToday = new Date();
+  startToday.setHours(0, 0, 0, 0);
+  const startDue = new Date(due.getFullYear(), due.getMonth(), due.getDate());
+  const overdue = status === 'overdue' || startDue < startToday;
+  const soon =
+    !overdue &&
+    startDue.getTime() - startToday.getTime() <= 7 * 86400000 &&
+    startDue.getTime() >= startToday.getTime();
+
+  let bg = colors.successSoft;
+  let fg = colors.success;
+  if (overdue) {
+    bg = colors.error;
+    fg = '#FFFFFF';
+  } else if (soon || status === 'repayment_pending' || status === 'pending') {
+    bg = colors.warningSoft;
+    fg = colors.warning;
+  } else if (status === 'completed' || status === 'cancelled' || status === 'rejected') {
+    bg = colors.surfaceMuted;
+    fg = colors.muted;
+  }
+
+  return (
+    <View style={{ borderRadius: radii.full, backgroundColor: bg, paddingHorizontal: 10, paddingVertical: 5 }}>
+      <Text style={{ color: fg, fontFamily: fonts.mono, fontSize: 10, letterSpacing: 0.3 }}>{label}</Text>
     </View>
   );
 }
@@ -279,6 +344,8 @@ export function Field({
   secure,
   keyboardType,
   placeholder,
+  onFocus,
+  inputRef,
 }: {
   label: string;
   value: string;
@@ -286,6 +353,8 @@ export function Field({
   secure?: boolean;
   keyboardType?: TextInputProps['keyboardType'];
   placeholder?: string;
+  onFocus?: TextInputProps['onFocus'];
+  inputRef?: Ref<TextInput>;
 }) {
   const { colors } = useTheme();
   return (
@@ -302,6 +371,7 @@ export function Field({
         {label}
       </Text>
       <TextInput
+        ref={inputRef}
         value={value}
         onChangeText={onChange}
         secureTextEntry={secure}
@@ -310,6 +380,7 @@ export function Field({
         keyboardType={keyboardType ?? 'default'}
         placeholder={placeholder}
         placeholderTextColor={colors.muted}
+        onFocus={onFocus}
         style={{
           backgroundColor: colors.surfaceMuted,
           color: colors.text,
@@ -390,18 +461,48 @@ export function ScreenHeader({
 }) {
   const { colors } = useTheme();
   return (
-    <View style={{ gap: 6, marginBottom: 4 }}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minHeight: 36 }}>
+    <View style={{ gap: 10, marginBottom: 4 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, minHeight: 42 }}>
         {onBack ? (
-          <Pressable onPress={onBack} accessibilityRole="button" accessibilityLabel={backLabel} hitSlop={8}>
-            <Text style={{ color: colors.tertiary, fontFamily: fonts.uiSemi, fontSize: 15 }}>{backLabel}</Text>
+          <Pressable
+            onPress={onBack}
+            accessibilityRole="button"
+            accessibilityLabel={backLabel}
+            style={{
+              width: 42,
+              height: 42,
+              borderRadius: 21,
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: colors.surface,
+              borderWidth: StyleSheet.hairlineWidth,
+              borderColor: colors.border,
+            }}
+          >
+            <IconBack size={18} color={colors.text} />
           </Pressable>
         ) : (
-          <View style={{ width: 48 }} />
+          <View style={{ width: 42 }} />
         )}
-        {right ?? <View style={{ width: 48 }} />}
+        <View
+          style={{
+            flex: 1,
+            minHeight: 42,
+            borderRadius: 21,
+            paddingHorizontal: 14,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: colors.surface,
+            borderWidth: StyleSheet.hairlineWidth,
+            borderColor: colors.border,
+          }}
+        >
+          <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }} numberOfLines={1}>
+            {title}
+          </Text>
+        </View>
+        {right ?? <View style={{ width: 42 }} />}
       </View>
-      <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 24 }}>{title}</Text>
     </View>
   );
 }

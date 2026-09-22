@@ -15,7 +15,8 @@
       "supportsTablet": false,
       "bundleIdentifier": "io.lony.app",
       "infoPlist": {
-        "NSContactsUsageDescription": "Lony uses contacts so you can find friends by phone and invite them to a loan."
+        "NSContactsUsageDescription": "Lony uses contacts so you can find friends by phone and invite them to a loan.",
+        "NSMicrophoneUsageDescription": "Lony uses the microphone so you can send voice notes in chat."
       }
     },
     "android": {
@@ -23,7 +24,8 @@
         "backgroundColor": "#FFFFFF"
       },
       "package": "io.lony.app",
-      "permissions": ["READ_CONTACTS"],
+      "softwareKeyboardLayoutMode": "resize",
+      "permissions": ["READ_CONTACTS", "RECORD_AUDIO", "MODIFY_AUDIO_SETTINGS"],
       "intentFilters": [
         {
           "action": "VIEW",
@@ -35,7 +37,12 @@
     "plugins": [
       "expo-secure-store",
       "expo-font",
-      "expo-audio",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Allow Lony to use the microphone for voice notes."
+        }
+      ],
       [
         "expo-image-picker",
         {

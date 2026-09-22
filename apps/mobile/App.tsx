@@ -15,7 +15,7 @@ import {
   Manrope_700Bold,
   useFonts as useManrope,
 } from '@expo-google-fonts/manrope';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   KeyboardAvoidingView,
@@ -28,6 +28,7 @@ import {
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { api, DISCLAIMER, type AppNotification, type BankProfile, type BankProfileShare, type Dashboard, type Friendship, type Loan, type Repayment, type SearchHit, type User } from './src/api';
+import { formatMoney as formatMoneyLocale, stripAmount } from './src/amountFormat';
 import { AnalyticsScreen } from './src/AnalyticsScreen';
 import { AppHeader } from './src/AppHeader';
 import { AuthScreens } from './src/AuthScreens';
@@ -38,7 +39,8 @@ import { ChatSearchScreen } from './src/ChatSearchScreen';
 import { DashboardHome } from './src/DashboardHome';
 import { DateField } from './src/DateField';
 import { DrawerMenu, type DrawerItem } from './src/DrawerMenu';
-import { IconSearch } from './src/icons';
+import { IconPlus, IconSearch } from './src/icons';
+import { resolveInstitutionLabel } from './src/institutions';
 import { LoansScreen } from './src/LoansScreen';
 import { NewLoanScreen } from './src/NewLoanScreen';
 import { PeerProfileScreen } from './src/PeerProfileScreen';
@@ -51,7 +53,7 @@ import {
 import { OnboardingScreen } from './src/OnboardingScreen';
 import { PlaceholderScreen } from './src/PlaceholderScreen';
 import { TermsScreen } from './src/TermsScreen';
-import { ThemeProvider, radii, useTheme } from './src/theme';
+import { ThemeProvider, fonts, radii, useTheme } from './src/theme';
 import { registerPushToken } from './src/push';
 import { SearchSelect } from './src/SearchSelect';
 import { SettingsScreen } from './src/SettingsScreen';
@@ -75,23 +77,7 @@ function statusLabel(status: string): string {
 }
 
 function formatMoney(amount: string | null | undefined, currency: string | null | undefined, locale = 'en'): string {
-  if (!amount) {
-    return '';
-  }
-  const n = Number(amount);
-  if (Number.isFinite(n)) {
-    try {
-      return new Intl.NumberFormat(locale, {
-        style: currency ? 'currency' : 'decimal',
-        currency: currency || undefined,
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 4,
-      }).format(n);
-    } catch {
-      /* fall through */
-    }
-  }
-  return currency ? `${amount} ${currency}` : amount;
+  return formatMoneyLocale(amount, currency, locale);
 }
 
 type Screen =
@@ -139,6 +125,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   const styles = useAppStyles();
   const { colors, resolved } = useTheme();
   const googleAuth = useGoogleIdTokenAuth();
+  const scrollRef = useRef<ScrollView>(null);
 
   const [screen, setScreen] = useState<Screen>('login');
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -157,10 +144,20 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   const [loanLockedPeer, setLoanLockedPeer] = useState<{ id: string; display_name: string } | null>(null);
   const [chatThreadOpen, setChatThreadOpen] = useState(false);
   const [loanRole, setLoanRole] = useState<'borrower' | 'lender'>('borrower');
+  const [loanKind, setLoanKind] = useState<'one_time' | 'long_term'>('one_time');
+  const [partyMode, setPartyMode] = useState<'alone' | 'shared'>('alone');
+  const [lenderIds, setLenderIds] = useState<string[]>([]);
   const [principal, setPrincipal] = useState('');
   const [interest, setInterest] = useState('0');
   const [currency, setCurrency] = useState('');
   const [dueDate, setDueDate] = useState('');
+  const [interestPeriodMonths, setInterestPeriodMonths] = useState('');
+  const [installmentCount, setInstallmentCount] = useState('12');
+  const [institutionType, setInstitutionType] = useState('');
+  const [institutionId, setInstitutionId] = useState('');
+  const [institutionOther, setInstitutionOther] = useState('');
+  const [institutionLabel, setInstitutionLabel] = useState('');
+  const [startDate, setStartDate] = useState('');
   const [note, setNote] = useState('');
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [dashCurrency, setDashCurrency] = useState('');
@@ -694,32 +691,97 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   }
 
   async function onCreateLoan() {
-    if (!token || !loanFriendId) {
+    if (!token) {
       return;
+    }
+    const institutionName =
+      resolveInstitutionLabel(institutionType, institutionId, institutionOther).trim() ||
+      institutionOther.trim() ||
+      (institutionType ? institutionType.replace(/_/g, ' ') : '');
+    const alone =
+      loanKind === 'long_term' &&
+      (partyMode === 'alone' || (!loanLockedPeer && lenderIds.length === 0 && !loanFriendId));
+    const lenders = alone
+      ? []
+      : loanLockedPeer
+        ? [loanLockedPeer.id]
+        : lenderIds.length
+          ? lenderIds
+          : loanFriendId
+            ? [loanFriendId]
+            : [];
+    if (loanKind === 'one_time' && !loanFriendId && !loanLockedPeer) {
+      return;
+    }
+    if (loanKind === 'long_term') {
+      if (!institutionName) {
+        setError('Select or enter the financial institution');
+        return;
+      }
+      if (!alone && lenders.length === 0) {
+        setError('Add at least one lender, or choose Alone');
+        return;
+      }
     }
     setBusy(true);
     setError(null);
     try {
-      const hasTerms = Boolean(principal.trim() && dueDate.trim() && currency.trim());
-      if (principal.trim() && !currency.trim()) {
+      const period = Number(interestPeriodMonths) || 0;
+      const months = Number(stripAmount(installmentCount)) || 0;
+      const principalRaw = stripAmount(principal);
+      const interestRaw = stripAmount(interest) || '0';
+      const hasTerms =
+        loanKind === 'long_term'
+          ? Boolean(principalRaw && currency.trim() && months >= 2)
+          : Boolean(principalRaw && dueDate.trim() && currency.trim());
+      if (principalRaw && !currency.trim()) {
         setError('Select a currency');
         setBusy(false);
         return;
       }
-      const created = await api.createLoan(token, {
-        counterparty_id: loanFriendId,
-        role: loanRole,
-        ...(hasTerms
-          ? {
-              principal: principal.trim(),
-              currency_code: currency.trim().toUpperCase(),
-              interest_rate_percent: interest.trim() || '0',
-              due_at: new Date(`${dueDate.trim()}T12:00:00.000Z`).toISOString(),
-            }
-          : {}),
-        note: note.trim() || undefined,
-      });
+      if (loanKind === 'one_time' && Number(interestRaw) > 0 && period < 1) {
+        setError('Set an interest calculating period (months)');
+        setBusy(false);
+        return;
+      }
+      const body: Parameters<typeof api.createLoan>[1] = {
+        role: alone ? 'borrower' : loanRole,
+        loan_kind: loanKind === 'long_term' || alone ? 'long_term' : 'one_time',
+      };
+      if (!alone && lenders[0]) {
+        body.counterparty_id = lenders[0];
+      }
+      if (!alone && lenders.length > 1) {
+        body.co_lender_ids = lenders.slice(1);
+      }
+      if (loanKind === 'long_term' || alone) {
+        body.party_mode = alone ? 'alone' : 'shared';
+        body.institution_label = institutionName;
+        if (institutionType) {
+          body.institution_type = institutionType;
+        }
+      }
+      if (hasTerms) {
+        body.principal = principalRaw;
+        body.currency_code = currency.trim().toUpperCase();
+        body.interest_rate_percent = interestRaw;
+        if (loanKind === 'one_time' && !alone) {
+          body.due_at = new Date(`${dueDate.trim()}T12:00:00.000Z`).toISOString();
+          if (period > 0) body.interest_period_months = period;
+        } else {
+          body.installment_count = months;
+          body.interest_period_months = months;
+          if (startDate.trim()) {
+            body.start_at = new Date(`${startDate.trim()}T12:00:00.000Z`).toISOString();
+          }
+        }
+      }
+      if (note.trim()) {
+        body.note = note.trim();
+      }
+      const created = await api.createLoan(token, body);
       setSelectedLoan(created.loan);
+      setInstitutionLabel(institutionName);
       setScreen('loan');
       await refreshFriends();
     } catch (e) {
@@ -1062,7 +1124,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     authed &&
     user?.profile_complete &&
     !chatThreadOpen &&
-    !['login', 'register', 'verify', 'onboarding', 'tos'].includes(screen);
+    !['login', 'register', 'verify', 'onboarding', 'tos', 'loan', 'new-loan'].includes(screen);
 
   function drawerActive(): DrawerItem | null {
     if (screen === 'expenses') return 'expenses';
@@ -1150,8 +1212,9 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     <SafeAreaView style={styles.safe}>
       <StatusBar style={resolved === 'dark' ? 'light' : 'dark'} />
       <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.flex}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
       >
         <DrawerMenu
           open={drawerOpen}
@@ -1202,8 +1265,15 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
           </ScrollView>
         ) : (
         <ScrollView
-          contentContainerStyle={[styles.container, showNav ? { paddingBottom: 96 } : null]}
+          ref={scrollRef}
+          contentContainerStyle={[
+            styles.container,
+            showNav ? { paddingBottom: 96 } : null,
+            screen === 'new-loan' ? { paddingBottom: 280 } : null,
+          ]}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
+          automaticallyAdjustKeyboardInsets
         >
           {error ? <Text style={styles.error}>{error}</Text> : null}
           {showChrome ? <AppHeader onMenu={() => setDrawerOpen(true)} right={headerSearch} /> : null}
@@ -1269,15 +1339,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
             <LoansScreen
               user={user}
               loans={loans}
-              loanFilter={loanFilter}
-              onFilter={applyLoanFilter}
               onOpenLoan={openLoan}
-              onNewLoan={() => {
-                setLoanFriendId(friends[0]?.peer.id ?? '');
-                setLoanLockedPeer(null);
-                setCurrency(user.default_currency_code ?? '');
-                setScreen('new-loan');
-              }}
               formatMoney={formatMoney}
             />
           ) : null}
@@ -1362,27 +1424,63 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
 
           {screen === 'new-loan' && user && token ? (
             <NewLoanScreen
+              token={token}
               friends={friends}
               loanFriendId={loanFriendId}
+              lenderIds={lenderIds}
               loanRole={loanRole}
+              loanKind={loanKind}
+              partyMode={partyMode}
               principal={principal}
               interest={interest}
               currency={currency}
               dueDate={dueDate}
+              interestPeriodMonths={interestPeriodMonths}
+              installmentCount={installmentCount}
+              institutionType={institutionType}
+              institutionId={institutionId}
+              institutionOther={institutionOther}
+              startDate={startDate}
               note={note}
               busy={busy}
               countryCode={profileCountry || user.country_code || 'ET'}
               lockedPeer={loanLockedPeer}
               onSelectFriend={setLoanFriendId}
+              onToggleLender={(id) => {
+                setLenderIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+                setLoanFriendId(id);
+              }}
               onRole={setLoanRole}
+              onLoanKind={(kind) => {
+                setLoanKind(kind);
+                if (kind === 'long_term') {
+                  setPartyMode('alone');
+                }
+              }}
+              onPartyMode={(mode) => {
+                setPartyMode(mode);
+                if (mode === 'alone') {
+                  setLenderIds([]);
+                  setLoanFriendId('');
+                }
+              }}
               onPrincipal={setPrincipal}
               onInterest={setInterest}
               onCurrency={setCurrency}
               onDueDate={setDueDate}
+              onInterestPeriodMonths={setInterestPeriodMonths}
+              onInstallmentCount={setInstallmentCount}
+              onInstitutionType={setInstitutionType}
+              onInstitutionId={setInstitutionId}
+              onInstitutionOther={setInstitutionOther}
+              onStartDate={setStartDate}
               onNote={setNote}
               onBack={() => setScreen(loanLockedPeer ? 'chats' : 'loans')}
               onCreate={onCreateLoan}
               onError={(message) => setError(message)}
+              onFieldFocus={(y) => {
+                scrollRef.current?.scrollTo({ y: Math.max(0, y - 24), animated: true });
+              }}
               onLookupPhone={async (e164) => {
                 if (!token) return 'error';
                 setBusy(true);
@@ -1393,6 +1491,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                     return 'invited';
                   }
                   setLoanFriendId(res.user.id);
+                  setLenderIds((prev) => (prev.includes(res.user!.id) ? prev : [...prev, res.user!.id]));
                   await refreshFriends(token);
                   return 'selected';
                 } catch (e) {
@@ -1445,9 +1544,11 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                   size="xl"
                 />
                 <Text style={styles.muted}>
-                  {selectedLoan.your_role === 'borrower'
-                    ? `From ${selectedLoan.lender.display_name}`
-                    : `To ${selectedLoan.borrower.display_name}`}
+                  {selectedLoan.institution_label
+                    ? `From ${selectedLoan.institution_label}`
+                    : selectedLoan.your_role === 'borrower'
+                      ? `From ${selectedLoan.lender.display_name}`
+                      : `To ${selectedLoan.borrower.display_name}`}
                 </Text>
                 {selectedLoan.principal ? (
                   <Text style={styles.muted}>
@@ -1770,6 +1871,41 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         )}
         {showNav ? (
           <BottomNav active={tabFromScreen(screen)} unread={unreadCount} onChange={goTab} />
+        ) : null}
+        {showNav && screen === 'loans' ? (
+          <Pressable
+            onPress={() => {
+              setLoanFriendId('');
+              setLoanLockedPeer(null);
+              setLenderIds([]);
+              setLoanKind('one_time');
+              setPartyMode('alone');
+              setCurrency(user?.default_currency_code ?? '');
+              setScreen('new-loan');
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="New loan"
+            style={{
+              position: 'absolute',
+              left: 20,
+              bottom: 96,
+              width: 56,
+              height: 56,
+              borderRadius: 28,
+              alignItems: 'center',
+              justifyContent: 'center',
+              backgroundColor: colors.primary,
+              borderWidth: 3,
+              borderColor: colors.fabBorder,
+              shadowColor: '#000',
+              shadowOpacity: 0.12,
+              shadowRadius: 8,
+              shadowOffset: { width: 0, height: 4 },
+              elevation: 4,
+            }}
+          >
+            <IconPlus size={24} color={colors.onPrimary} />
+          </Pressable>
         ) : null}
       </KeyboardAvoidingView>
     </SafeAreaView>
