@@ -492,9 +492,20 @@ export function ChatScreen({
                   <View style={styles.metaCol}>
                     <Text style={styles.rowTime}>{formatChatListTime(c.last_message_at)}</Text>
                     {c.last_message_mine ? (
-                      <Text style={[styles.ticks, { color: c.last_message_read ? '#34B7F1' : colors.muted }]}>
-                        ✓
-                      </Text>
+                      <View style={styles.tickStack}>
+                        <Text
+                          style={[
+                            styles.tickMark,
+                            styles.tickBack,
+                            { color: colors.text },
+                          ]}
+                        >
+                          ✓
+                        </Text>
+                        {c.last_message_read ? (
+                          <Text style={[styles.tickMark, styles.tickFront, { color: colors.text }]}>✓</Text>
+                        ) : null}
+                      </View>
                     ) : c.unread_count > 0 ? (
                       <View style={styles.unreadBadge}>
                         <Text style={styles.unreadBadgeText}>{c.unread_count > 99 ? '99+' : c.unread_count}</Text>
@@ -620,7 +631,7 @@ export function ChatScreen({
               </View>
             ) : null}
             <View style={styles.bubbleBody}>
-              <Text style={[styles.bubbleText, item.mine && styles.mineText]}>
+              <Text style={[styles.bubbleText, item.mine && styles.mineText, item.mine ? styles.bubblePadMine : styles.bubblePadTheirs]}>
                 {item.body
                   ? item.body
                   : item.attachment_kind === 'voice'
@@ -630,20 +641,26 @@ export function ChatScreen({
                       : item.attachment_kind === 'file'
                         ? `File · ${item.attachment_name || 'Attachment'}`
                         : ''}
-                <Text style={styles.timeGhost}>
-                  {'  '}
-                  {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                  {item.mine ? ' ✓' : ''}
-                </Text>
               </Text>
               <View style={styles.timeCornerRow}>
                 <Text style={[styles.timeCorner, item.mine && styles.mineTime]}>
                   {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                 </Text>
                 {item.mine ? (
-                  <Text style={[styles.tickMark, { color: item.read ? '#34B7F1' : item.mine ? 'rgba(255,255,255,0.55)' : colors.muted }]}>
-                    ✓
-                  </Text>
+                  <View style={styles.tickStack}>
+                    <Text
+                      style={[
+                        styles.tickMark,
+                        styles.tickBack,
+                        { color: colors.text },
+                      ]}
+                    >
+                      ✓
+                    </Text>
+                    {item.read ? (
+                      <Text style={[styles.tickMark, styles.tickFront, { color: colors.text }]}>✓</Text>
+                    ) : null}
+                  </View>
                 ) : null}
               </View>
             </View>
@@ -985,16 +1002,17 @@ function makeStyles(colors: ThemeColors) {
       borderBottomRightRadius: 16,
     },
     bubbleText: { color: colors.text, fontSize: 15, lineHeight: 21, fontFamily: fonts.ui },
+    bubblePadMine: { paddingRight: 52 },
+    bubblePadTheirs: { paddingRight: 36 },
     mineText: { color: colors.onPrimary },
     bubbleBody: { position: 'relative' },
-    timeGhost: { fontSize: 9, lineHeight: 21, opacity: 0, fontFamily: fonts.ui },
     timeCornerRow: {
       position: 'absolute',
       right: 0,
       bottom: -2,
       flexDirection: 'row',
       alignItems: 'center',
-      gap: 3,
+      gap: 2,
     },
     timeCorner: {
       color: colors.muted,
@@ -1002,7 +1020,15 @@ function makeStyles(colors: ThemeColors) {
       lineHeight: 12,
       fontFamily: fonts.ui,
     },
-    tickMark: { fontSize: 11, lineHeight: 12, fontFamily: fonts.ui },
+    tickStack: {
+      width: 16,
+      height: 14,
+      position: 'relative',
+      marginLeft: 1,
+    },
+    tickMark: { fontSize: 12, lineHeight: 14, fontFamily: fonts.uiBold, position: 'absolute', top: 0 },
+    tickBack: { left: 0 },
+    tickFront: { left: 5 },
     timeInline: { color: colors.muted, fontSize: 9, fontFamily: fonts.ui },
     playHint: { color: colors.muted, fontSize: 11, fontFamily: fonts.ui, marginTop: 2 },
     time: { color: colors.muted, fontSize: 9, alignSelf: 'flex-end', fontFamily: fonts.ui },

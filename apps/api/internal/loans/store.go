@@ -66,6 +66,7 @@ type Record struct {
 	OutstandingAmount    *decimal.Decimal
 	DueAt                *time.Time
 	Note                 *string
+	Title                *string
 	LoanKind             string
 	InterestPeriodMonths *int32
 	InstallmentCount     *int32
@@ -144,6 +145,7 @@ type LoanDTO struct {
 	ExpectedTotal        *string           `json:"expected_total"`
 	DueAt                *time.Time        `json:"due_at"`
 	Note                 *string           `json:"note"`
+	Title                *string           `json:"title,omitempty"`
 	InterestPeriodMonths *int32            `json:"interest_period_months,omitempty"`
 	InstallmentCount     *int32            `json:"installment_count,omitempty"`
 	InstallmentAmount    *string           `json:"installment_amount,omitempty"`
@@ -216,6 +218,7 @@ type CreateInput struct {
 	InterestRatePercent  *string
 	DueAt                *time.Time
 	Note                 *string
+	Title                *string
 	LoanKind             *string
 	InterestPeriodMonths *int32
 	InstallmentCount     *int32
@@ -223,6 +226,8 @@ type CreateInput struct {
 	InstitutionType      *string
 	PartyMode            *string
 	StartAt              *time.Time
+	// AutoAccept activates peer loans immediately (used for expense splits).
+	AutoAccept bool
 }
 
 type TermsInput struct {
@@ -254,6 +259,7 @@ type Store interface {
 	ListEvents(ctx context.Context, loanID uuid.UUID) ([]Event, error)
 	ListInstallments(ctx context.Context, loanID uuid.UUID) ([]Installment, error)
 	ReplaceInstallments(ctx context.Context, loanID uuid.UUID, rows []Installment) error
+	MarkInstallmentPaid(ctx context.Context, loanID, installmentID uuid.UUID, paidAt time.Time) (Installment, error)
 	ReplaceCoLenders(ctx context.Context, loanID uuid.UUID, userIDs []uuid.UUID) error
 	ListCoLenders(ctx context.Context, loanID uuid.UUID) ([]uuid.UUID, error)
 	ProposeTerms(ctx context.Context, rec Record, terms Terms, event Event) (Record, error)

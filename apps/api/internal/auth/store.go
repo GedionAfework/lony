@@ -24,6 +24,7 @@ type UserRecord struct {
 	AvatarObjectKey       *string
 	EmailVerifiedAt       *time.Time
 	Status                string
+	Role                  string
 	Timezone              string
 	Locale                string
 	DefaultCurrencyCode   *string

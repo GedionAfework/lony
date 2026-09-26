@@ -88,3 +88,15 @@ export function IconContact({ size = 22, color, style }: IconProps) {
 export function IconBank({ size = 22, color, style }: IconProps) {
   return <FontAwesome name="university" size={size} color={useIconColor(color)} style={style} />;
 }
+
+export function IconEdit({ size = 22, color, style }: IconProps) {
+  return <FontAwesome name="pencil" size={size} color={useIconColor(color)} style={style} />;
+}
+
+export function IconTrash({ size = 22, color, style }: IconProps) {
+  return <FontAwesome name="trash-o" size={size} color={useIconColor(color)} style={style} />;
+}
+
+export function IconRepeat({ size = 22, color, style }: IconProps) {
+  return <FontAwesome name="refresh" size={size} color={useIconColor(color)} style={style} />;
+}

@@ -82,6 +82,16 @@ func (h *Handler) ListFriends(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"friends": out})
 }
 
+func (h *Handler) ListPeers(w http.ResponseWriter, r *http.Request) {
+	limit := 30
+	out, err := h.svc.ListPeers(r.Context(), auth.UserIDFrom(r.Context()), r.URL.Query().Get("q"), limit)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"peers": out})
+}
+
 func (h *Handler) ListIncoming(w http.ResponseWriter, r *http.Request) {
 	out, err := h.svc.ListIncoming(r.Context(), auth.UserIDFrom(r.Context()))
 	if err != nil {

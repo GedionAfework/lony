@@ -1,7 +1,7 @@
 import { Modal, Pressable, Text, View } from 'react-native';
 import { fonts, radii, space, useTheme } from './theme';
 
-export type DrawerItem = 'expenses' | 'loans' | 'analytics' | 'plan' | 'settings';
+export type DrawerItem = 'expenses' | 'accounts' | 'loans' | 'analytics' | 'plan' | 'settings';
 
 type Props = {
   open: boolean;
@@ -12,8 +12,9 @@ type Props = {
 
 const ITEMS: { id: DrawerItem; label: string }[] = [
   { id: 'expenses', label: 'Expenses' },
+  { id: 'accounts', label: 'Accounts' },
   { id: 'loans', label: 'Loans' },
-  { id: 'analytics', label: 'Analytics' },
+  { id: 'analytics', label: 'Insights' },
   { id: 'plan', label: 'Plan' },
   { id: 'settings', label: 'Settings' },
 ];

@@ -27,7 +27,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import { api, DISCLAIMER, type AppNotification, type BankProfile, type BankProfileShare, type Dashboard, type Friendship, type Loan, type Repayment, type SearchHit, type User } from './src/api';
+import { api, DISCLAIMER, type AppNotification, type BankProfile, type BankProfileShare, type CashflowEntry, type Dashboard, type Friendship, type Loan, type LoanInstallment, type Repayment, type SearchHit, type User } from './src/api';
 import { formatMoney as formatMoneyLocale, stripAmount } from './src/amountFormat';
 import { AnalyticsScreen } from './src/AnalyticsScreen';
 import { AppHeader } from './src/AppHeader';
@@ -36,10 +36,13 @@ import { BottomNav, type TabId } from './src/BottomNav';
 import { COUNTRIES, CURRENCIES } from './src/catalogs';
 import { ChatScreen } from './src/ChatScreen';
 import { ChatSearchScreen } from './src/ChatSearchScreen';
-import { DashboardHome } from './src/DashboardHome';
 import { DateField } from './src/DateField';
 import { DrawerMenu, type DrawerItem } from './src/DrawerMenu';
-import { IconPlus, IconSearch } from './src/icons';
+import { AccountsScreen } from './src/AccountsScreen';
+import { CashflowFormScreen, CashflowShowScreen } from './src/CashflowScreens';
+import { ExpensesScreen, type ExpensesTab } from './src/ExpensesScreen';
+import { PlanScreen } from './src/PlanScreen';
+import { IconBank, IconPlus, IconSearch } from './src/icons';
 import { resolveInstitutionLabel } from './src/institutions';
 import { LoansScreen } from './src/LoansScreen';
 import { NewLoanScreen } from './src/NewLoanScreen';
@@ -51,13 +54,12 @@ import {
   useGoogleIdTokenAuth,
 } from './src/oauth';
 import { OnboardingScreen } from './src/OnboardingScreen';
-import { PlaceholderScreen } from './src/PlaceholderScreen';
 import { TermsScreen } from './src/TermsScreen';
 import { ThemeProvider, fonts, radii, useTheme } from './src/theme';
 import { registerPushToken } from './src/push';
 import { SearchSelect } from './src/SearchSelect';
-import { SettingsScreen } from './src/SettingsScreen';
-import { Card, EmptyState, Field, Money, PrimaryButton, ScreenHeader, SecondaryButton, SectionLabel, StatusPill, useAppStyles } from './src/ui';
+import { SettingsScreen, shareExportJSON } from './src/SettingsScreen';
+import { Card, DueDatePill, EmptyState, Field, Money, PrimaryButton, ScreenHeader, SecondaryButton, SectionLabel, useAppStyles } from './src/ui';
 
 const ACCESS_KEY = 'lony.access_token';
 const REFRESH_KEY = 'lony.refresh_token';
@@ -76,8 +78,27 @@ function statusLabel(status: string): string {
   return STATUS_LABELS[status] ?? status.replaceAll('_', ' ');
 }
 
+function formatLoanEvent(eventType: string): string {
+  const map: Record<string, string> = {
+    created: 'Loan created',
+    terms_proposed: 'Terms proposed',
+    accepted: 'Accepted',
+    rejected: 'Rejected',
+    cancelled: 'Cancelled',
+    marked_overdue: 'Marked overdue',
+    installment_paid: 'Installment paid',
+  };
+  return map[eventType] ?? eventType.replaceAll('_', ' ');
+}
+
 function formatMoney(amount: string | null | undefined, currency: string | null | undefined, locale = 'en'): string {
   return formatMoneyLocale(amount, currency, locale);
+}
+
+function nextInstallmentDue(loan: Loan): string | null {
+  const rows = loan.installments ?? [];
+  const next = rows.find((row) => row.status === 'scheduled' || row.status === 'overdue');
+  return next?.due_at ?? loan.due_at ?? null;
 }
 
 type Screen =
@@ -89,12 +110,16 @@ type Screen =
   | 'loans'
   | 'new-loan'
   | 'loan'
+  | 'installment'
   | 'banks'
   | 'chats'
   | 'settings'
   | 'expenses'
+  | 'cashflow-new'
+  | 'cashflow-show'
   | 'analytics'
   | 'plan'
+  | 'accounts'
   | 'peer-profile'
   | 'chat-search'
   | 'tos';
@@ -140,6 +165,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   const [query, setQuery] = useState('');
   const [loans, setLoans] = useState<Loan[]>([]);
   const [selectedLoan, setSelectedLoan] = useState<Loan | null>(null);
+  const [selectedInstallment, setSelectedInstallment] = useState<LoanInstallment | null>(null);
   const [loanFriendId, setLoanFriendId] = useState<string>('');
   const [loanLockedPeer, setLoanLockedPeer] = useState<{ id: string; display_name: string } | null>(null);
   const [chatThreadOpen, setChatThreadOpen] = useState(false);
@@ -159,6 +185,12 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   const [institutionLabel, setInstitutionLabel] = useState('');
   const [startDate, setStartDate] = useState('');
   const [note, setNote] = useState('');
+  const [loanTitle, setLoanTitle] = useState('');
+  const [expensesTab, setExpensesTab] = useState<ExpensesTab>('dashboard');
+  const [selectedCashflow, setSelectedCashflow] = useState<CashflowEntry | null>(null);
+  const [cashflowKind, setCashflowKind] = useState<'income' | 'expense'>('expense');
+  const [cashflowReload, setCashflowReload] = useState(0);
+  const [accountsReload, setAccountsReload] = useState(0);
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [dashCurrency, setDashCurrency] = useState('');
   const [loanFilter, setLoanFilter] = useState('');
@@ -382,6 +414,46 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     setScreen('login');
   }
 
+  async function onExportData() {
+    if (!token) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api.exportMyData(token);
+      await shareExportJSON(res.export);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Export failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onDeleteAccount() {
+    if (!token) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.deleteAccount(token);
+      await onLogout();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not delete account');
+      setBusy(false);
+    }
+  }
+
+  async function onClearAI() {
+    if (!token) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.clearAIInsights(token);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not clear AI history');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function refreshFriends(access = token) {
     if (!access) {
       return;
@@ -461,21 +533,17 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     if (!token) {
       return;
     }
-    setBusy(true);
-    setError(null);
-    try {
-      await api.sendRequest(token, { user_id: hit.id });
-      setHits([]);
-      setQuery('');
-      await refreshFriends();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not send request');
-    } finally {
-      setBusy(false);
-    }
+    // Bonds form when a loan/split is accepted — open a loan with this person.
+    setLoanFriendId(hit.id);
+    setLoanLockedPeer({ id: hit.id, display_name: hit.display_name });
+    setCurrency(user?.default_currency_code ?? '');
+    setHits([]);
+    setQuery('');
+    setScreen('new-loan');
   }
 
   async function onAccept(id: string) {
+    // Legacy pending friendship rows: accepting still upgrades the bond.
     if (!token) {
       return;
     }
@@ -744,6 +812,11 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         setBusy(false);
         return;
       }
+      if (!loanTitle.trim() && !institutionName) {
+        setError('Add a title so you can tell loans apart');
+        setBusy(false);
+        return;
+      }
       const body: Parameters<typeof api.createLoan>[1] = {
         role: alone ? 'borrower' : loanRole,
         loan_kind: loanKind === 'long_term' || alone ? 'long_term' : 'one_time',
@@ -778,6 +851,11 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
       }
       if (note.trim()) {
         body.note = note.trim();
+      }
+      if (loanTitle.trim()) {
+        body.title = loanTitle.trim();
+      } else if (institutionName) {
+        body.title = institutionName;
       }
       const created = await api.createLoan(token, body);
       setSelectedLoan(created.loan);
@@ -844,6 +922,25 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
       await refreshFriends();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not propose terms');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onMarkInstallmentPaid() {
+    if (!token || !selectedLoan || !selectedInstallment) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api.markInstallmentPaid(token, selectedLoan.id, selectedInstallment.id);
+      setSelectedLoan(res.loan);
+      const next = (res.loan.installments ?? []).find((row) => row.id === selectedInstallment.id) ?? null;
+      setSelectedInstallment(next);
+      await refreshFriends();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not mark installment paid');
     } finally {
       setBusy(false);
     }
@@ -1124,16 +1221,19 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     authed &&
     user?.profile_complete &&
     !chatThreadOpen &&
-    !['login', 'register', 'verify', 'onboarding', 'tos', 'loan', 'new-loan'].includes(screen);
+    !['login', 'register', 'verify', 'onboarding', 'tos', 'loan', 'installment', 'new-loan', 'cashflow-new', 'cashflow-show'].includes(screen);
 
   function drawerActive(): DrawerItem | null {
-    if (screen === 'expenses') return 'expenses';
+    if (screen === 'expenses' || screen === 'home' || screen === 'cashflow-new' || screen === 'cashflow-show') {
+      return 'expenses';
+    }
+    if (screen === 'accounts') return 'accounts';
     if (
       screen === 'loans' ||
-      screen === 'home' ||
       screen === 'chats' ||
       screen === 'chat-search' ||
       screen === 'loan' ||
+      screen === 'installment' ||
       screen === 'new-loan' ||
       screen === 'peer-profile'
     ) {
@@ -1146,13 +1246,14 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   }
 
   function tabFromScreen(s: Screen): TabId {
-    if (s === 'loans') return 'loans';
+    if (s === 'loans' || s === 'loan' || s === 'new-loan' || s === 'installment') return 'loans';
     if (s === 'chats' || s === 'chat-search' || s === 'peer-profile') return 'chats';
     return 'home';
   }
 
   function goTab(tab: TabId) {
     if (tab === 'home') {
+      setExpensesTab('dashboard');
       setScreen('home');
       return;
     }
@@ -1164,7 +1265,11 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   }
 
   function onDrawerSelect(item: DrawerItem) {
-    if (item === 'expenses') setScreen('expenses');
+    if (item === 'expenses') {
+      setExpensesTab('dashboard');
+      setScreen('home');
+    }
+    if (item === 'accounts') setScreen('accounts');
     if (item === 'loans') setScreen('loans');
     if (item === 'analytics') setScreen('analytics');
     if (item === 'plan') setScreen('plan');
@@ -1174,21 +1279,12 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     }
   }
 
-  const loansModule =
-    screen === 'home' ||
-    screen === 'loans' ||
-    screen === 'chats' ||
-    screen === 'chat-search' ||
-    screen === 'loan' ||
-    screen === 'new-loan' ||
-    screen === 'peer-profile';
-
   const selfInitial = user
     ? ((user.first_name || user.display_name || user.username || '?').trim().slice(0, 1).toUpperCase() || '?')
     : '?';
 
   const headerSearch =
-    showChrome && loansModule ? (
+    showChrome && (screen === 'chats' || screen === 'chat-search') ? (
       <Pressable
         onPress={() => setScreen('chat-search')}
         accessibilityRole="button"
@@ -1326,12 +1422,105 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
           ) : null}
 
           {screen === 'home' && user && token ? (
-            <DashboardHome
+            <ExpensesScreen
               user={user}
-              dashboard={dashboard}
               token={token}
-              onOpenAnalytics={() => setScreen('analytics')}
+              friends={friends}
+              loans={loans}
+              tab={expensesTab}
+              onTab={setExpensesTab}
               formatMoney={formatMoney}
+              onError={(message) => setError(message)}
+              onOpenLoan={openLoan}
+              reloadToken={cashflowReload + accountsReload}
+              onOpenAccounts={() => setScreen('accounts')}
+              onOpenEntry={(entry) => {
+                setSelectedCashflow(entry);
+                setScreen('cashflow-show');
+              }}
+            />
+          ) : null}
+
+          {screen === 'accounts' && user && token ? (
+            <AccountsScreen
+              user={user}
+              token={token}
+              formatMoney={formatMoney}
+              onError={(message) => setError(message)}
+              reloadToken={accountsReload}
+            />
+          ) : null}
+
+          {screen === 'cashflow-new' && user && token ? (
+            <CashflowFormScreen
+              user={user}
+              token={token}
+              kind={cashflowKind}
+              friends={friends}
+              loans={loans}
+              editing={selectedCashflow}
+              countryCode={profileCountry || user.country_code || 'US'}
+              onBack={() => {
+                setSelectedCashflow(null);
+                setScreen('home');
+              }}
+              onSaved={(entry) => {
+                setSelectedCashflow(entry);
+                setCashflowReload((n) => n + 1);
+                setScreen('cashflow-show');
+              }}
+              onError={(message) => setError(message)}
+              onFriendsChanged={() => {
+                void refreshFriends();
+              }}
+              onLookupPhone={async (e164) => {
+                try {
+                  const res = await api.lookupPhone(token, e164);
+                  if (res.user) {
+                    return {
+                      status: 'selected' as const,
+                      id: res.user.id,
+                      name: res.user.display_name,
+                    };
+                  }
+                  await api.invitePhone(token, e164).catch(() => undefined);
+                  return { status: 'invited' as const };
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : 'Could not look up phone');
+                  return { status: 'error' as const };
+                }
+              }}
+            />
+          ) : null}
+
+          {screen === 'cashflow-show' && user && token && selectedCashflow ? (
+            <CashflowShowScreen
+              user={user}
+              token={token}
+              entry={selectedCashflow}
+              friends={friends}
+              formatMoney={formatMoney}
+              onBack={() => {
+                setSelectedCashflow(null);
+                setScreen('home');
+              }}
+              onEdit={() => {
+                setCashflowKind(
+                  selectedCashflow.kind === 'income' || selectedCashflow.is_template ? 'income' : 'expense',
+                );
+                setScreen('cashflow-new');
+              }}
+              onDeleted={() => {
+                setSelectedCashflow(null);
+                setCashflowReload((n) => n + 1);
+                setScreen('home');
+              }}
+              onOpenLoan={openLoan}
+              onError={(message) => setError(message)}
+              onUpdated={(entry) => {
+                setSelectedCashflow(entry);
+                setCashflowReload((n) => n + 1);
+              }}
             />
           ) : null}
 
@@ -1344,23 +1533,22 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
             />
           ) : null}
 
-          {screen === 'expenses' ? (
-            <PlaceholderScreen
-              title="Expenses"
-              emptyTitle="Nothing spent here"
-              emptyBody="Expenses — including loan-related cash — will land in this tracker. Still empty, still calm."
+          {screen === 'analytics' && user && token ? (
+            <AnalyticsScreen
+              user={user}
+              token={token}
+              dashboard={dashboard}
+              formatMoney={formatMoney}
+              onError={(message) => setError(message)}
             />
           ) : null}
 
-          {screen === 'analytics' && user ? (
-            <AnalyticsScreen user={user} dashboard={dashboard} formatMoney={formatMoney} />
-          ) : null}
-
-          {screen === 'plan' ? (
-            <PlaceholderScreen
-              title="Plan"
-              emptyTitle="No plan yet"
-              emptyBody="Budgets and goals will live here. For now it’s a blank page with good intentions."
+          {screen === 'plan' && user && token ? (
+            <PlanScreen
+              user={user}
+              token={token}
+              formatMoney={formatMoney}
+              onError={(message) => setError(message)}
             />
           ) : null}
 
@@ -1418,6 +1606,9 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                 setScreen('banks');
                 api.listPaymentRails().then((res) => setPaymentRails(res.rails ?? [])).catch(() => undefined);
               }}
+              onExportData={onExportData}
+              onDeleteAccount={onDeleteAccount}
+              onClearAI={onClearAI}
               onLogout={onLogout}
             />
           ) : null}
@@ -1442,8 +1633,9 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               institutionOther={institutionOther}
               startDate={startDate}
               note={note}
+              loanTitle={loanTitle}
               busy={busy}
-              countryCode={profileCountry || user.country_code || 'ET'}
+              countryCode={profileCountry || user.country_code || 'US'}
               lockedPeer={loanLockedPeer}
               onSelectFriend={setLoanFriendId}
               onToggleLender={(id) => {
@@ -1475,6 +1667,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               onInstitutionOther={setInstitutionOther}
               onStartDate={setStartDate}
               onNote={setNote}
+              onLoanTitle={setLoanTitle}
               onBack={() => setScreen(loanLockedPeer ? 'chats' : 'loans')}
               onCreate={onCreateLoan}
               onError={(message) => setError(message)}
@@ -1504,8 +1697,9 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
             />
           ) : null}
 
-          {screen === 'peer-profile' && peerProfile && user ? (
+          {screen === 'peer-profile' && peerProfile && user && token ? (
             <PeerProfileScreen
+              token={token}
               peer={peerProfile}
               isSelf={peerProfile.id === user.id}
               selfInitial={selfInitial}
@@ -1528,11 +1722,17 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
           ) : null}
 
           {screen === 'loan' && selectedLoan ? (
-            <View style={{ gap: 14 }}>
+            <View style={{ gap: 14, paddingTop: 4 }}>
               <ScreenHeader
-                title={selectedLoan.reference_code}
+                title={selectedLoan.title || selectedLoan.reference_code}
                 onBack={() => setScreen('loans')}
-                right={<StatusPill status={selectedLoan.status} />}
+                right={
+                  <DueDatePill
+                    dueAt={nextInstallmentDue(selectedLoan)}
+                    status={selectedLoan.status}
+                    locale={user?.locale}
+                  />
+                }
               />
               <Card>
                 <Money
@@ -1543,34 +1743,126 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                   }
                   size="xl"
                 />
-                <Text style={styles.muted}>
-                  {selectedLoan.institution_label
-                    ? `From ${selectedLoan.institution_label}`
-                    : selectedLoan.your_role === 'borrower'
-                      ? `From ${selectedLoan.lender.display_name}`
-                      : `To ${selectedLoan.borrower.display_name}`}
-                </Text>
-                {selectedLoan.principal ? (
-                  <Text style={styles.muted}>
-                    Principal {formatMoney(selectedLoan.principal, selectedLoan.currency_code, user?.locale)} · flat{' '}
-                    {selectedLoan.interest_rate_percent}% · due{' '}
-                    {selectedLoan.due_at
-                      ? new Date(selectedLoan.due_at).toLocaleDateString(user?.locale || 'en', {
-                          year: 'numeric',
-                          month: 'short',
-                          day: 'numeric',
-                        })
-                      : '—'}
+                {selectedLoan.title ? (
+                  <Text style={[styles.muted, { marginBottom: 4 }]}>{selectedLoan.reference_code}</Text>
+                ) : null}
+                {(() => {
+                  if (selectedLoan.institution_label) {
+                    return (
+                      <Text style={[styles.link, { fontFamily: fonts.uiSemi, fontSize: 15 }]}>
+                        {selectedLoan.institution_label}
+                      </Text>
+                    );
+                  }
+                  if (selectedLoan.borrower.id === selectedLoan.lender.id) {
+                    return <Text style={styles.muted}>Your debt</Text>;
+                  }
+                  const peer =
+                    selectedLoan.your_role === 'borrower' ? selectedLoan.lender : selectedLoan.borrower;
+                  const prefix = selectedLoan.your_role === 'borrower' ? 'From' : 'To';
+                  if (peer?.id) {
+                    return (
+                      <Pressable
+                        onPress={() => {
+                          setChatPeerId(peer.id);
+                          setScreen('chats');
+                        }}
+                        accessibilityRole="button"
+                        accessibilityLabel={`${prefix} ${peer.display_name}`}
+                      >
+                        <Text style={[styles.link, { fontFamily: fonts.uiSemi, fontSize: 15 }]}>
+                          {prefix} {peer.display_name}
+                        </Text>
+                      </Pressable>
+                    );
+                  }
+                  return <Text style={styles.muted}>{prefix} — Invite to Lony</Text>;
+                })()}
+                {selectedLoan.loan_kind === 'long_term' && selectedLoan.installment_amount ? (
+                  <Text style={[styles.muted, { marginTop: 6 }]}>
+                    {formatMoney(selectedLoan.installment_amount, selectedLoan.currency_code, user?.locale)}/mo
+                    {selectedLoan.installment_count ? ` · ${selectedLoan.installment_count} months` : ''}
                   </Text>
                 ) : null}
-                <SecondaryButton
-                  label="Open loan chat"
-                  onPress={() => {
-                    setChatLoanId(selectedLoan.id);
-                    setScreen('chats');
-                  }}
-                />
+                {selectedLoan.interest_period_months && selectedLoan.loan_kind !== 'long_term' ? (
+                  <Text style={[styles.muted, { marginTop: 4 }]}>
+                    Interest period · {selectedLoan.interest_period_months} mo
+                  </Text>
+                ) : null}
               </Card>
+
+              {selectedLoan.installments && selectedLoan.installments.length > 0 ? (
+                <Card>
+                  <SectionLabel>Monthly repayments</SectionLabel>
+                  {(() => {
+                    const nextUnpaidId =
+                      selectedLoan.installments.find(
+                        (row) => row.status === 'scheduled' || row.status === 'overdue',
+                      )?.id ?? null;
+                    const startToday = new Date();
+                    startToday.setHours(0, 0, 0, 0);
+                    return selectedLoan.installments.map((inst) => {
+                      const due = new Date(inst.due_at);
+                      const paid = inst.status === 'paid';
+                      const startDue = new Date(due.getFullYear(), due.getMonth(), due.getDate());
+                      const passed = !paid && startDue < startToday;
+                      const isNext = !paid && inst.id === nextUnpaidId;
+                      let toneBg = colors.surface;
+                      let toneFg = colors.text;
+                      if (isNext) {
+                        toneBg = colors.successSoft;
+                        toneFg = colors.success;
+                      } else if (passed) {
+                        toneBg = colors.warningSoft;
+                        toneFg = colors.warning;
+                      }
+                      return (
+                        <Pressable
+                          key={inst.id}
+                          onPress={() => {
+                            setSelectedInstallment(inst);
+                            setScreen('installment');
+                          }}
+                          style={{
+                            flexDirection: 'row',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            paddingVertical: 12,
+                            paddingHorizontal: 12,
+                            marginBottom: 8,
+                            borderRadius: radii.md,
+                            backgroundColor: toneBg,
+                            borderWidth: 1,
+                            borderColor: colors.border,
+                            gap: 10,
+                          }}
+                        >
+                          <View style={{ flex: 1, gap: 2 }}>
+                            <Text style={{ color: toneFg, fontFamily: fonts.uiSemi, fontSize: 14 }}>
+                              {due.toLocaleDateString(user?.locale || 'en', {
+                                month: 'short',
+                                year: 'numeric',
+                              })}
+                            </Text>
+                            <Text style={{ color: toneFg, fontFamily: fonts.ui, fontSize: 12, opacity: 0.85 }}>
+                              {paid
+                                ? 'Paid'
+                                : due.toLocaleDateString(user?.locale || 'en', {
+                                    weekday: 'short',
+                                    month: 'short',
+                                    day: 'numeric',
+                                  })}
+                            </Text>
+                          </View>
+                          <Text style={{ color: toneFg, fontFamily: fonts.uiSemi, fontSize: 14 }}>
+                            {formatMoney(inst.amount, selectedLoan.currency_code, user?.locale)}
+                          </Text>
+                        </Pressable>
+                      );
+                    });
+                  })()}
+                </Card>
+              ) : null}
 
               {selectedLoan.can_accept ? (
                 <Card>
@@ -1582,7 +1874,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               {selectedLoan.can_propose_terms ? (
                 <Card>
                   <SectionLabel>Propose or update terms</SectionLabel>
-                  <Field label="Principal" value={principal} onChange={setPrincipal} keyboardType="decimal-pad" />
+                  <Field label="Principal" value={principal} onChange={setPrincipal} money />
                   <Field label="Flat interest %" value={interest} onChange={setInterest} keyboardType="decimal-pad" />
                   <SearchSelect label="Currency" value={currency} onChange={setCurrency} options={CURRENCIES} />
                   <DateField label="Due date" value={dueDate} onChange={setDueDate} />
@@ -1605,7 +1897,8 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               ) : null}
 
               {selectedLoan.your_role === 'borrower' &&
-              (selectedLoan.status === 'active' || selectedLoan.status === 'overdue') ? (
+              (selectedLoan.status === 'active' || selectedLoan.status === 'overdue') &&
+              !(selectedLoan.installments && selectedLoan.installments.length > 0) ? (
                 <Card>
                   <PrimaryButton label={busy ? 'Working…' : 'I paid (optional proof)'} onPress={onClaimRepayment} disabled={busy} />
                 </Card>
@@ -1635,26 +1928,57 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                 </Card>
               ) : null}
 
-              {selectedLoan.your_role === 'lender' && (selectedLoan.status === 'active' || selectedLoan.status === 'overdue') ? (
+              {selectedLoan.your_role === 'lender' &&
+              selectedLoan.borrower.id !== selectedLoan.lender.id &&
+              (selectedLoan.status === 'active' || selectedLoan.status === 'overdue') ? (
                 <Card>
-                  <SectionLabel>Share payment profile</SectionLabel>
+                  <SectionLabel>Payment profile</SectionLabel>
                   {bankProfiles.length === 0 ? (
-                    <Pressable onPress={() => setScreen('banks')}>
-                      <Text style={styles.link}>Add a payment profile first</Text>
+                    <Pressable
+                      onPress={() => setScreen('banks')}
+                      style={{
+                        flexDirection: 'row',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 10,
+                        minHeight: 52,
+                        borderRadius: radii.md,
+                        backgroundColor: colors.primarySoft,
+                        borderWidth: 1,
+                        borderColor: colors.primary,
+                      }}
+                    >
+                      <IconBank size={18} color={colors.primary} />
+                      <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 15 }}>
+                        Add a payment profile
+                      </Text>
                     </Pressable>
                   ) : (
                     bankProfiles.map((profile) => (
                       <Pressable
                         key={profile.id}
-                        style={styles.row}
                         onPress={() => onShareBank(profile.id, selectedLoan.borrower.id, selectedLoan.id)}
                         disabled={busy}
+                        style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          gap: 12,
+                          minHeight: 56,
+                          paddingHorizontal: 16,
+                          borderRadius: radii.md,
+                          backgroundColor: colors.primary,
+                          opacity: busy ? 0.5 : 1,
+                          marginBottom: 8,
+                        }}
                       >
-                        <View style={styles.flex}>
-                          <Text style={styles.rowTitle}>
-                            {profile.label} · •••• {profile.account_last4}
+                        <IconBank size={20} color={colors.onPrimary} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ color: colors.onPrimary, fontFamily: fonts.uiSemi, fontSize: 15 }}>
+                            Share {profile.label}
                           </Text>
-                          <Text style={styles.muted}>Share with {selectedLoan.borrower.display_name}</Text>
+                          <Text style={{ color: colors.onPrimary, opacity: 0.8, fontFamily: fonts.ui, fontSize: 12 }}>
+                            •••• {profile.account_last4} → {selectedLoan.borrower.display_name}
+                          </Text>
                         </View>
                       </Pressable>
                     ))
@@ -1662,7 +1986,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                 </Card>
               ) : null}
 
-              {selectedLoan.your_role === 'borrower' ? (
+              {selectedLoan.your_role === 'borrower' && selectedLoan.borrower.id !== selectedLoan.lender.id ? (
                 <Card>
                   <SectionLabel>Where to send repayment</SectionLabel>
                   {paymentProfile ? (
@@ -1686,11 +2010,115 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               {selectedLoan.events?.length ? (
                 <Card>
                   <SectionLabel>Timeline</SectionLabel>
-                  {selectedLoan.events.map((ev) => (
-                    <Text key={ev.id} style={styles.muted}>
-                      {ev.event_type} · {ev.created_at.slice(0, 16)}
-                    </Text>
-                  ))}
+                  {selectedLoan.events
+                    .filter((ev) =>
+                      ['created', 'accepted', 'rejected', 'cancelled', 'marked_overdue', 'installment_paid'].includes(
+                        ev.event_type,
+                      ),
+                    )
+                    .map((ev) => (
+                      <View key={ev.id} style={{ gap: 2, paddingVertical: 6 }}>
+                        <Text style={styles.rowTitle}>{formatLoanEvent(ev.event_type)}</Text>
+                        <Text style={styles.muted}>
+                          {new Date(ev.created_at).toLocaleString(user?.locale || 'en', {
+                            weekday: 'short',
+                            month: 'short',
+                            day: 'numeric',
+                            year: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </Text>
+                      </View>
+                    ))}
+                </Card>
+              ) : null}
+            </View>
+          ) : null}
+
+          {screen === 'installment' && selectedLoan && selectedInstallment ? (
+            <View style={{ gap: 14, paddingTop: 4 }}>
+              <ScreenHeader
+                title={`Payment ${selectedInstallment.sequence}`}
+                onBack={() => {
+                  setSelectedInstallment(null);
+                  setScreen('loan');
+                }}
+                right={
+                  <DueDatePill
+                    dueAt={selectedInstallment.due_at}
+                    status={selectedInstallment.status === 'paid' ? 'completed' : selectedInstallment.status}
+                    locale={user?.locale}
+                  />
+                }
+              />
+              <Card>
+                <View
+                  style={{
+                    borderRadius: radii.md,
+                    backgroundColor:
+                      selectedInstallment.status === 'paid' ? colors.successSoft : colors.warningSoft,
+                    padding: 16,
+                    gap: 8,
+                  }}
+                >
+                  <Money
+                    value={formatMoney(
+                      selectedInstallment.amount,
+                      selectedLoan.currency_code,
+                      user?.locale,
+                    )}
+                    size="xl"
+                  />
+                  <Text
+                    style={{
+                      color:
+                        selectedInstallment.status === 'paid' ? colors.success : colors.warning,
+                      fontFamily: fonts.uiSemi,
+                      fontSize: 15,
+                    }}
+                  >
+                    {selectedInstallment.status === 'paid' ? 'Paid' : 'Unpaid'}
+                  </Text>
+                  <Text style={styles.muted}>
+                    Due{' '}
+                    {new Date(selectedInstallment.due_at).toLocaleDateString(user?.locale || 'en', {
+                      weekday: 'short',
+                      month: 'short',
+                      day: 'numeric',
+                      year: 'numeric',
+                    })}
+                  </Text>
+                  {selectedLoan.institution_label ? (
+                    <Text style={styles.muted}>{selectedLoan.institution_label}</Text>
+                  ) : null}
+                </View>
+              </Card>
+
+              {selectedInstallment.status === 'paid' && selectedInstallment.paid_at ? (
+                <Card>
+                  <Text style={styles.muted}>
+                    Marked paid{' '}
+                    {new Date(selectedInstallment.paid_at).toLocaleString(user?.locale || 'en', {
+                      month: 'short',
+                      day: 'numeric',
+                      year: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </Text>
+                </Card>
+              ) : null}
+
+              {selectedLoan.your_role === 'borrower' &&
+              selectedInstallment.status !== 'paid' &&
+              (selectedLoan.status === 'active' || selectedLoan.status === 'overdue') ? (
+                <Card>
+                  <PrimaryButton
+                    label={busy ? 'Working…' : 'I paid'}
+                    onPress={onMarkInstallmentPaid}
+                    disabled={busy}
+                  />
                 </Card>
               ) : null}
             </View>
@@ -1872,19 +2300,30 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         {showNav ? (
           <BottomNav active={tabFromScreen(screen)} unread={unreadCount} onChange={goTab} />
         ) : null}
-        {showNav && screen === 'loans' ? (
+        {showNav && (screen === 'loans' || screen === 'home') ? (
           <Pressable
             onPress={() => {
-              setLoanFriendId('');
-              setLoanLockedPeer(null);
-              setLenderIds([]);
-              setLoanKind('one_time');
-              setPartyMode('alone');
-              setCurrency(user?.default_currency_code ?? '');
-              setScreen('new-loan');
+              if (screen === 'loans') {
+                setLoanFriendId('');
+                setLoanLockedPeer(null);
+                setLenderIds([]);
+                setLoanKind('one_time');
+                setPartyMode('alone');
+                setCurrency(user?.default_currency_code ?? '');
+                setLoanTitle('');
+                setScreen('new-loan');
+                return;
+              }
+              const kind = expensesTab === 'income' ? 'income' : 'expense';
+              setCashflowKind(kind);
+              setSelectedCashflow(null);
+              if (expensesTab === 'dashboard') {
+                setExpensesTab('expenses');
+              }
+              setScreen('cashflow-new');
             }}
             accessibilityRole="button"
-            accessibilityLabel="New loan"
+            accessibilityLabel={screen === 'loans' ? 'New loan' : expensesTab === 'income' ? 'New income' : 'New expense'}
             style={{
               position: 'absolute',
               left: 20,

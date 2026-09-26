@@ -28,6 +28,7 @@ type createBody struct {
 	InterestRatePercent  *string     `json:"interest_rate_percent"`
 	DueAt                *time.Time  `json:"due_at"`
 	Note                 *string     `json:"note"`
+	Title                *string     `json:"title"`
 	LoanKind             *string     `json:"loan_kind"`
 	InterestPeriodMonths *int32      `json:"interest_period_months"`
 	InstallmentCount     *int32      `json:"installment_count"`
@@ -65,6 +66,7 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		InterestRatePercent:  body.InterestRatePercent,
 		DueAt:                body.DueAt,
 		Note:                 body.Note,
+		Title:                body.Title,
 		LoanKind:             body.LoanKind,
 		InterestPeriodMonths: body.InterestPeriodMonths,
 		InstallmentCount:     body.InstallmentCount,
@@ -142,6 +144,25 @@ func (h *Handler) Cancel(w http.ResponseWriter, r *http.Request) {
 	h.withID(w, r, func(id uuid.UUID) (LoanDTO, error) {
 		return h.svc.Cancel(r.Context(), auth.UserIDFrom(r.Context()), id)
 	})
+}
+
+func (h *Handler) MarkInstallmentPaid(w http.ResponseWriter, r *http.Request) {
+	loanID, err := parseLoanID(r)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	installmentID, err := uuid.Parse(chi.URLParam(r, "installmentID"))
+	if err != nil {
+		httpx.Error(w, httpx.E(http.StatusBadRequest, "MALFORMED_ID", "invalid installment id"))
+		return
+	}
+	out, err := h.svc.MarkInstallmentPaid(r.Context(), auth.UserIDFrom(r.Context()), loanID, installmentID)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"loan": out})
 }
 
 func (h *Handler) withID(w http.ResponseWriter, r *http.Request, fn func(uuid.UUID) (LoanDTO, error)) {

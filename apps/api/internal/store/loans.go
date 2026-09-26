@@ -83,8 +83,9 @@ func (s *SQLStore) InsertLoan(ctx context.Context, rec loans.Record, terms *loan
 		if err := patchTermsScheduleTx(ctx, tx, termRow.ID, *terms); err != nil {
 			return loans.Record{}, err
 		}
-	} else if rec.Note != nil {
+	} else if rec.Note != nil || rec.Title != nil {
 		mapped.Note = rec.Note
+		mapped.Title = rec.Title
 		updated, err := q.UpdateLoan(ctx, updateLoanParams(mapped))
 		if err != nil {
 			return loans.Record{}, err
@@ -316,6 +317,27 @@ func (s *SQLStore) ReplaceInstallments(ctx context.Context, loanID uuid.UUID, ro
 	return tx.Commit(ctx)
 }
 
+func (s *SQLStore) MarkInstallmentPaid(ctx context.Context, loanID, installmentID uuid.UUID, paidAt time.Time) (loans.Installment, error) {
+	row := s.pool.QueryRow(ctx, `
+		UPDATE loan_installments
+		SET status = $1, paid_at = $2
+		WHERE id = $3 AND loan_id = $4 AND status IN ($5, $6)
+		RETURNING id, loan_id, sequence_no, due_at, amount::text, principal_portion::text, interest_portion::text, status, paid_at, created_at
+	`, loans.InstallmentPaid, paidAt, installmentID, loanID, loans.InstallmentScheduled, loans.InstallmentOverdue)
+	var out loans.Installment
+	var amount, principal, interest string
+	if err := row.Scan(
+		&out.ID, &out.LoanID, &out.Sequence, &out.DueAt,
+		&amount, &principal, &interest, &out.Status, &out.PaidAt, &out.CreatedAt,
+	); err != nil {
+		return loans.Installment{}, err
+	}
+	out.Amount = mustDec(amount)
+	out.PrincipalPortion = mustDec(principal)
+	out.InterestPortion = mustDec(interest)
+	return out, nil
+}
+
 func (s *SQLStore) MarkOverdue(ctx context.Context, now time.Time) (int, error) {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
@@ -456,6 +478,9 @@ func copySchedule(dst *loans.Record, src loans.Record) {
 	}
 	dst.StartAt = src.StartAt
 	dst.CoLenderIDs = src.CoLenderIDs
+	if src.Title != nil {
+		dst.Title = src.Title
+	}
 }
 
 func hasSchedule(rec loans.Record) bool {
@@ -485,9 +510,10 @@ func patchScheduleMetaTx(ctx context.Context, tx pgx.Tx, rec loans.Record) error
 			start_at = $7,
 			institution_type = $8,
 			party_mode = $9,
+			title = $10,
 			updated_at = now()
 		WHERE id = $1
-	`, rec.ID, kind, rec.InterestPeriodMonths, rec.InstallmentCount, decPtr(rec.InstallmentAmount), rec.InstitutionLabel, rec.StartAt, rec.InstitutionType, mode)
+	`, rec.ID, kind, rec.InterestPeriodMonths, rec.InstallmentCount, decPtr(rec.InstallmentAmount), rec.InstitutionLabel, rec.StartAt, rec.InstitutionType, mode, rec.Title)
 	return err
 }
 
@@ -517,11 +543,12 @@ func loadScheduleMeta(ctx context.Context, s *SQLStore, rec *loans.Record) error
 	var instType *string
 	var partyMode string
 	var start *time.Time
+	var title *string
 	err := s.pool.QueryRow(ctx, `
 		SELECT loan_kind, interest_period_months, installment_count, installment_amount::text,
-		       institution_label, start_at, institution_type, party_mode
+		       institution_label, start_at, institution_type, party_mode, title
 		FROM loans WHERE id = $1
-	`, rec.ID).Scan(&kind, &period, &count, &amount, &institution, &start, &instType, &partyMode)
+	`, rec.ID).Scan(&kind, &period, &count, &amount, &institution, &start, &instType, &partyMode, &title)
 	if err != nil {
 		return err
 	}
@@ -536,6 +563,7 @@ func loadScheduleMeta(ctx context.Context, s *SQLStore, rec *loans.Record) error
 	rec.InstitutionType = instType
 	rec.PartyMode = partyMode
 	rec.StartAt = start
+	rec.Title = title
 	ids, _ := s.ListCoLenders(ctx, rec.ID)
 	rec.CoLenderIDs = ids
 	return nil

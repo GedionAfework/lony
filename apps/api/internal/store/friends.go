@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strings"
 
 	"equilend/api/internal/friends"
 	"equilend/api/internal/store/sqlc"
@@ -132,11 +133,132 @@ func (s *SQLStore) UpdateFriendship(ctx context.Context, rec friends.Record) (fr
 }
 
 func (s *SQLStore) ListAccepted(ctx context.Context, userID uuid.UUID) ([]friends.Record, error) {
-	rows, err := s.q.ListAcceptedFriendships(ctx, userID)
+	const q = `
+SELECT id, requester_id, addressee_id, user_low_id, user_high_id, status,
+       requested_at, accepted_at, removed_at, blocked_by_user_id,
+       COALESCE(interaction_count, 0), last_interacted_at
+FROM friendships
+WHERE status = 'accepted' AND (requester_id = $1 OR addressee_id = $1)
+ORDER BY COALESCE(interaction_count, 0) DESC, COALESCE(last_interacted_at, accepted_at, updated_at) DESC`
+	rows, err := s.pool.Query(ctx, q, userID)
 	if err != nil {
 		return nil, err
 	}
-	return mapFriendships(rows), nil
+	defer rows.Close()
+	var out []friends.Record
+	for rows.Next() {
+		var rec friends.Record
+		if err := rows.Scan(
+			&rec.ID, &rec.RequesterID, &rec.AddresseeID, &rec.UserLowID, &rec.UserHighID, &rec.Status,
+			&rec.RequestedAt, &rec.AcceptedAt, &rec.RemovedAt, &rec.BlockedByUserID,
+			&rec.InteractionCount, &rec.LastInteractedAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLStore) EnsureBond(ctx context.Context, a, b uuid.UUID, bump int) (friends.Record, error) {
+	if a == b {
+		return friends.Record{}, nil
+	}
+	if bump < 1 {
+		bump = 1
+	}
+	low, high := friends.CanonicalPair(a, b)
+	const q = `
+INSERT INTO friendships (
+  requester_id, addressee_id, user_low_id, user_high_id, status,
+  requested_at, accepted_at, interaction_count, last_interacted_at
+) VALUES (
+  $1, $2, $3, $4, 'accepted', now(), now(), $5, now()
+)
+ON CONFLICT (user_low_id, user_high_id) DO UPDATE SET
+  status = CASE
+    WHEN friendships.status = 'blocked' THEN friendships.status
+    ELSE 'accepted'
+  END,
+  accepted_at = CASE
+    WHEN friendships.status = 'blocked' THEN friendships.accepted_at
+    ELSE COALESCE(friendships.accepted_at, now())
+  END,
+  removed_at = CASE
+    WHEN friendships.status = 'blocked' THEN friendships.removed_at
+    ELSE NULL
+  END,
+  interaction_count = CASE
+    WHEN friendships.status = 'blocked' THEN friendships.interaction_count
+    ELSE friendships.interaction_count + EXCLUDED.interaction_count
+  END,
+  last_interacted_at = CASE
+    WHEN friendships.status = 'blocked' THEN friendships.last_interacted_at
+    ELSE now()
+  END,
+  updated_at = now()
+RETURNING id, requester_id, addressee_id, user_low_id, user_high_id, status,
+          requested_at, accepted_at, removed_at, blocked_by_user_id,
+          COALESCE(interaction_count, 0), last_interacted_at`
+	var rec friends.Record
+	err := s.pool.QueryRow(ctx, q, a, b, low, high, bump).Scan(
+		&rec.ID, &rec.RequesterID, &rec.AddresseeID, &rec.UserLowID, &rec.UserHighID, &rec.Status,
+		&rec.RequestedAt, &rec.AcceptedAt, &rec.RemovedAt, &rec.BlockedByUserID,
+		&rec.InteractionCount, &rec.LastInteractedAt,
+	)
+	return rec, err
+}
+
+func (s *SQLStore) ListInteractedPeers(ctx context.Context, userID uuid.UUID, query string, limit int) ([]friends.PeerHit, error) {
+	q := strings.ToLower(strings.TrimSpace(query))
+	const sql = `
+WITH loan_peers AS (
+  SELECT
+    CASE WHEN l.borrower_id = $1 THEN l.lender_id ELSE l.borrower_id END AS peer_id,
+    COUNT(*)::int AS touches
+  FROM loans l
+  WHERE l.borrower_id <> l.lender_id
+    AND (l.borrower_id = $1 OR l.lender_id = $1)
+  GROUP BY 1
+),
+bonded AS (
+  SELECT
+    CASE WHEN f.requester_id = $1 THEN f.addressee_id ELSE f.requester_id END AS peer_id,
+    f.interaction_count,
+    f.status
+  FROM friendships f
+  WHERE f.status = 'accepted'
+    AND (f.requester_id = $1 OR f.addressee_id = $1)
+),
+merged AS (
+  SELECT
+    COALESCE(b.peer_id, lp.peer_id) AS peer_id,
+    GREATEST(COALESCE(b.interaction_count, 0), COALESCE(lp.touches, 0)) AS interaction_count,
+    COALESCE(b.status = 'accepted', false) AS is_bonded
+  FROM bonded b
+  FULL OUTER JOIN loan_peers lp ON lp.peer_id = b.peer_id
+)
+SELECT u.id, u.display_name, u.username, m.interaction_count, m.is_bonded
+FROM merged m
+JOIN users u ON u.id = m.peer_id AND u.deleted_at IS NULL AND u.status = 'active'
+WHERE ($2 = '' OR lower(u.display_name) LIKE '%' || $2 || '%' OR lower(COALESCE(u.username,'')) LIKE $2 || '%')
+ORDER BY m.interaction_count DESC, u.display_name ASC
+LIMIT $3`
+	rows, err := s.pool.Query(ctx, sql, userID, q, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []friends.PeerHit
+	for rows.Next() {
+		var p friends.PeerHit
+		if err := rows.Scan(&p.ID, &p.DisplayName, &p.Username, &p.InteractionCount, &p.IsBonded); err != nil {
+			return nil, err
+		}
+		p.Bond = friends.BondLevel(p.InteractionCount)
+		out = append(out, p)
+	}
+	return out, rows.Err()
 }
 
 func (s *SQLStore) ListIncoming(ctx context.Context, userID uuid.UUID) ([]friends.Record, error) {

@@ -2,6 +2,7 @@ package friends
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -180,4 +181,84 @@ func (m *memoryStore) ListOpenInvitesByPhone(context.Context, string) ([]PhoneIn
 }
 func (m *memoryStore) MarkPhoneInviteResolved(context.Context, uuid.UUID, uuid.UUID) error {
 	return nil
+}
+
+func (m *memoryStore) EnsureBond(_ context.Context, a, b uuid.UUID, bump int) (Record, error) {
+	if a == b {
+		return Record{}, nil
+	}
+	if bump < 1 {
+		bump = 1
+	}
+	low, high := CanonicalPair(a, b)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	if id, ok := m.pairs[pairKey(low, high)]; ok {
+		row := m.rows[id]
+		if row.Status == StatusBlocked {
+			return row, nil
+		}
+		row.Status = StatusAccepted
+		if row.AcceptedAt == nil {
+			row.AcceptedAt = &now
+		}
+		row.RemovedAt = nil
+		row.InteractionCount += bump
+		row.LastInteractedAt = &now
+		m.rows[id] = row
+		return row, nil
+	}
+	rec := Record{
+		ID:               uuid.New(),
+		RequesterID:      a,
+		AddresseeID:      b,
+		UserLowID:        low,
+		UserHighID:       high,
+		Status:           StatusAccepted,
+		RequestedAt:      now,
+		AcceptedAt:       &now,
+		InteractionCount: bump,
+		LastInteractedAt: &now,
+	}
+	m.rows[rec.ID] = rec
+	m.pairs[pairKey(low, high)] = rec.ID
+	return rec, nil
+}
+
+func (m *memoryStore) ListInteractedPeers(_ context.Context, userID uuid.UUID, query string, limit int) ([]PeerHit, error) {
+	rows, err := m.ListAccepted(context.Background(), userID)
+	if err != nil {
+		return nil, err
+	}
+	q := strings.ToLower(strings.TrimSpace(query))
+	var out []PeerHit
+	for _, row := range rows {
+		other := OtherParty(userID, row.RequesterID, row.AddresseeID)
+		u, ok := m.users[other]
+		if !ok {
+			continue
+		}
+		if q != "" {
+			uname := ""
+			if u.Username != nil {
+				uname = strings.ToLower(*u.Username)
+			}
+			if !strings.Contains(strings.ToLower(u.DisplayName), q) && !strings.HasPrefix(uname, q) {
+				continue
+			}
+		}
+		out = append(out, PeerHit{
+			ID:               u.ID,
+			DisplayName:      u.DisplayName,
+			Username:         u.Username,
+			InteractionCount: row.InteractionCount,
+			Bond:             BondLevel(row.InteractionCount),
+			IsBonded:         true,
+		})
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
 }

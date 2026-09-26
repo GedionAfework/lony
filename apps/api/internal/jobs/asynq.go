@@ -15,16 +15,22 @@ import (
 )
 
 const (
-	TypeTickOverdue   = "lony:tick_overdue"
-	TypeTickReminders = "lony:tick_reminders"
-	TypeTickReconcile = "lony:tick_reconcile"
-	TypeTickBalance   = "lony:tick_balance"
+	TypeTickOverdue    = "lony:tick_overdue"
+	TypeTickReminders  = "lony:tick_reminders"
+	TypeTickReconcile  = "lony:tick_reconcile"
+	TypeTickBalance    = "lony:tick_balance"
+	TypeTickCashflow   = "lony:tick_cashflow"
 )
 
+type CashflowTicker interface {
+	MaterializeDue(ctx context.Context) (int, error)
+}
+
 type Handlers struct {
-	Loans   *loans.Service
-	Notify  *notifications.Service
-	Balance *reconcile.Service
+	Loans    *loans.Service
+	Notify   *notifications.Service
+	Balance  *reconcile.Service
+	Cashflow CashflowTicker
 }
 
 func NewServer(redisURL string) *asynq.Server {
@@ -49,6 +55,7 @@ func (h Handlers) Register(mux *asynq.ServeMux) {
 	mux.HandleFunc(TypeTickReminders, h.handleReminders)
 	mux.HandleFunc(TypeTickReconcile, h.handleReconcile)
 	mux.HandleFunc(TypeTickBalance, h.handleBalance)
+	mux.HandleFunc(TypeTickCashflow, h.handleCashflow)
 }
 
 func (h Handlers) handleOverdue(ctx context.Context, _ *asynq.Task) error {
@@ -96,6 +103,20 @@ func (h Handlers) handleBalance(ctx context.Context, _ *asynq.Task) error {
 	return nil
 }
 
+func (h Handlers) handleCashflow(ctx context.Context, _ *asynq.Task) error {
+	if h.Cashflow == nil {
+		return nil
+	}
+	n, err := h.Cashflow.MaterializeDue(ctx)
+	if err != nil {
+		return err
+	}
+	if n > 0 {
+		log.Printf("asynq: materialized %d periodic income entr(y/ies)", n)
+	}
+	return nil
+}
+
 func EnqueuePeriodic(scheduler *asynq.Scheduler) error {
 	tasks := []struct {
 		cron string
@@ -105,6 +126,7 @@ func EnqueuePeriodic(scheduler *asynq.Scheduler) error {
 		{"*/1 * * * *", TypeTickReminders},
 		{"*/5 * * * *", TypeTickReconcile},
 		{"*/5 * * * *", TypeTickBalance},
+		{"0 * * * *", TypeTickCashflow},
 	}
 	for _, t := range tasks {
 		payload, _ := json.Marshal(map[string]any{"at": time.Now().UTC()})

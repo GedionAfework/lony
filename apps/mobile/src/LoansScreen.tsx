@@ -56,11 +56,12 @@ export function LoansScreen({ user, loans, onOpenLoan }: Props) {
                   </View>
                   <View style={{ flex: 1, gap: 2 }}>
                     <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>
-                      {title}
+                      {loan.title || title}
                     </Text>
                     <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
                       {loan.reference_code}
                       {loan.currency_code ? ` · ${loan.currency_code}` : ''}
+                      {loan.title ? ` · ${title}` : ''}
                     </Text>
                   </View>
                   <DueDatePill dueAt={loan.due_at} status={loan.status} locale={user.locale} />

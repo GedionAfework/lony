@@ -10,6 +10,7 @@ import (
 
 	"equilend/api/db"
 	"equilend/api/internal/config"
+	"equilend/api/internal/expenses"
 	"equilend/api/internal/friends"
 	"equilend/api/internal/jobs"
 	"equilend/api/internal/loans"
@@ -42,10 +43,11 @@ func main() {
 
 	sqlStore := store.New(pool)
 	loanSvc := loans.NewService(sqlStore, friends.NewService(sqlStore))
+	expensesSvc := expenses.NewService(expenses.SQLStoreAdapter{Inner: sqlStore})
 	notifySvc := notifications.NewService(sqlStore, notifications.NewPusher(cfg.ExpoAccessToken))
 	reconcileSvc := reconcile.New(sqlStore)
 
-	handlers := jobs.Handlers{Loans: loanSvc, Notify: notifySvc, Balance: reconcileSvc}
+	handlers := jobs.Handlers{Loans: loanSvc, Notify: notifySvc, Balance: reconcileSvc, Cashflow: expensesSvc}
 	mux := asynq.NewServeMux()
 	handlers.Register(mux)
 

@@ -21,6 +21,7 @@ type Service struct {
 	store    Store
 	loans    LoanAccess
 	notifier Notifier
+	bond     BondHook
 	now      func() time.Time
 }
 
@@ -30,12 +31,20 @@ type Notifier interface {
 	OnRejected(ctx context.Context, loan loans.Record) error
 }
 
+type BondHook interface {
+	OnRepaymentConfirmed(ctx context.Context, borrowerID, lenderID uuid.UUID) error
+}
+
 func NewService(store Store, loans LoanAccess) *Service {
 	return &Service{store: store, loans: loans, now: time.Now}
 }
 
 func (s *Service) SetNotifier(n Notifier) {
 	s.notifier = n
+}
+
+func (s *Service) SetBond(b BondHook) {
+	s.bond = b
 }
 
 func (s *Service) Claim(ctx context.Context, actor, loanID uuid.UUID, in ClaimInput) (DTO, error) {
@@ -161,6 +170,9 @@ func (s *Service) Confirm(ctx context.Context, actor, repaymentID uuid.UUID) (DT
 	}
 	if s.notifier != nil {
 		_ = s.notifier.OnConfirmed(ctx, updatedLoan)
+	}
+	if s.bond != nil && updatedLoan.BorrowerID != updatedLoan.LenderID {
+		_ = s.bond.OnRepaymentConfirmed(ctx, updatedLoan.BorrowerID, updatedLoan.LenderID)
 	}
 	return toDTO(saved, actor, updatedLoan), nil
 }

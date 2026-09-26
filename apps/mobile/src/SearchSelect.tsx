@@ -18,7 +18,7 @@ type Props = {
   options: CatalogOption[];
   placeholder?: string;
   disabled?: boolean;
-  /** When false, show only the human label (default true keeps "USD · US Dollar"). */
+  /** When true, show "USD · US Dollar". Default is label only. */
   showId?: boolean;
 };
 
@@ -29,7 +29,7 @@ export function SearchSelect({
   options,
   placeholder = 'Select…',
   disabled,
-  showId = true,
+  showId = false,
 }: Props) {
   const { colors } = useTheme();
   const [open, setOpen] = useState(false);

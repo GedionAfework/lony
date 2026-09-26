@@ -130,6 +130,25 @@ func (m *memoryStore) ReplaceInstallments(_ context.Context, loanID uuid.UUID, r
 	return nil
 }
 
+func (m *memoryStore) MarkInstallmentPaid(_ context.Context, loanID, installmentID uuid.UUID, paidAt time.Time) (Installment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	rows := m.installments[loanID]
+	for i := range rows {
+		if rows[i].ID != installmentID {
+			continue
+		}
+		if rows[i].Status != InstallmentScheduled && rows[i].Status != InstallmentOverdue {
+			return Installment{}, pgx.ErrNoRows
+		}
+		rows[i].Status = InstallmentPaid
+		rows[i].PaidAt = &paidAt
+		m.installments[loanID] = rows
+		return rows[i], nil
+	}
+	return Installment{}, pgx.ErrNoRows
+}
+
 func (m *memoryStore) ListCoLenders(_ context.Context, loanID uuid.UUID) ([]uuid.UUID, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

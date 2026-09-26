@@ -25,6 +25,7 @@ type PublicUser struct {
 	DefaultCurrencyCode   *string    `json:"default_currency_code"`
 	EmailVerified         bool       `json:"email_verified"`
 	Status                string     `json:"status"`
+	Role                  string     `json:"role,omitempty"`
 	CreatedAt             time.Time  `json:"created_at"`
 	ProfileComplete       bool       `json:"profile_complete"`
 }

@@ -178,6 +178,39 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/UserResponse"
+  /me/export:
+    get:
+      summary: Export account data (GDPR-style)
+      operationId: exportMyData
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: format
+          schema: { type: string, enum: [json, zip], default: zip }
+      responses:
+        "200":
+          description: Zip attachment or JSON export payload
+  /me/delete:
+    post:
+      summary: Soft-delete account (redact PII, revoke sessions)
+      operationId: deleteMyAccount
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [confirm]
+              properties:
+                confirm: { type: string, description: "Must be DELETE" }
+      responses:
+        "200":
+          description: Account deleted
+        "422":
+          description: Confirmation missing
   /users/search:
     get:
       summary: Search verified users by email, username, or name
@@ -1046,6 +1079,187 @@ paths:
           description: Binary file
         "404":
           description: Not found or forbidden
+
+  /accounts:
+    get:
+      summary: List money accounts
+      operationId: listAccounts
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Accounts
+    post:
+      summary: Create money account
+      operationId: createAccount
+      security: [{ bearerAuth: [] }]
+      responses:
+        "201":
+          description: Created
+  /accounts/reconcile:
+    get:
+      summary: Reconcile all account balances vs ledger
+      operationId: reconcileAccounts
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Stated vs expected balance for each account
+  /accounts/{id}/reconcile:
+    get:
+      summary: Reconcile one account balance vs ledger
+      operationId: reconcileAccount
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Stated vs expected balance
+        "404":
+          description: Not found
+  /wealth:
+    get:
+      summary: Net worth summary by currency
+      operationId: getWealth
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Wealth summary
+  /goals:
+    get:
+      summary: List goals
+      operationId: listGoals
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Goals
+    post:
+      summary: Create goal
+      operationId: createGoal
+      security: [{ bearerAuth: [] }]
+      responses:
+        "201":
+          description: Created
+  /insights/overview:
+    get:
+      summary: Cashflow / debt overview metrics
+      operationId: insightsOverview
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: currency
+          schema: { type: string }
+      responses:
+        "200":
+          description: Overview
+  /score:
+    get:
+      summary: Lony Trust grade (A–E)
+      operationId: getScore
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: currency
+          required: true
+          schema: { type: string }
+        - in: query
+          name: refresh
+          schema: { type: string }
+      responses:
+        "200":
+          description: Trust snapshot with grade, band, components
+  /users/{userID}/trust:
+    get:
+      summary: Friend-visible Trust grade
+      operationId: getPeerTrust
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: path
+          name: userID
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Public trust grade
+        "403":
+          description: Not friends
+  /ai/insights:
+    get:
+      summary: List AI insight cards
+      operationId: listAIInsights
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Insights + disclaimer
+  /ai/insights/refresh:
+    post:
+      summary: Recompute rule-based insights
+      operationId: refreshAIInsights
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Insights
+        "503":
+          description: AI disabled
+  /ai/insights/clear:
+    post:
+      summary: Dismiss all AI insights for the caller
+      operationId: clearAIInsights
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Cleared
+  /ai/coach/messages:
+    post:
+      summary: Ask the financial coach
+      operationId: aiCoach
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Coach reply + disclaimer
+  /admin/overview:
+    get:
+      summary: Platform KPIs (admin)
+      operationId: adminOverview
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Overview
+        "403":
+          description: Not admin
+  /admin/users:
+    get:
+      summary: Search users (admin)
+      operationId: adminListUsers
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: User page
+  /admin/settings:
+    get:
+      summary: Platform settings (admin)
+      operationId: adminGetSettings
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Settings including ai_disabled
+  /admin/settings/ai:
+    post:
+      summary: Enable or disable AI globally
+      operationId: adminSetAI
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                ai_disabled: { type: boolean }
+      responses:
+        "200":
+          description: Updated settings
+
 components:
   parameters:
     IdempotencyKey:

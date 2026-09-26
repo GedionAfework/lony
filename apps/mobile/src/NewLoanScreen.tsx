@@ -9,7 +9,7 @@ import {
   UIManager,
   View,
 } from 'react-native';
-import type { Friendship, SearchHit } from './api';
+import type { Friendship, PeerTrust, SearchHit } from './api';
 import { api } from './api';
 import { formatAmountCommas, parseAmountNumber, stripAmount } from './amountFormat';
 import { CURRENCIES } from './catalogs';
@@ -47,6 +47,7 @@ type Props = {
   institutionOther: string;
   startDate: string;
   note: string;
+  loanTitle: string;
   busy: boolean;
   countryCode: string;
   lockedPeer?: { id: string; display_name: string } | null;
@@ -66,6 +67,7 @@ type Props = {
   onInstitutionOther: (v: string) => void;
   onStartDate: (v: string) => void;
   onNote: (v: string) => void;
+  onLoanTitle: (v: string) => void;
   onBack: () => void;
   onCreate: () => void;
   onLookupPhone: (e164: string) => Promise<'selected' | 'invited' | 'pending' | 'error'>;
@@ -133,6 +135,7 @@ export function NewLoanScreen({
   institutionOther,
   startDate,
   note,
+  loanTitle,
   busy,
   countryCode,
   lockedPeer,
@@ -152,6 +155,7 @@ export function NewLoanScreen({
   onInstitutionOther,
   onStartDate,
   onNote,
+  onLoanTitle,
   onBack,
   onCreate,
   onLookupPhone,
@@ -164,10 +168,32 @@ export function NewLoanScreen({
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [searching, setSearching] = useState(false);
   const [inviteHint, setInviteHint] = useState<string | null>(null);
+  const [peerTrust, setPeerTrust] = useState<PeerTrust | null>(null);
 
   const selected = friends.find((f) => f.peer.id === loanFriendId);
   const peerLabel =
     lockedPeer?.display_name || selected?.peer.display_name || hits.find((h) => h.id === loanFriendId)?.display_name;
+  const counterpartyId = lockedPeer?.id || loanFriendId;
+
+  useEffect(() => {
+    if (!counterpartyId || loanRole !== 'lender' || loanKind !== 'one_time') {
+      setPeerTrust(null);
+      return;
+    }
+    let cancelled = false;
+    api
+      .getPeerTrust(token, counterpartyId)
+      .then((res) => {
+        if (!cancelled) setPeerTrust(res.trust);
+      })
+      .catch(() => {
+        if (!cancelled) setPeerTrust(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [counterpartyId, loanRole, loanKind, token]);
+
   const interestNum = parseAmountNumber(interest);
   const showInterestPeriod = loanKind === 'one_time' && interestNum > 0;
   const months = Math.max(0, Math.floor(Number(stripAmount(installmentCount)) || 0));
@@ -257,8 +283,8 @@ export function NewLoanScreen({
       return;
     }
     const digits = raw.replace(/\D/g, '');
-    const dial = dialForCountry(countryCode || 'ET');
-    let e164 = raw.trim().startsWith('+') ? `+${digits}` : toE164(countryCode || 'ET', digits);
+    const dial = dialForCountry(countryCode || 'US');
+    let e164 = raw.trim().startsWith('+') ? `+${digits}` : toE164(countryCode || 'US', digits);
     if (!e164.startsWith('+') && dial && digits.startsWith(dial)) {
       e164 = `+${digits}`;
     }
@@ -281,7 +307,7 @@ export function NewLoanScreen({
     if (!q) return;
     if (q.startsWith('+') || /^\d{8,}$/.test(q.replace(/\D/g, ''))) {
       const digits = q.replace(/\D/g, '');
-      const e164 = q.trim().startsWith('+') ? `+${digits}` : toE164(countryCode || 'ET', digits);
+      const e164 = q.trim().startsWith('+') ? `+${digits}` : toE164(countryCode || 'US', digits);
       const result = await onLookupPhone(e164);
       if (result === 'invited') {
         setInviteHint(`Invite saved for ${e164}. It will sync when they create an account with this phone.`);
@@ -363,6 +389,23 @@ export function NewLoanScreen({
         <Card>
           <SectionLabel>With</SectionLabel>
           <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>{peerLabel}</Text>
+        </Card>
+      ) : null}
+
+      {peerTrust && loanRole === 'lender' ? (
+        <Card>
+          <SectionLabel>Their Lony Trust</SectionLabel>
+          <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 10 }}>
+            <Text style={{ color: colors.primary, fontFamily: fonts.uiBold, fontSize: 40 }}>{peerTrust.grade}</Text>
+            <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>{peerTrust.band}</Text>
+          </View>
+          <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
+            {peerTrust.available
+              ? `Repayment ${Math.round(peerTrust.repayment_score)}${
+                  peerTrust.thin_history ? ' · limited history' : ''
+                } · based on Lony activity only`
+              : 'Not enough Lony activity to grade yet'}
+          </Text>
         </Card>
       ) : null}
 
@@ -492,6 +535,7 @@ export function NewLoanScreen({
           placeholder="Select currency"
         />
         {loanKind === 'one_time' ? <DateField label="Due date" value={dueDate} onChange={onDueDate} /> : null}
+        <Field label="Title" value={loanTitle} onChange={onLoanTitle} onFocus={reportFocus} />
         <Field label="Note" value={note} onChange={onNote} onFocus={reportFocus} />
         <PrimaryButton
           label={

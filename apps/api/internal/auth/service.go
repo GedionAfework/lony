@@ -498,7 +498,11 @@ func ToPublic(user UserRecord) users.PublicUser {
 		DefaultCurrencyCode:   user.DefaultCurrencyCode,
 		EmailVerified:         user.EmailVerifiedAt != nil,
 		Status:                user.Status,
+		Role:                  user.Role,
 		CreatedAt:             user.CreatedAt,
+	}
+	if out.Role == "" {
+		out.Role = "user"
 	}
 	if user.AvatarObjectKey != nil && *user.AvatarObjectKey != "" {
 		url := "/api/v1/media/" + *user.AvatarObjectKey

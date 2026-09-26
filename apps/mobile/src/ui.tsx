@@ -1,5 +1,6 @@
 import { useMemo, type Ref } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View, type TextInputProps, type ViewStyle } from 'react-native';
+import { formatAmountCommas } from './amountFormat';
 import { IconMoon, IconSun, IconBack } from './icons';
 import { fonts, radii, space, useTheme, type ThemeColors } from './theme';
 
@@ -298,10 +299,7 @@ export function Segmented({
     <View
       style={{
         flexDirection: 'row',
-        backgroundColor: colors.surfaceMuted,
-        borderRadius: radii.full,
-        padding: 4,
-        gap: 4,
+        gap: 8,
       }}
     >
       {options.map((opt) => {
@@ -311,20 +309,20 @@ export function Segmented({
             key={opt.id}
             style={{
               flex: 1,
-              minHeight: 40,
-              borderRadius: radii.full,
+              minHeight: 44,
+              borderRadius: radii.md,
               alignItems: 'center',
               justifyContent: 'center',
-              backgroundColor: active ? colors.surface : 'transparent',
-              borderWidth: active ? 1 : 0,
-              borderColor: colors.border,
+              backgroundColor: active ? colors.primary : colors.surfaceMuted,
+              borderWidth: 1,
+              borderColor: active ? colors.primary : colors.border,
             }}
             onPress={() => onChange(opt.id)}
           >
             <Text
               style={{
-                color: active ? colors.text : colors.muted,
-                fontFamily: active ? fonts.monoSemi : fonts.mono,
+                color: active ? colors.onPrimary : colors.text,
+                fontFamily: fonts.uiSemi,
                 fontSize: 13,
               }}
             >
@@ -346,6 +344,7 @@ export function Field({
   placeholder,
   onFocus,
   inputRef,
+  money,
 }: {
   label: string;
   value: string;
@@ -355,6 +354,8 @@ export function Field({
   placeholder?: string;
   onFocus?: TextInputProps['onFocus'];
   inputRef?: Ref<TextInput>;
+  /** Format with thousands commas and at most 2 decimal places while typing. */
+  money?: boolean;
 }) {
   const { colors } = useTheme();
   return (
@@ -373,11 +374,11 @@ export function Field({
       <TextInput
         ref={inputRef}
         value={value}
-        onChangeText={onChange}
+        onChangeText={(v) => onChange(money ? formatAmountCommas(v) : v)}
         secureTextEntry={secure}
         autoCapitalize="none"
         autoCorrect={false}
-        keyboardType={keyboardType ?? 'default'}
+        keyboardType={keyboardType ?? (money ? 'decimal-pad' : 'default')}
         placeholder={placeholder}
         placeholderTextColor={colors.muted}
         onFocus={onFocus}

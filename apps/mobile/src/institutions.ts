@@ -840,6 +840,59 @@ export const INSTITUTIONS_BY_TYPE: Record<string, CatalogOption[]> = {
     'VBank',
     'Eyowo',
   ]),
+  mobile_money: opts([
+    'M-Pesa',
+    'Airtel Money',
+    'MTN MoMo',
+    'Orange Money',
+    'Telebirr',
+    'CBE Birr',
+    'Wave',
+    'GCash',
+    'Maya',
+    'GrabPay',
+    'GoPay',
+    'Dana',
+    'OVO',
+    'ShopeePay',
+    'Alipay',
+    'WeChat Pay',
+    'Paytm',
+    'PhonePe',
+    'Google Pay',
+    'Apple Cash',
+    'Cash App',
+    'Venmo',
+    'Zelle',
+    'Pix',
+    'Nequi',
+    'Yape',
+    'Mercado Pago',
+    'Chipper Cash',
+    'PalmPay',
+    'Opay',
+    'Local mobile money',
+  ]),
+  wallet: opts([
+    'PayPal',
+    'Wise',
+    'Revolut',
+    'Cash App',
+    'Venmo',
+    'Apple Wallet / Cash',
+    'Google Wallet',
+    'Samsung Wallet',
+    'Alipay',
+    'WeChat Pay',
+    'Skrill',
+    'Neteller',
+    'Payoneer',
+    'Stripe Balance',
+    'Crypto self-custody',
+    'Coinbase',
+    'Binance',
+    'Local e-wallet',
+  ]),
   insurance: opts([
     'MetLife',
     'Prudential',
@@ -891,6 +944,23 @@ export function institutionsForType(typeId: string): CatalogOption[] {
   return INSTITUTIONS_BY_TYPE[typeId] ?? [{ ...OTHER }];
 }
 
+/** Map money-account types → institution catalog keys (global, not country-locked). */
+export function institutionsForAccountType(accountType: string): CatalogOption[] {
+  switch (accountType) {
+    case 'bank':
+      return institutionsForType('bank');
+    case 'mobile_money':
+      return institutionsForType('mobile_money');
+    case 'wallet':
+      return institutionsForType('wallet');
+    case 'cash':
+      return opts(['Cash on hand', 'Safe', 'Petty cash']);
+    case 'other':
+    default:
+      return institutionsForType('other');
+  }
+}
+
 export function resolveInstitutionLabel(
   typeId: string,
   institutionId: string,
@@ -901,6 +971,22 @@ export function resolveInstitutionLabel(
     return other;
   }
   const hit = institutionsForType(typeId).find((o) => o.id === institutionId);
+  if (!hit || hit.id === 'other') {
+    return other;
+  }
+  return hit.label;
+}
+
+export function resolveAccountInstitutionLabel(
+  accountType: string,
+  institutionId: string,
+  otherName: string,
+): string {
+  const other = otherName.trim();
+  if (!institutionId || institutionId === 'other') {
+    return other || (accountType === 'cash' ? 'Cash' : '');
+  }
+  const hit = institutionsForAccountType(accountType).find((o) => o.id === institutionId);
   if (!hit || hit.id === 'other') {
     return other;
   }

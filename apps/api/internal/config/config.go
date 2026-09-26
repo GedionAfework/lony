@@ -32,6 +32,7 @@ type Config struct {
 	SMTPUser            string
 	SMTPPass            string
 	MailFrom            string
+	AdminEmails         []string
 }
 
 func Load() (Config, error) {
@@ -58,6 +59,7 @@ func Load() (Config, error) {
 		SMTPUser:            os.Getenv("SMTP_USER"),
 		SMTPPass:            os.Getenv("SMTP_PASS"),
 		MailFrom:            getenv("MAIL_FROM", "Lony <noreply@lony.local>"),
+		AdminEmails:         splitCSV(os.Getenv("ADMIN_EMAILS")),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -111,4 +113,16 @@ func durationEnv(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return d
+}
+
+func splitCSV(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(strings.ToLower(p))
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }

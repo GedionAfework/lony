@@ -43,6 +43,7 @@ func (m *memoryStore) CreateUser(_ context.Context, email, passwordHash, display
 		DisplayName:  displayName,
 		PasswordHash: passwordHash,
 		Status:       "active",
+		Role:         "user",
 		Timezone:     timezone,
 		Locale:       locale,
 		CreatedAt:    time.Now(),

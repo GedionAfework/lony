@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/mail"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -96,7 +97,8 @@ func (s *Service) InvitePhone(ctx context.Context, actor uuid.UUID, phone string
 	return s.store.UpsertPhoneInvite(ctx, actor, phone)
 }
 
-// ResolvePhoneInvites turns open invites for this phone into pending friend requests.
+// ResolvePhoneInvites marks invites resolved when someone joins.
+// Bonds form later when a loan/split is accepted — not via friend requests.
 func (s *Service) ResolvePhoneInvites(ctx context.Context, userID uuid.UUID, phone string) error {
 	phone = normalizePhoneE164(phone)
 	if phone == "" {
@@ -107,15 +109,6 @@ func (s *Service) ResolvePhoneInvites(ctx context.Context, userID uuid.UUID, pho
 		return err
 	}
 	for _, inv := range invites {
-		if inv.InviterID == userID {
-			_ = s.store.MarkPhoneInviteResolved(ctx, inv.ID, userID)
-			continue
-		}
-		uid := userID
-		if _, err := s.Request(ctx, inv.InviterID, "", "", "", &uid); err != nil {
-			_ = s.store.MarkPhoneInviteResolved(ctx, inv.ID, userID)
-			continue
-		}
 		_ = s.store.MarkPhoneInviteResolved(ctx, inv.ID, userID)
 	}
 	return nil
@@ -295,7 +288,54 @@ func (s *Service) ListFriends(ctx context.Context, actor uuid.UUID) ([]FriendDTO
 	if err != nil {
 		return nil, err
 	}
-	return s.mapDTOs(ctx, actor, rows)
+	out, err := s.mapDTOs(ctx, actor, rows)
+	if err != nil {
+		return nil, err
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].InteractionCount == out[j].InteractionCount {
+			return out[i].Peer.DisplayName < out[j].Peer.DisplayName
+		}
+		return out[i].InteractionCount > out[j].InteractionCount
+	})
+	return out, nil
+}
+
+// ListPeers returns people the actor has already interacted with (ranked), optionally filtered by q.
+func (s *Service) ListPeers(ctx context.Context, actor uuid.UUID, query string, limit int) ([]PeerHit, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 30
+	}
+	return s.store.ListInteractedPeers(ctx, actor, strings.TrimSpace(query), limit)
+}
+
+// OnLoanAccepted creates/upgrades a bond when a peer loan or expense-split is accepted.
+func (s *Service) OnLoanAccepted(ctx context.Context, borrowerID, lenderID uuid.UUID) error {
+	if borrowerID == uuid.Nil || lenderID == uuid.Nil || borrowerID == lenderID {
+		return nil
+	}
+	_, err := s.store.EnsureBond(ctx, borrowerID, lenderID, 1)
+	return err
+}
+
+// OnRepaymentConfirmed strengthens the bond after confirmed repayment.
+func (s *Service) OnRepaymentConfirmed(ctx context.Context, borrowerID, lenderID uuid.UUID) error {
+	if borrowerID == uuid.Nil || lenderID == uuid.Nil || borrowerID == lenderID {
+		return nil
+	}
+	_, err := s.store.EnsureBond(ctx, borrowerID, lenderID, 1)
+	return err
+}
+
+func BondLevel(interactionCount int) string {
+	switch {
+	case interactionCount >= 10:
+		return "close"
+	case interactionCount >= 3:
+		return "friend"
+	default:
+		return "acquaintance"
+	}
 }
 
 func (s *Service) ListIncoming(ctx context.Context, actor uuid.UUID) ([]FriendDTO, error) {
@@ -427,10 +467,12 @@ func (s *Service) toDTO(ctx context.Context, actor uuid.UUID, row Record) (Frien
 		return FriendDTO{}, err
 	}
 	return FriendDTO{
-		ID:          row.ID,
-		Status:      row.Status,
-		RequestedAt: row.RequestedAt,
-		AcceptedAt:  row.AcceptedAt,
+		ID:               row.ID,
+		Status:           row.Status,
+		RequestedAt:      row.RequestedAt,
+		AcceptedAt:       row.AcceptedAt,
+		InteractionCount: row.InteractionCount,
+		Bond:             BondLevel(row.InteractionCount),
 		Peer: SearchHit{
 			ID:          peer.ID,
 			DisplayName: peer.DisplayName,

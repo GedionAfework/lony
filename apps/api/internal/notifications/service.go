@@ -396,7 +396,8 @@ func (s *Service) NotifyRepaymentRejected(ctx context.Context, borrower uuid.UUI
 }
 
 func (s *Service) NotifyFriendRequest(ctx context.Context, addressee uuid.UUID) error {
-	return s.Notify(ctx, addressee, TypeFriendRequest, nil, "Friend request", "Someone wants to connect on Lony.", map[string]any{})
+	// Legacy endpoint; product no longer surfaces friend requests.
+	return s.Notify(ctx, addressee, TypeFriendRequest, nil, "New connection", "Someone wants to work with you on Lony.", map[string]any{})
 }
 
 func (s *Service) NotifyFriendAccepted(ctx context.Context, requester uuid.UUID) error {

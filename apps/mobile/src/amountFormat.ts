@@ -4,14 +4,15 @@ export function stripAmount(raw: string): string {
   return raw.replace(/,/g, '').replace(/[^\d.]/g, '');
 }
 
-/** Format a numeric string with commas every 3 digits (keeps decimals). */
+/** Format a numeric string with commas every 3 digits (keeps up to 2 decimal places for display). */
 export function formatAmountCommas(raw: string): string {
   const cleaned = stripAmount(raw);
   if (!cleaned) return '';
   const neg = cleaned.startsWith('-');
   const body = neg ? cleaned.slice(1) : cleaned;
   const [intPart, ...rest] = body.split('.');
-  const dec = rest.length ? rest.join('').replace(/\./g, '') : undefined;
+  const decRaw = rest.length ? rest.join('').replace(/\./g, '') : undefined;
+  const dec = decRaw !== undefined ? decRaw.slice(0, 2) : undefined;
   const withCommas = (intPart || '0').replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   const out = dec !== undefined ? `${withCommas}.${dec}` : withCommas;
   return neg ? `-${out}` : out;
@@ -43,7 +44,7 @@ export function formatMoney(
     if (!code) {
       return new Intl.NumberFormat(locale, {
         minimumFractionDigits: 2,
-        maximumFractionDigits: 4,
+        maximumFractionDigits: 2,
       }).format(n);
     }
     return new Intl.NumberFormat(locale, {
@@ -56,7 +57,7 @@ export function formatMoney(
   } catch {
     const num = new Intl.NumberFormat(locale, {
       minimumFractionDigits: 2,
-      maximumFractionDigits: 4,
+      maximumFractionDigits: 2,
     }).format(n);
     return code ? `${num} ${code}` : num;
   }

@@ -1,4 +1,4 @@
-import { Text, View } from 'react-native';
+import { Alert, Share, Text, View } from 'react-native';
 import { COUNTRIES, CURRENCIES } from './catalogs';
 import { PhoneField } from './PhoneField';
 import { SearchSelect } from './SearchSelect';
@@ -44,11 +44,34 @@ type Props = {
   onAvatar: () => void;
   onTos: () => void;
   onBanks: () => void;
+  onExportData: () => void;
+  onDeleteAccount: () => void;
+  onClearAI: () => void;
   onLogout: () => void;
 };
 
 export function SettingsScreen(props: Props) {
   const { colors } = useTheme();
+
+  function confirmDelete() {
+    Alert.alert(
+      'Delete account?',
+      'This permanently disables your login and redacts your profile. Loan history for counterparties is kept. Type confirm on the next step.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Continue',
+          style: 'destructive',
+          onPress: () => {
+            Alert.alert('Confirm deletion', 'Your account will be deleted immediately.', [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Delete forever', style: 'destructive', onPress: props.onDeleteAccount },
+            ]);
+          },
+        },
+      ],
+    );
+  }
 
   return (
     <View style={{ gap: space.md }}>
@@ -105,15 +128,30 @@ export function SettingsScreen(props: Props) {
       <Card>
         <SectionLabel>Notifications</SectionLabel>
         <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
-          Push and in-app alerts for loans, repayments, and friend requests.
+          Push and in-app alerts for loans, repayments, and splits.
         </Text>
       </Card>
 
       <Card>
-        <SectionLabel>Data</SectionLabel>
+        <SectionLabel>Data & privacy</SectionLabel>
         <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
-          Download your data — coming soon.
+          Download a copy of your Lony data, clear AI insight history, or delete your account.
         </Text>
+        <SecondaryButton
+          label={props.busy ? 'Working…' : 'Export my data'}
+          onPress={props.onExportData}
+          disabled={props.busy}
+        />
+        <SecondaryButton
+          label={props.busy ? 'Working…' : 'Clear AI insights'}
+          onPress={props.onClearAI}
+          disabled={props.busy}
+        />
+        <SecondaryButton
+          label="Delete account"
+          onPress={confirmDelete}
+          disabled={props.busy}
+        />
       </Card>
 
       <Card>
@@ -139,4 +177,13 @@ export function SettingsScreen(props: Props) {
       <SecondaryButton label="Sign out" onPress={props.onLogout} />
     </View>
   );
+}
+
+/** Share exported JSON via the system share sheet. */
+export async function shareExportJSON(payload: unknown) {
+  const body = JSON.stringify(payload, null, 2);
+  await Share.share({
+    message: body.length > 50000 ? body.slice(0, 50000) + '\n…(truncated)' : body,
+    title: 'Lony data export',
+  });
 }

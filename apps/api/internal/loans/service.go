@@ -29,10 +29,15 @@ type Hooks interface {
 	AfterAccept(ctx context.Context, loan Record) error
 }
 
+type BondHook interface {
+	OnLoanAccepted(ctx context.Context, borrowerID, lenderID uuid.UUID) error
+}
+
 type Service struct {
 	store Store
 	gate  FriendshipGate
 	hooks Hooks
+	bond  BondHook
 	now   func() time.Time
 }
 
@@ -42,6 +47,17 @@ func NewService(store Store, gate FriendshipGate) *Service {
 
 func (s *Service) SetHooks(h Hooks) {
 	s.hooks = h
+}
+
+func (s *Service) SetBond(b BondHook) {
+	s.bond = b
+}
+
+func (s *Service) notifyBond(ctx context.Context, rec Record) {
+	if s.bond == nil || rec.BorrowerID == rec.LenderID {
+		return
+	}
+	_ = s.bond.OnLoanAccepted(ctx, rec.BorrowerID, rec.LenderID)
 }
 
 func (s *Service) Create(ctx context.Context, actor uuid.UUID, in CreateInput) (LoanDTO, error) {
@@ -162,6 +178,14 @@ func (s *Service) Create(ctx context.Context, actor uuid.UUID, in CreateInput) (
 		}
 		rec.Note = note
 	}
+	if title, err := normalizeTitle(in.Title); err != nil {
+		return LoanDTO{}, err
+	} else if title != nil {
+		rec.Title = title
+	} else if alone && institution != "" {
+		t := institution
+		rec.Title = &t
+	}
 
 	payload, _ := json.Marshal(map[string]any{"role": role, "loan_kind": kind, "party_mode": partyMode})
 	events := []Event{{ActorID: &actor, Type: EventCreated, Payload: payload}}
@@ -175,6 +199,11 @@ func (s *Service) Create(ctx context.Context, actor uuid.UUID, in CreateInput) (
 		rec.Status = StatusActive
 		rec.AcceptedAt = &now
 		events = append(events, Event{ActorID: &actor, Type: EventAccepted, Payload: json.RawMessage(`{"institutional":true}`)})
+	} else if in.AutoAccept && terms != nil && !alone {
+		now := s.now().UTC()
+		rec.Status = StatusActive
+		rec.AcceptedAt = &now
+		events = append(events, Event{ActorID: &actor, Type: EventAccepted, Payload: json.RawMessage(`{"expense_share":true}`)})
 	}
 
 	created, err := s.store.InsertLoan(ctx, rec, terms, events)
@@ -197,7 +226,10 @@ func (s *Service) Create(ctx context.Context, actor uuid.UUID, in CreateInput) (
 		_ = s.hooks.AfterCreate(ctx, created)
 		if created.Status == StatusActive {
 			_ = s.hooks.AfterAccept(ctx, created)
+			s.notifyBond(ctx, created)
 		}
+	} else if created.Status == StatusActive {
+		s.notifyBond(ctx, created)
 	}
 	return s.toDTO(ctx, actor, created, true)
 }
@@ -267,6 +299,7 @@ func (s *Service) Accept(ctx context.Context, actor, loanID uuid.UUID, acceptedD
 	if s.hooks != nil {
 		_ = s.hooks.AfterAccept(ctx, updated)
 	}
+	s.notifyBond(ctx, updated)
 	return s.toDTO(ctx, actor, updated, true)
 }
 
@@ -299,6 +332,75 @@ func (s *Service) Cancel(ctx context.Context, actor, loanID uuid.UUID) (LoanDTO,
 	}
 	rec.Status = StatusCancelled
 	updated, err := s.store.ApplyTransition(ctx, rec, nil, Event{ActorID: &actor, Type: EventCancelled, Payload: json.RawMessage(`{}`)})
+	if err != nil {
+		return LoanDTO{}, err
+	}
+	return s.toDTO(ctx, actor, updated, true)
+}
+
+func (s *Service) MarkInstallmentPaid(ctx context.Context, actor, loanID, installmentID uuid.UUID) (LoanDTO, error) {
+	rec, err := s.mustGet(ctx, actor, loanID)
+	if err != nil {
+		return LoanDTO{}, err
+	}
+	if rec.BorrowerID != actor {
+		return LoanDTO{}, httpx.E(http.StatusForbidden, "FORBIDDEN", "only the borrower can mark an installment paid")
+	}
+	if rec.Status != StatusActive && rec.Status != StatusOverdue {
+		return LoanDTO{}, httpx.E(http.StatusConflict, "INVALID_STATE", "installments can only be paid on an open loan")
+	}
+	now := s.now().UTC()
+	paid, err := s.store.MarkInstallmentPaid(ctx, loanID, installmentID, now)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return LoanDTO{}, httpx.E(http.StatusConflict, "INVALID_STATE", "installment is not payable")
+		}
+		return LoanDTO{}, err
+	}
+	outstanding := decimal.Zero
+	if rec.OutstandingAmount != nil {
+		outstanding = *rec.OutstandingAmount
+	} else if rec.ExpectedTotal != nil {
+		outstanding = *rec.ExpectedTotal
+	}
+	remaining := outstanding.Sub(paid.Amount)
+	if remaining.IsNegative() {
+		remaining = decimal.Zero
+	}
+	rec.OutstandingAmount = &remaining
+	if remaining.IsZero() {
+		rec.Status = StatusCompleted
+	} else {
+		rows, listErr := s.store.ListInstallments(ctx, loanID)
+		if listErr == nil {
+			var nextDue *time.Time
+			for _, row := range rows {
+				if row.Status == InstallmentScheduled || row.Status == InstallmentOverdue {
+					due := row.DueAt
+					nextDue = &due
+					break
+				}
+			}
+			if nextDue != nil {
+				rec.DueAt = nextDue
+			}
+		}
+		if rec.DueAt != nil && !rec.DueAt.After(now) {
+			rec.Status = StatusOverdue
+		} else {
+			rec.Status = StatusActive
+		}
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"installment_id": installmentID.String(),
+		"amount":         paid.Amount.StringFixed(Scale),
+		"sequence":       paid.Sequence,
+	})
+	updated, err := s.store.ApplyTransition(ctx, rec, nil, Event{
+		ActorID: &actor,
+		Type:    "installment_paid",
+		Payload: payload,
+	})
 	if err != nil {
 		return LoanDTO{}, err
 	}
@@ -669,6 +771,7 @@ func (s *Service) toDTO(ctx context.Context, actor uuid.UUID, rec Record, detail
 		ExpectedTotal:        decStr(rec.ExpectedTotal),
 		DueAt:                rec.DueAt,
 		Note:                 rec.Note,
+		Title:                rec.Title,
 		InterestPeriodMonths: rec.InterestPeriodMonths,
 		InstallmentCount:     rec.InstallmentCount,
 		InstallmentAmount:    decStr(rec.InstallmentAmount),
@@ -890,6 +993,22 @@ func normalizeNote(note *string) (*string, error) {
 	}
 	if utf8.RuneCountInString(v) > MaxNoteLen {
 		return nil, errors.New("too long")
+	}
+	return &v, nil
+}
+
+func normalizeTitle(title *string) (*string, error) {
+	if title == nil {
+		return nil, nil
+	}
+	v := strings.TrimSpace(*title)
+	if v == "" {
+		return nil, nil
+	}
+	if utf8.RuneCountInString(v) > 120 {
+		return nil, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"title": "max 120 characters",
+		})
 	}
 	return &v, nil
 }

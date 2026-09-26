@@ -51,6 +51,37 @@ func TestRequestAcceptList(t *testing.T) {
 	}
 }
 
+func TestBondFromLoanAccept(t *testing.T) {
+	a, b, svc := testUsers()
+	ctx := context.Background()
+	if err := svc.OnLoanAccepted(ctx, a.ID, b.ID); err != nil {
+		t.Fatal(err)
+	}
+	friends, err := svc.ListFriends(ctx, a.ID)
+	if err != nil || len(friends) != 1 {
+		t.Fatalf("friends=%v err=%v", friends, err)
+	}
+	if friends[0].Bond != "acquaintance" {
+		t.Fatalf("bond %s", friends[0].Bond)
+	}
+	_ = svc.OnLoanAccepted(ctx, a.ID, b.ID)
+	_ = svc.OnRepaymentConfirmed(ctx, a.ID, b.ID)
+	friends, err = svc.ListFriends(ctx, a.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if friends[0].InteractionCount < 3 {
+		t.Fatalf("expected interactions>=3 got %d", friends[0].InteractionCount)
+	}
+	if friends[0].Bond != "friend" {
+		t.Fatalf("bond %s", friends[0].Bond)
+	}
+	peers, err := svc.ListPeers(ctx, a.ID, "", 10)
+	if err != nil || len(peers) != 1 {
+		t.Fatalf("peers=%v err=%v", peers, err)
+	}
+}
+
 func TestCannotFriendSelf(t *testing.T) {
 	a, _, svc := testUsers()
 	_, err := svc.Request(context.Background(), a.ID, a.Email, "", "", nil)
