@@ -1511,10 +1511,11 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                 setSelectedCashflow(null);
                 setScreen('home');
               }}
-              onSaved={(entry) => {
-                setSelectedCashflow(entry);
+              onSaved={() => {
+                setSelectedCashflow(null);
                 setCashflowReload((n) => n + 1);
-                setScreen('cashflow-show');
+                setExpensesTab(cashflowKind === 'income' ? 'income' : 'expenses');
+                setScreen('home');
               }}
               onError={(message) => setError(message)}
               onFriendsChanged={() => {
@@ -1638,6 +1639,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               isAdmin={user.role === 'admin'}
               planTier={user.plan_tier}
               token={token ?? undefined}
+              avatarUrl={user.avatar_url}
               busy={busy}
               onSettingsPageChange={setSettingsDetailOpen}
               onUsername={setProfileUsername}

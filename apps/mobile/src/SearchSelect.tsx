@@ -9,6 +9,7 @@ import {
   View,
 } from 'react-native';
 import { filterCatalog, type CatalogOption } from './catalogs';
+import { IconClose } from './icons';
 import { fonts, radii, space, useTheme } from './theme';
 
 type Props = {
@@ -18,7 +19,7 @@ type Props = {
   options: CatalogOption[];
   placeholder?: string;
   disabled?: boolean;
-  /** When true, show "USD · US Dollar". Default is label only. */
+  /** When true, show "USD - US Dollar". Default is label only. */
   showId?: boolean;
 };
 
@@ -38,11 +39,16 @@ export function SearchSelect({
   const selected = options.find((o) => o.id === value);
   const display = selected
     ? showId
-      ? `${selected.id} · ${selected.label}`
+      ? `${selected.id} - ${selected.label}`
       : selected.label
     : value.trim()
       ? value
       : placeholder;
+
+  function close() {
+    setOpen(false);
+    setQuery('');
+  }
 
   return (
     <View style={{ gap: 6 }}>
@@ -80,8 +86,13 @@ export function SearchSelect({
         </Text>
       </Pressable>
 
-      <Modal visible={open} animationType="slide" transparent onRequestClose={() => setOpen(false)}>
-        <View style={{ flex: 1, backgroundColor: colors.overlay, justifyContent: 'flex-end' }}>
+      <Modal visible={open} animationType="slide" transparent onRequestClose={close}>
+        <View style={{ flex: 1, justifyContent: 'flex-end' }}>
+          <Pressable
+            style={{ ...StyleSheet.absoluteFill, backgroundColor: colors.overlay }}
+            onPress={close}
+            accessibilityLabel="Dismiss"
+          />
           <View
             style={{
               backgroundColor: colors.surface,
@@ -102,8 +113,20 @@ export function SearchSelect({
               }}
             >
               <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 18 }}>{label}</Text>
-              <Pressable onPress={() => setOpen(false)} hitSlop={8}>
-                <Text style={{ color: colors.tertiary, fontFamily: fonts.uiSemi, fontSize: 15 }}>Close</Text>
+              <Pressable
+                onPress={close}
+                hitSlop={10}
+                accessibilityLabel="Close"
+                style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: radii.full,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: colors.surfaceMuted,
+                }}
+              >
+                <IconClose size={16} color={colors.text} />
               </Pressable>
             </View>
             <TextInput
@@ -136,7 +159,7 @@ export function SearchSelect({
                   <Pressable
                     onPress={() => {
                       onChange(item.id);
-                      setOpen(false);
+                      close();
                     }}
                     style={{
                       paddingHorizontal: space.md,
@@ -159,9 +182,6 @@ export function SearchSelect({
                   </Pressable>
                 );
               }}
-              ListEmptyComponent={
-                <Text style={{ color: colors.muted, padding: space.md, fontFamily: fonts.ui }}>No matches</Text>
-              }
             />
           </View>
         </View>

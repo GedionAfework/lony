@@ -97,6 +97,22 @@ export function IconTrash({ size = 22, color, style }: IconProps) {
   return <FontAwesome name="trash-o" size={size} color={useIconColor(color)} style={style} />;
 }
 
+export function IconClose({ size = 22, color, style }: IconProps) {
+  return <FontAwesome name="times" size={size} color={useIconColor(color)} style={style} />;
+}
+
+export function IconUpload({ size = 22, color, style }: IconProps) {
+  return <FontAwesome name="upload" size={size} color={useIconColor(color)} style={style} />;
+}
+
+export function IconCamera({ size = 22, color, style }: IconProps) {
+  return <FontAwesome name="camera" size={size} color={useIconColor(color)} style={style} />;
+}
+
+export function IconBalance({ size = 22, color, style }: IconProps) {
+  return <FontAwesome name="money" size={size} color={useIconColor(color)} style={style} />;
+}
+
 export function IconRepeat({ size = 22, color, style }: IconProps) {
   return <FontAwesome name="refresh" size={size} color={useIconColor(color)} style={style} />;
 }

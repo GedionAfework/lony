@@ -9,8 +9,9 @@ import {
   View,
 } from 'react-native';
 import { COUNTRIES } from './catalogs';
+import { IconClose } from './icons';
 import {
-  countryForDial,
+  countryFlag,
   dialForCountry,
   dialOptionsForCountries,
   splitE164,
@@ -36,7 +37,6 @@ export function PhoneField({
 }: Props) {
   const { colors } = useTheme();
   const [pickCountry, setPickCountry] = useState(false);
-  const [pickDial, setPickDial] = useState(false);
   const [query, setQuery] = useState('');
 
   const dialOpts = useMemo(() => dialOptionsForCountries(COUNTRIES), []);
@@ -67,12 +67,7 @@ export function PhoneField({
     onCountryChange(code);
     onChange(toE164(code, national));
     setPickCountry(false);
-    setPickDial(false);
     setQuery('');
-  }
-
-  function chooseDial(code: string) {
-    chooseCountry(code);
   }
 
   return (
@@ -96,27 +91,12 @@ export function PhoneField({
           }}
           style={[
             styles.chip,
-            { backgroundColor: colors.surfaceMuted, borderColor: colors.border, minWidth: 88 },
-          ]}
-          accessibilityRole="button"
-          accessibilityLabel="Country"
-        >
-          <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }}>
-            {activeCountry || '—'}
-          </Text>
-        </Pressable>
-        <Pressable
-          onPress={() => {
-            setQuery('');
-            setPickDial(true);
-          }}
-          style={[
-            styles.chip,
-            { backgroundColor: colors.surfaceMuted, borderColor: colors.border, minWidth: 72 },
+            { backgroundColor: colors.surfaceMuted, borderColor: colors.border, minWidth: 92 },
           ]}
           accessibilityRole="button"
           accessibilityLabel="Country code"
         >
+          <Text style={{ fontSize: 18 }}>{countryFlag(activeCountry)}</Text>
           <Text style={{ color: colors.text, fontFamily: fonts.mono, fontSize: 14 }}>
             +{dial || '—'}
           </Text>
@@ -151,38 +131,18 @@ export function PhoneField({
         colors={colors}
         query={query}
         onQuery={setQuery}
-        onClose={() => setPickCountry(false)}
+        onClose={() => {
+          setPickCountry(false);
+          setQuery('');
+        }}
         data={filteredCountries}
         renderItem={(item) => (
           <Pressable onPress={() => chooseCountry(item.id)} style={styles.row}>
+            <Text style={{ fontSize: 22 }}>{countryFlag(item.id)}</Text>
             <Text style={{ color: colors.text, fontFamily: fonts.ui, fontSize: 16, flex: 1 }}>
-              {item.id} · {item.label.split(' (+')[0]}
+              {item.label.split(' (+')[0]}
             </Text>
             <Text style={{ color: colors.muted, fontFamily: fonts.mono, fontSize: 14 }}>+{item.dial}</Text>
-          </Pressable>
-        )}
-      />
-      <PickerModal
-        visible={pickDial}
-        title="Country code"
-        colors={colors}
-        query={query}
-        onQuery={setQuery}
-        onClose={() => setPickDial(false)}
-        data={filteredCountries}
-        renderItem={(item) => (
-          <Pressable
-            onPress={() => {
-              // If dial matches multiple countries, keep current when possible
-              const next = countryForDial(item.dial, activeCountry) || item.id;
-              chooseDial(next === activeCountry ? item.id : next);
-            }}
-            style={styles.row}
-          >
-            <Text style={{ color: colors.text, fontFamily: fonts.mono, fontSize: 16 }}>+{item.dial}</Text>
-            <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 14, flex: 1, textAlign: 'right' }}>
-              {item.id} · {item.label.split(' (+')[0]}
-            </Text>
           </Pressable>
         )}
       />
@@ -211,7 +171,12 @@ function PickerModal({
 }) {
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <View style={{ flex: 1, backgroundColor: colors.overlay, justifyContent: 'flex-end' }}>
+      <View style={{ flex: 1, justifyContent: 'flex-end' }}>
+        <Pressable
+          style={{ ...StyleSheet.absoluteFill, backgroundColor: colors.overlay }}
+          onPress={onClose}
+          accessibilityLabel="Dismiss"
+        />
         <View
           style={{
             backgroundColor: colors.surface,
@@ -232,14 +197,26 @@ function PickerModal({
             }}
           >
             <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 18 }}>{title}</Text>
-            <Pressable onPress={onClose}>
-              <Text style={{ color: colors.tertiary, fontFamily: fonts.uiSemi }}>Done</Text>
+            <Pressable
+              onPress={onClose}
+              hitSlop={10}
+              accessibilityLabel="Close"
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: radii.full,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: colors.surfaceMuted,
+              }}
+            >
+              <IconClose size={16} color={colors.text} />
             </Pressable>
           </View>
           <TextInput
             value={query}
             onChangeText={onQuery}
-            placeholder="Search…"
+            placeholder="Searchâ€¦"
             placeholderTextColor={colors.muted}
             style={{
               marginHorizontal: space.md,
@@ -271,10 +248,12 @@ const styles = StyleSheet.create({
   chip: {
     borderRadius: radii.md,
     paddingHorizontal: 12,
-    paddingVertical: 14,
+    paddingVertical: 12,
     borderWidth: StyleSheet.hairlineWidth,
     alignItems: 'center',
     justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 6,
   },
   row: {
     flexDirection: 'row',

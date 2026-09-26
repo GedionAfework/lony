@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Pressable, Text, TextInput, View } from 'react-native';
+import { IconEdit, IconTrash } from './icons';
 import {
   THEME_COLOR_FIELDS,
   lightColors,
@@ -106,13 +107,37 @@ function ThemeTile({
       {theme.kind === 'custom' ? (
         <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 6, marginTop: 4 }}>
           {onEdit ? (
-            <Pressable onPress={onEdit}>
-              <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 11 }}>Edit</Text>
+            <Pressable
+              onPress={onEdit}
+              accessibilityLabel="Edit theme"
+              hitSlop={6}
+              style={{
+                width: 28,
+                height: 28,
+                borderRadius: 14,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: colors.primarySoft,
+              }}
+            >
+              <IconEdit size={12} color={colors.primary} />
             </Pressable>
           ) : null}
           {onDelete ? (
-            <Pressable onPress={onDelete}>
-              <Text style={{ color: colors.warning, fontFamily: fonts.uiSemi, fontSize: 11 }}>Del</Text>
+            <Pressable
+              onPress={onDelete}
+              accessibilityLabel="Delete theme"
+              hitSlop={6}
+              style={{
+                width: 28,
+                height: 28,
+                borderRadius: 14,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: colors.warningSoft,
+              }}
+            >
+              <IconTrash size={12} color={colors.warning} />
             </Pressable>
           ) : null}
         </View>

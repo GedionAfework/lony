@@ -13,7 +13,7 @@ import {
 } from './api';
 import { stripAmount } from './amountFormat';
 import { SearchSelect } from './SearchSelect';
-import { IconRepeat } from './icons';
+import { IconClose, IconRepeat } from './icons';
 import { listCashflowDrafts, removeCashflowDraft, type CashflowDraft } from './offlineDrafts';
 import { fonts, radii, space, useTheme } from './theme';
 import { Card, EmptyState, Field, Money, PrimaryButton, SecondaryButton, SectionLabel } from './ui';
@@ -425,8 +425,21 @@ export function ExpensesScreen({
                 );
               })}
             </View>
-            <Pressable onPress={() => setCalendarOpen(false)} style={{ alignSelf: 'flex-end', paddingTop: 8 }}>
-              <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 14 }}>Done</Text>
+            <Pressable
+              onPress={() => setCalendarOpen(false)}
+              accessibilityLabel="Close"
+              style={{
+                alignSelf: 'flex-end',
+                width: 36,
+                height: 36,
+                borderRadius: 18,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: colors.surfaceMuted,
+                marginTop: 8,
+              }}
+            >
+              <IconClose size={16} color={colors.text} />
             </Pressable>
           </Pressable>
         </Pressable>

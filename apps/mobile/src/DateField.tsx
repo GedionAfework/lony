@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { IconClose } from './icons';
 import { fonts, radii, space, useTheme } from './theme';
 
 const MONTHS = [
@@ -42,7 +43,7 @@ function toIso(y: number, m: number, d: number): string {
   return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
 }
 
-export function DateField({ label, value, onChange, placeholder = 'Select date' }: Props) {
+export function DateField({ label, value, onChange, placeholder = 'Select…' }: Props) {
   const { colors } = useTheme();
   const now = new Date();
   const parsed = parseIso(value);
@@ -118,7 +119,12 @@ export function DateField({ label, value, onChange, placeholder = 'Select date' 
       </Pressable>
 
       <Modal visible={open} animationType="slide" transparent onRequestClose={() => setOpen(false)}>
-        <View style={{ flex: 1, backgroundColor: colors.overlay, justifyContent: 'flex-end' }}>
+        <View style={{ flex: 1, justifyContent: 'flex-end' }}>
+          <Pressable
+            style={{ ...StyleSheet.absoluteFill, backgroundColor: colors.overlay }}
+            onPress={() => setOpen(false)}
+            accessibilityLabel="Dismiss"
+          />
           <View
             style={{
               backgroundColor: colors.surface,
@@ -131,8 +137,20 @@ export function DateField({ label, value, onChange, placeholder = 'Select date' 
           >
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
               <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 18 }}>{label}</Text>
-              <Pressable onPress={() => setOpen(false)}>
-                <Text style={{ color: colors.tertiary, fontFamily: fonts.uiSemi }}>Close</Text>
+              <Pressable
+                onPress={() => setOpen(false)}
+                hitSlop={10}
+                accessibilityLabel="Close"
+                style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: radii.full,
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  backgroundColor: colors.surfaceMuted,
+                }}
+              >
+                <IconClose size={16} color={colors.text} />
               </Pressable>
             </View>
 

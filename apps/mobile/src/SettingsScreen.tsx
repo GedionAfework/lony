@@ -1,12 +1,13 @@
 import { useState } from 'react';
-import { Alert, Pressable, Share, Switch, Text, View } from 'react-native';
+import { Alert, Image, Pressable, Share, Switch, Text, View } from 'react-native';
 import { AdminScreen } from './AdminScreen';
 import { COUNTRIES, CURRENCIES, LOCALES, TIMEZONES } from './catalogs';
 import { t } from './i18n';
+import { IconCamera } from './icons';
 import { PhoneField } from './PhoneField';
 import { SearchSelect } from './SearchSelect';
 import { ThemesScreen } from './ThemesScreen';
-import { fonts, space, useTheme } from './theme';
+import { fonts, mediaURL, radii, space, useTheme } from './theme';
 import {
   Card,
   Field,
@@ -45,6 +46,7 @@ type Props = {
   isAdmin?: boolean;
   planTier?: string;
   token?: string;
+  avatarUrl?: string | null;
   busy: boolean;
   onUsername: (v: string) => void;
   onFirstName: (v: string) => void;
@@ -162,12 +164,58 @@ export function SettingsScreen(props: Props) {
           </Text>
         ) : null}
         <Card>
+          <View style={{ alignItems: 'center', gap: 12, marginBottom: 8 }}>
+            {(() => {
+              const uri = mediaURL(props.avatarUrl);
+              return uri ? (
+                <Image
+                  source={{
+                    uri,
+                    headers: props.token ? { Authorization: `Bearer ${props.token}` } : undefined,
+                  }}
+                  style={{ width: 96, height: 96, borderRadius: 48, backgroundColor: colors.surfaceMuted }}
+                />
+              ) : (
+                <View
+                  style={{
+                    width: 96,
+                    height: 96,
+                    borderRadius: 48,
+                    backgroundColor: colors.surfaceMuted,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Text style={{ color: colors.muted, fontFamily: fonts.uiSemi, fontSize: 28 }}>
+                    {(props.displayName || props.firstName || '?').slice(0, 1).toUpperCase()}
+                  </Text>
+                </View>
+              );
+            })()}
+            <Pressable
+              onPress={props.onAvatar}
+              disabled={props.busy}
+              accessibilityLabel="Change photo"
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 8,
+                paddingHorizontal: 14,
+                paddingVertical: 10,
+                borderRadius: radii.full,
+                backgroundColor: colors.primarySoft,
+                borderWidth: 1,
+                borderColor: colors.primary,
+                opacity: props.busy ? 0.5 : 1,
+              }}
+            >
+              <IconCamera size={16} color={colors.primary} />
+              <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 14 }}>
+                {props.busy ? 'Uploading…' : props.avatarUrl ? 'Change photo' : 'Add photo'}
+              </Text>
+            </Pressable>
+          </View>
           <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 14 }}>{props.email}</Text>
-          <SecondaryButton
-            label={props.busy ? 'Uploading…' : 'Change photo'}
-            onPress={props.onAvatar}
-            disabled={props.busy}
-          />
           <Field label="Username" value={props.username} onChange={props.onUsername} />
           <Field label="First name" value={props.firstName} onChange={props.onFirstName} />
           <Field label="Middle name" value={props.middleName} onChange={props.onMiddleName} />

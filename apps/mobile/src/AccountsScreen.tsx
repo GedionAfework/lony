@@ -12,8 +12,9 @@ import {
   institutionsForAccountType,
 } from './institutions';
 import { SearchSelect } from './SearchSelect';
+import { IconBalance, IconEdit, IconTrash, IconUpload } from './icons';
 import { fonts, radii, space, useTheme } from './theme';
-import { Card, EmptyState, Field, PrimaryButton, SecondaryButton, SectionLabel } from './ui';
+import { Card, EmptyState, Field, PrimaryButton, ScreenHeader, SecondaryButton, SectionLabel } from './ui';
 
 type Props = {
   user: User;
@@ -464,11 +465,31 @@ export function AccountsScreen({ user, token, formatMoney, onError, reloadToken 
     }
   }
 
-  const formOpen = creating || editId;
-  const panelOpen = formOpen || transferOpen || reconcileOpen || Boolean(importId);
+  const formOpen = creating || Boolean(editId);
+  const panelOpen = formOpen || transferOpen || reconcileOpen || Boolean(importId) || Boolean(balanceId);
   useEffect(() => {
     onPanelChange?.(Boolean(panelOpen));
   }, [panelOpen, onPanelChange]);
+
+  function closePanel() {
+    resetForm();
+    setTransferOpen(false);
+    setReconcileOpen(false);
+    resetImport();
+    setBalanceId(null);
+    setNewBalance('');
+    setReconcileRows([]);
+  }
+
+  function panelTitle() {
+    if (importId) return 'Import statement';
+    if (reconcileOpen) return 'Reconcile';
+    if (transferOpen) return 'Transfer';
+    if (balanceId) return 'Update balance';
+    if (editId) return 'Edit account';
+    return 'New account';
+  }
+
   const accountOptions = accounts.map((a) => ({
     id: a.id,
     label: `${a.name} (${a.currency_code})`,
@@ -478,10 +499,16 @@ export function AccountsScreen({ user, token, formatMoney, onError, reloadToken 
 
   return (
     <View style={{ gap: space.md }}>
-      <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>
-        {t(user.locale, 'accounts')}
-      </Text>
+      {panelOpen ? (
+        <ScreenHeader title={panelTitle()} onBack={closePanel} />
+      ) : (
+        <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>
+          {t(user.locale, 'accounts')}
+        </Text>
+      )}
 
+      {!panelOpen ? (
+      <>
       <Card>
         <SectionLabel>{t(user.locale, 'linkedBanks')}</SectionLabel>
         <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13, marginBottom: 8 }}>
@@ -518,10 +545,17 @@ export function AccountsScreen({ user, token, formatMoney, onError, reloadToken 
                 }
               }}
               hitSlop={8}
+              accessibilityLabel={t(user.locale, 'disconnect')}
+              style={{
+                width: 40,
+                height: 40,
+                borderRadius: radii.full,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: colors.warningSoft,
+              }}
             >
-              <Text style={{ color: colors.error, fontFamily: fonts.uiSemi, fontSize: 13 }}>
-                {t(user.locale, 'disconnect')}
-              </Text>
+              <IconTrash size={16} color={colors.error} />
             </Pressable>
           </View>
         ))}
@@ -534,7 +568,6 @@ export function AccountsScreen({ user, token, formatMoney, onError, reloadToken 
         ) : null}
       </Card>
 
-      {!panelOpen ? (
         <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
           <View style={{ flex: 1, minWidth: 100 }}>
             <PrimaryButton
@@ -556,11 +589,11 @@ export function AccountsScreen({ user, token, formatMoney, onError, reloadToken 
             </View>
           ) : null}
         </View>
+      </>
       ) : null}
 
       {importId && importAccount ? (
         <Card>
-          <SectionLabel>Import statement · {importAccount.name}</SectionLabel>
           <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
             CSV with Date + Amount (signed) or Debit/Credit columns. Re-uploads skip duplicates.
           </Text>
@@ -619,21 +652,19 @@ export function AccountsScreen({ user, token, formatMoney, onError, reloadToken 
           {importResult ? (
             <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 13 }}>{importResult}</Text>
           ) : null}
-          <PrimaryButton
-            label={busy ? 'Importing…' : 'Import'}
-            onPress={() => void onImportStatement()}
-            disabled={busy}
-          />
-          <SecondaryButton label="Done" onPress={resetImport} />
-        </Card>
-      ) : null}
+            <PrimaryButton
+              label={busy ? 'Importing…' : 'Import'}
+              onPress={() => void onImportStatement()}
+              disabled={busy}
+            />
+          </Card>
+        ) : null}
 
-      {reconcileOpen ? (
-        <Card>
-          <SectionLabel>Reconcile balances</SectionLabel>
-          <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
-            Stated balance vs ledger since your last manual set (income − expenses ± transfers).
-          </Text>
+        {reconcileOpen ? (
+          <Card>
+            <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
+              Stated balance vs ledger since your last manual set (income − expenses ± transfers).
+            </Text>
           {reconcileRows.length === 0 ? (
             <EmptyState title="Nothing to compare" body="Add an account first." />
           ) : (
@@ -681,21 +712,13 @@ export function AccountsScreen({ user, token, formatMoney, onError, reloadToken 
                 ) : null}
               </View>
             ))
-          )}
-          <SecondaryButton
-            label="Done"
-            onPress={() => {
-              setReconcileOpen(false);
-              setReconcileRows([]);
-            }}
-          />
-        </Card>
-      ) : null}
+            )}
+          </Card>
+        ) : null}
 
-      {transferOpen ? (
-        <Card>
-          <SectionLabel>Transfer between accounts</SectionLabel>
-          <SearchSelect label="From" value={fromId} onChange={setFromId} options={accountOptions} />
+        {transferOpen ? (
+          <Card>
+            <SearchSelect label="From" value={fromId} onChange={setFromId} options={accountOptions} />
           <SearchSelect
             label="To"
             value={toId}
@@ -703,91 +726,72 @@ export function AccountsScreen({ user, token, formatMoney, onError, reloadToken 
             options={accountOptions.filter((o) => o.id !== fromId)}
           />
           <Field label="Amount" value={transferAmount} onChange={setTransferAmount} money />
-          <Field label="Note (optional)" value={transferNote} onChange={setTransferNote} />
-          <PrimaryButton label={busy ? 'Moving…' : 'Transfer'} onPress={onTransfer} disabled={busy} />
-          <SecondaryButton
-            label="Cancel"
-            onPress={() => {
-              setTransferOpen(false);
-              setFromId('');
-              setToId('');
-              setTransferAmount('');
-              setTransferNote('');
-            }}
-          />
-        </Card>
-      ) : null}
+            <Field label="Note (optional)" value={transferNote} onChange={setTransferNote} />
+            <PrimaryButton label={busy ? 'Moving…' : 'Transfer'} onPress={onTransfer} disabled={busy} />
+          </Card>
+        ) : null}
 
-      {formOpen ? (
-        <Card>
-          <SectionLabel>{editId ? 'Edit account' : 'New account'}</SectionLabel>
-          <SearchSelect
-            label="Type"
-            value={accountType}
-            onChange={(id) => {
-              setAccountType(id);
-              setInstitutionId('');
-              setInstitutionOther('');
-            }}
-            options={accountTypes}
-          />
-          {accountType !== 'cash' ? (
-            <>
-              <SearchSelect
-                label="Institution"
-                value={institutionId}
-                onChange={setInstitutionId}
-                options={institutionOptions}
-                placeholder="Search institution"
-              />
-              {needsOtherInstitution ? (
-                <Field
-                  label="Institution name"
-                  value={institutionOther}
-                  onChange={setInstitutionOther}
-                  placeholder="Type the institution name"
+        {formOpen ? (
+          <Card>
+            <SearchSelect
+              label="Type"
+              value={accountType}
+              onChange={(id) => {
+                setAccountType(id);
+                setInstitutionId('');
+                setInstitutionOther('');
+              }}
+              options={accountTypes}
+            />
+            {accountType !== 'cash' ? (
+              <>
+                <SearchSelect
+                  label="Institution"
+                  value={institutionId}
+                  onChange={setInstitutionId}
+                  options={institutionOptions}
+                  placeholder="Search institution"
                 />
-              ) : null}
-            </>
-          ) : null}
-          <SearchSelect label="Currency" value={currency} onChange={setCurrency} options={CURRENCIES} />
-          {!editId ? (
-            <Field label="Current balance" value={balance} onChange={setBalance} money />
-          ) : null}
-          <Field
-            label="Interest rate % (optional)"
-            value={interest}
-            onChange={setInterest}
-            keyboardType="decimal-pad"
-            placeholder="e.g. 8"
-          />
-          {interest.trim() ? (
-            <SearchSelect label="Compounding" value={compounding} onChange={setCompounding} options={COMPOUNDING} />
-          ) : null}
-          <PrimaryButton
-            label={busy ? 'Saving…' : editId ? 'Save changes' : 'Create'}
-            onPress={editId ? onSaveEdit : onCreate}
-            disabled={busy}
-          />
-          <SecondaryButton label="Cancel" onPress={resetForm} />
-        </Card>
-      ) : null}
+                {needsOtherInstitution ? (
+                  <Field
+                    label="Institution name"
+                    value={institutionOther}
+                    onChange={setInstitutionOther}
+                    placeholder="Type the institution name"
+                  />
+                ) : null}
+              </>
+            ) : null}
+            <SearchSelect label="Currency" value={currency} onChange={setCurrency} options={CURRENCIES} />
+            {!editId ? (
+              <Field label="Current balance" value={balance} onChange={setBalance} money />
+            ) : null}
+            <Field
+              label="Interest rate % (optional)"
+              value={interest}
+              onChange={setInterest}
+              keyboardType="decimal-pad"
+              placeholder="e.g. 8"
+            />
+            {interest.trim() ? (
+              <SearchSelect label="Compounding" value={compounding} onChange={setCompounding} options={COMPOUNDING} />
+            ) : null}
+            <PrimaryButton
+              label={busy ? 'Saving…' : editId ? 'Save changes' : 'Create'}
+              onPress={editId ? onSaveEdit : onCreate}
+              disabled={busy}
+            />
+          </Card>
+        ) : null}
 
-      {balanceId ? (
-        <Card>
-          <SectionLabel>Update balance</SectionLabel>
-          <Field label="New balance" value={newBalance} onChange={setNewBalance} money />
-          <PrimaryButton label={busy ? 'Saving…' : 'Save balance'} onPress={onSaveBalance} disabled={busy} />
-          <SecondaryButton
-            label="Cancel"
-            onPress={() => {
-              setBalanceId(null);
-              setNewBalance('');
-            }}
-          />
-        </Card>
-      ) : null}
+        {balanceId ? (
+          <Card>
+            <Field label="New balance" value={newBalance} onChange={setNewBalance} money />
+            <PrimaryButton label={busy ? 'Saving…' : 'Save balance'} onPress={onSaveBalance} disabled={busy} />
+          </Card>
+        ) : null}
 
+      {!panelOpen ? (
       <Card>
         <SectionLabel>Your accounts</SectionLabel>
         {accounts.length === 0 ? (
@@ -828,17 +832,19 @@ export function AccountsScreen({ user, token, formatMoney, onError, reloadToken 
                 </Text>
               ) : null}
               <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
-                <Chip
-                  label="Balance"
+                <IconAction
+                  accessibilityLabel="Update balance"
                   onPress={() => {
                     setEditId(null);
                     setCreating(false);
                     setBalanceId(a.id);
                     setNewBalance(a.balance);
                   }}
-                />
-                <Chip
-                  label="Import"
+                >
+                  <IconBalance size={16} color={colors.primary} />
+                </IconAction>
+                <IconAction
+                  accessibilityLabel="Import statement"
                   onPress={() => {
                     resetForm();
                     setTransferOpen(false);
@@ -849,49 +855,54 @@ export function AccountsScreen({ user, token, formatMoney, onError, reloadToken 
                     setImportEndingBalance('');
                     setImportResult(null);
                   }}
-                />
-                <Chip label="Edit" onPress={() => startEdit(a)} />
-                <Chip label="Archive" onPress={() => onArchive(a.id)} danger />
+                >
+                  <IconUpload size={16} color={colors.primary} />
+                </IconAction>
+                <IconAction accessibilityLabel="Edit" onPress={() => startEdit(a)}>
+                  <IconEdit size={16} color={colors.primary} />
+                </IconAction>
+                <IconAction accessibilityLabel="Archive" danger onPress={() => onArchive(a.id)}>
+                  <IconTrash size={16} color={colors.warning} />
+                </IconAction>
               </View>
             </View>
           ))
         )}
       </Card>
+      ) : null}
     </View>
   );
 }
 
-function Chip({
-  label,
+function IconAction({
+  children,
   onPress,
+  accessibilityLabel,
   danger,
 }: {
-  label: string;
+  children: React.ReactNode;
   onPress: () => void;
+  accessibilityLabel: string;
   danger?: boolean;
 }) {
   const { colors } = useTheme();
   return (
     <Pressable
       onPress={onPress}
+      accessibilityLabel={accessibilityLabel}
+      hitSlop={6}
       style={{
-        paddingHorizontal: 12,
-        paddingVertical: 8,
+        width: 40,
+        height: 40,
         borderRadius: radii.full,
+        alignItems: 'center',
+        justifyContent: 'center',
         backgroundColor: danger ? colors.warningSoft : colors.primarySoft,
         borderWidth: 1,
         borderColor: danger ? colors.warning : colors.primary,
       }}
     >
-      <Text
-        style={{
-          color: danger ? colors.warning : colors.primary,
-          fontFamily: fonts.uiSemi,
-          fontSize: 12,
-        }}
-      >
-        {label}
-      </Text>
+      {children}
     </Pressable>
   );
 }

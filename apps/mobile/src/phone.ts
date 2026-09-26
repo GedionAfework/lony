@@ -83,3 +83,10 @@ export function toE164(country: string, national: string): string {
   if (!dial || !n) return n ? `+${n}` : '';
   return `+${dial}${n}`;
 }
+
+/** Regional-indicator flag emoji for an ISO-3166 alpha-2 code. */
+export function countryFlag(code: string): string {
+  const cc = code.trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(cc)) return '🏳️';
+  return String.fromCodePoint(...[...cc].map((c) => 127397 + c.charCodeAt(0)));
+}

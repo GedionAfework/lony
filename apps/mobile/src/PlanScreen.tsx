@@ -5,6 +5,7 @@ import { api, type Goal, type MoneyAccount, type User } from './api';
 import { stripAmount } from './amountFormat';
 import { CURRENCIES } from './catalogs';
 import { DateField } from './DateField';
+import { IconCamera, IconTrash } from './icons';
 import { SearchSelect } from './SearchSelect';
 import { apiBaseUrl, fonts, radii, space, useTheme } from './theme';
 import {
@@ -405,9 +406,56 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
               ) : null}
               <PrimaryButton label={busy ? 'Saving…' : 'Add contribution'} onPress={onContribute} disabled={busy} />
               <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
-                <Chip label={cover ? 'Change photo' : 'Add photo'} onPress={() => void pickCover(selected.id)} />
-                {cover ? <Chip label="Remove photo" onPress={() => void onClearCover(selected.id)} /> : null}
-                <Chip label="Archive" onPress={() => onArchive(selected.id)} danger />
+                <Pressable
+                  onPress={() => void pickCover(selected.id)}
+                  accessibilityLabel={cover ? 'Change photo' : 'Add photo'}
+                  style={{
+                    width: 40,
+                    height: 40,
+                    borderRadius: radii.full,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    backgroundColor: colors.primarySoft,
+                    borderWidth: 1,
+                    borderColor: colors.primary,
+                  }}
+                >
+                  <IconCamera size={16} color={colors.primary} />
+                </Pressable>
+                {cover ? (
+                  <Pressable
+                    onPress={() => void onClearCover(selected.id)}
+                    accessibilityLabel="Remove photo"
+                    style={{
+                      width: 40,
+                      height: 40,
+                      borderRadius: radii.full,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      backgroundColor: colors.warningSoft,
+                      borderWidth: 1,
+                      borderColor: colors.warning,
+                    }}
+                  >
+                    <IconTrash size={16} color={colors.warning} />
+                  </Pressable>
+                ) : null}
+                <Pressable
+                  onPress={() => onArchive(selected.id)}
+                  accessibilityLabel="Archive"
+                  style={{
+                    width: 40,
+                    height: 40,
+                    borderRadius: radii.full,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    backgroundColor: colors.warningSoft,
+                    borderWidth: 1,
+                    borderColor: colors.warning,
+                  }}
+                >
+                  <IconTrash size={16} color={colors.warning} />
+                </Pressable>
               </View>
             </>
           ) : null}
@@ -541,40 +589,5 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
         )}
       </Card>
     </View>
-  );
-}
-
-function Chip({
-  label,
-  onPress,
-  danger,
-}: {
-  label: string;
-  onPress: () => void;
-  danger?: boolean;
-}) {
-  const { colors } = useTheme();
-  return (
-    <Pressable
-      onPress={onPress}
-      style={{
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        borderRadius: radii.full,
-        backgroundColor: danger ? colors.warningSoft : colors.primarySoft,
-        borderWidth: 1,
-        borderColor: danger ? colors.warning : colors.primary,
-      }}
-    >
-      <Text
-        style={{
-          color: danger ? colors.warning : colors.primary,
-          fontFamily: fonts.uiSemi,
-          fontSize: 12,
-        }}
-      >
-        {label}
-      </Text>
-    </Pressable>
   );
 }
