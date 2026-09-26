@@ -28,6 +28,7 @@ type Category struct {
 	Name     string
 	Slug     string
 	IsSystem bool
+	Active   bool
 }
 
 type CategoryDTO struct {
@@ -36,6 +37,7 @@ type CategoryDTO struct {
 	Name     string    `json:"name"`
 	Slug     string    `json:"slug"`
 	IsSystem bool      `json:"is_system"`
+	Active   bool      `json:"active,omitempty"`
 }
 
 type Entry struct {
@@ -232,5 +234,6 @@ func toCategoryDTO(c Category) CategoryDTO {
 		Name:     c.Name,
 		Slug:     c.Slug,
 		IsSystem: c.IsSystem,
+		Active:   c.Active,
 	}
 }

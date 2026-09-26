@@ -20,6 +20,10 @@ export type Overview = {
   overdue_loans: number;
   cashflow_entries_7d: number;
   ai_insights_7d: number;
+  ai_runs_7d?: number;
+  ai_users_7d?: number;
+  ai_tokens_7d?: number;
+  ai_requests_today?: number;
 };
 
 export type AdminUser = {
@@ -29,6 +33,7 @@ export type AdminUser = {
   username?: string | null;
   status: string;
   role: string;
+  plan_tier?: string;
   country_code?: string | null;
   created_at: string;
   last_active_at?: string | null;
@@ -76,6 +81,16 @@ export type CatalogInstitution = {
   country_code?: string | null;
   sort_order: number;
   active: boolean;
+};
+
+export type SystemCategory = {
+  id: string;
+  kind: string;
+  name: string;
+  slug: string;
+  is_system: boolean;
+  active: boolean;
+  created_at: string;
 };
 
 type ErrBody = { error?: { message?: string; code?: string } };
@@ -132,6 +147,16 @@ export const api = {
       { method: 'POST', headers: { 'Idempotency-Key': idem() }, body: '{}' },
       token,
     ),
+  setPlanTier: (token: string, id: string, plan_tier: 'free' | 'premium') =>
+    request<{ user: AdminUser }>(
+      `/api/v1/admin/users/${id}/plan`,
+      {
+        method: 'PATCH',
+        headers: { 'Idempotency-Key': idem() },
+        body: JSON.stringify({ plan_tier }),
+      },
+      token,
+    ),
   audit: (token: string) =>
     request<{ audit: AuditEntry[] }>('/api/v1/admin/audit?limit=40', { method: 'GET' }, token),
   getSettings: (token: string) =>
@@ -144,6 +169,32 @@ export const api = {
         headers: { 'Idempotency-Key': idem() },
         body: JSON.stringify({ ai_disabled: disabled }),
       },
+      token,
+    ),
+  listCategories: (token: string, kind = '') => {
+    const params = new URLSearchParams();
+    if (kind) params.set('kind', kind);
+    const q = params.toString();
+    return request<{ categories: SystemCategory[] }>(
+      `/api/v1/admin/categories${q ? `?${q}` : ''}`,
+      { method: 'GET' },
+      token,
+    );
+  },
+  createCategory: (token: string, body: { kind: string; name: string }) =>
+    request<{ category: SystemCategory }>(
+      '/api/v1/admin/categories',
+      {
+        method: 'POST',
+        headers: { 'Idempotency-Key': idem() },
+        body: JSON.stringify(body),
+      },
+      token,
+    ),
+  updateCategory: (token: string, id: string, body: { name?: string; active?: boolean }) =>
+    request<{ category: SystemCategory }>(
+      `/api/v1/admin/categories/${id}`,
+      { method: 'PATCH', body: JSON.stringify(body) },
       token,
     ),
   listCatalogTypes: (token: string, kind = '') => {

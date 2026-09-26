@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Pressable, Text, TextInput, View } from 'react-native';
+import { Alert, Platform, Pressable, Text, TextInput, View } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
-import { api, type AccountReconcile, type MoneyAccount, type User } from './api';
+import * as WebBrowser from 'expo-web-browser';
+import { api, type AccountReconcile, type BankLinkConnection, type BankLinkStatus, type MoneyAccount, type User } from './api';
 import { stripAmount } from './amountFormat';
 import type { CatalogOption } from './catalogs';
 import { CURRENCIES } from './catalogs';
+import { t } from './i18n';
 import {
   institutionsForAccountType,
 } from './institutions';
@@ -19,6 +21,7 @@ type Props = {
   formatMoney: (amount: string | null | undefined, currency: string | null | undefined, locale?: string) => string;
   onError: (message: string) => void;
   reloadToken?: number;
+  onPanelChange?: (open: boolean) => void;
 };
 
 const FALLBACK_ACCOUNT_TYPES: CatalogOption[] = [
@@ -56,7 +59,7 @@ function mergeOptions(primary: CatalogOption[], fallback: CatalogOption[]): Cata
   return out;
 }
 
-export function AccountsScreen({ user, token, formatMoney, onError, reloadToken = 0 }: Props) {
+export function AccountsScreen({ user, token, formatMoney, onError, reloadToken = 0, onPanelChange }: Props) {
   const { colors } = useTheme();
   const [accounts, setAccounts] = useState<MoneyAccount[]>([]);
   const [busy, setBusy] = useState(false);
@@ -86,6 +89,8 @@ export function AccountsScreen({ user, token, formatMoney, onError, reloadToken 
   const [importFileName, setImportFileName] = useState('');
   const [importEndingBalance, setImportEndingBalance] = useState('');
   const [importResult, setImportResult] = useState<string | null>(null);
+  const [bankStatus, setBankStatus] = useState<BankLinkStatus | null>(null);
+  const [bankConnections, setBankConnections] = useState<BankLinkConnection[]>([]);
 
   const accountTypes = useMemo(
     () => mergeOptions(remoteTypes, FALLBACK_ACCOUNT_TYPES),
@@ -105,10 +110,45 @@ export function AccountsScreen({ user, token, formatMoney, onError, reloadToken 
     try {
       const res = await api.listAccounts(token);
       setAccounts(res.accounts ?? []);
+      const links = await api.listBankLinks(token).catch(() => null);
+      if (links) {
+        setBankStatus(links.status);
+        setBankConnections(links.connections ?? []);
+      } else {
+        const st = await api.bankLinkStatus(token).catch(() => null);
+        if (st) setBankStatus(st);
+      }
     } catch (e) {
       onError(e instanceof Error ? e.message : 'Could not load accounts');
     }
   }, [token, onError]);
+
+  async function onConnectBank() {
+    setBusy(true);
+    try {
+      const session = await api.createBankLinkSession(token);
+      const url = session.link_url;
+      if (!url) {
+        onError('Bank link URL missing — set PUBLIC_BASE_URL on the API.');
+        return;
+      }
+      const result = await WebBrowser.openAuthSessionAsync(url, 'lony://bank-link');
+      if (result.type === 'success' && result.url) {
+        const q = result.url.split('?')[1] || '';
+        const params = new URLSearchParams(q);
+        if (params.get('cancelled')) return;
+        const publicToken = params.get('public_token');
+        if (publicToken) {
+          await api.exchangeBankLink(token, publicToken);
+          await reload();
+        }
+      }
+    } catch (e) {
+      onError(e instanceof Error ? e.message : t(user.locale, 'bankLinkUnavailable'));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   useEffect(() => {
     void reload();
@@ -378,7 +418,12 @@ export function AccountsScreen({ user, token, formatMoney, onError, reloadToken 
       });
       if (picked.canceled || !picked.assets?.[0]) return;
       const asset = picked.assets[0];
-      const text = await FileSystem.readAsStringAsync(asset.uri);
+      let text = '';
+      if (Platform.OS === 'web' && typeof fetch === 'function') {
+        text = await fetch(asset.uri).then((r) => r.text());
+      } else {
+        text = await FileSystem.readAsStringAsync(asset.uri);
+      }
       setImportCsv(text);
       setImportFileName(asset.name || 'statement.csv');
       setImportResult(null);
@@ -421,6 +466,9 @@ export function AccountsScreen({ user, token, formatMoney, onError, reloadToken 
 
   const formOpen = creating || editId;
   const panelOpen = formOpen || transferOpen || reconcileOpen || Boolean(importId);
+  useEffect(() => {
+    onPanelChange?.(Boolean(panelOpen));
+  }, [panelOpen, onPanelChange]);
   const accountOptions = accounts.map((a) => ({
     id: a.id,
     label: `${a.name} (${a.currency_code})`,
@@ -430,7 +478,61 @@ export function AccountsScreen({ user, token, formatMoney, onError, reloadToken 
 
   return (
     <View style={{ gap: space.md }}>
-      <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>Accounts</Text>
+      <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>
+        {t(user.locale, 'accounts')}
+      </Text>
+
+      <Card>
+        <SectionLabel>{t(user.locale, 'linkedBanks')}</SectionLabel>
+        <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13, marginBottom: 8 }}>
+          {bankStatus?.available
+            ? t(user.locale, 'bankLinkReady')
+            : bankStatus?.message || t(user.locale, 'bankLinkUnavailable')}
+        </Text>
+        {bankConnections.map((c) => (
+          <View
+            key={c.id}
+            style={{
+              flexDirection: 'row',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              paddingVertical: 8,
+              borderBottomWidth: 1,
+              borderBottomColor: colors.border,
+              gap: 8,
+            }}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }}>
+                {c.institution_label || c.provider}
+              </Text>
+              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>{c.status}</Text>
+            </View>
+            <Pressable
+              onPress={async () => {
+                try {
+                  await api.disconnectBankLink(token, c.id);
+                  await reload();
+                } catch (e) {
+                  onError(e instanceof Error ? e.message : 'Disconnect failed');
+                }
+              }}
+              hitSlop={8}
+            >
+              <Text style={{ color: colors.error, fontFamily: fonts.uiSemi, fontSize: 13 }}>
+                {t(user.locale, 'disconnect')}
+              </Text>
+            </Pressable>
+          </View>
+        ))}
+        {bankStatus?.available ? (
+          <PrimaryButton
+            label={busy ? '…' : t(user.locale, 'connectBank')}
+            onPress={() => void onConnectBank()}
+            disabled={busy}
+          />
+        ) : null}
+      </Card>
 
       {!panelOpen ? (
         <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>

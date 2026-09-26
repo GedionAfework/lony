@@ -26,6 +26,7 @@ type PublicUser struct {
 	EmailVerified         bool       `json:"email_verified"`
 	Status                string     `json:"status"`
 	Role                  string     `json:"role,omitempty"`
+	PlanTier              string     `json:"plan_tier,omitempty"`
 	CreatedAt             time.Time  `json:"created_at"`
 	ProfileComplete       bool       `json:"profile_complete"`
 }

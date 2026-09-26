@@ -37,6 +37,11 @@ type Config struct {
 	OpenAIBaseURL       string
 	OpenAIModel         string
 	AIDailyUserCap      int
+	PlaidClientID       string
+	PlaidSecret         string
+	PlaidEnv            string
+	PlaidRedirectURI    string
+	PublicBaseURL       string
 }
 
 func Load() (Config, error) {
@@ -68,6 +73,11 @@ func Load() (Config, error) {
 		OpenAIBaseURL:       strings.TrimRight(getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"), "/"),
 		OpenAIModel:         getenv("OPENAI_MODEL", "gpt-4o-mini"),
 		AIDailyUserCap:      intEnv("AI_DAILY_USER_CAP", 40),
+		PlaidClientID:       strings.TrimSpace(os.Getenv("PLAID_CLIENT_ID")),
+		PlaidSecret:         strings.TrimSpace(os.Getenv("PLAID_SECRET")),
+		PlaidEnv:            getenv("PLAID_ENV", "sandbox"),
+		PlaidRedirectURI:    strings.TrimSpace(os.Getenv("PLAID_REDIRECT_URI")),
+		PublicBaseURL:       strings.TrimRight(strings.TrimSpace(os.Getenv("PUBLIC_BASE_URL")), "/"),
 	}
 
 	if cfg.DatabaseURL == "" {

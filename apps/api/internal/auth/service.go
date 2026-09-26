@@ -499,10 +499,14 @@ func ToPublic(user UserRecord) users.PublicUser {
 		EmailVerified:         user.EmailVerifiedAt != nil,
 		Status:                user.Status,
 		Role:                  user.Role,
+		PlanTier:              user.PlanTier,
 		CreatedAt:             user.CreatedAt,
 	}
 	if out.Role == "" {
 		out.Role = "user"
+	}
+	if out.PlanTier == "" {
+		out.PlanTier = "free"
 	}
 	if user.AvatarObjectKey != nil && *user.AvatarObjectKey != "" {
 		url := "/api/v1/media/" + *user.AvatarObjectKey

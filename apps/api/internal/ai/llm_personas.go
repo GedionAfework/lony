@@ -177,7 +177,7 @@ func (s *Service) coachLLM(ctx context.Context, userID uuid.UUID, currency, mess
 }
 
 func (s *Service) GetCoachThread(ctx context.Context, userID uuid.UUID) (ConversationDTO, error) {
-	if err := s.ensureAIEnabled(ctx); err != nil {
+	if err := s.ensureAIEnabled(ctx, userID); err != nil {
 		return ConversationDTO{}, err
 	}
 	conv, err := s.store.EnsureConversation(ctx, userID, PersonaCoach, "Coach")
@@ -203,7 +203,7 @@ func (s *Service) GetCoachThread(ctx context.Context, userID uuid.UUID) (Convers
 
 // CoachStream writes SSE events: token, done|error. Falls back to a single token when LLM is unavailable.
 func (s *Service) CoachStream(ctx context.Context, w http.ResponseWriter, userID uuid.UUID, currency, message string) error {
-	if err := s.ensureAIEnabled(ctx); err != nil {
+	if err := s.ensureAIEnabled(ctx, userID); err != nil {
 		return err
 	}
 	currency = strings.ToUpper(strings.TrimSpace(currency))

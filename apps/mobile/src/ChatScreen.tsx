@@ -5,7 +5,7 @@ import {
   setAudioModeAsync,
   useAudioRecorder,
   useAudioRecorderState,
-} from 'expo-audio';
+} from './audioChat';
 import * as DocumentPicker from 'expo-document-picker';
 import { EncodingType, readAsStringAsync } from 'expo-file-system/legacy';
 import { useEffect, useMemo, useRef, useState } from 'react';
@@ -251,7 +251,22 @@ export function ChatScreen({
     const asset = picked.assets[0];
     setBusy(true);
     try {
-      const b64 = await readAsStringAsync(asset.uri, { encoding: EncodingType.Base64 });
+      let b64: string;
+      if (Platform.OS === 'web' && typeof fetch === 'function') {
+        const blob = await fetch(asset.uri).then((r) => r.blob());
+        b64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const result = String(reader.result || '');
+            const idx = result.indexOf(',');
+            resolve(idx >= 0 ? result.slice(idx + 1) : result);
+          };
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(blob);
+        });
+      } else {
+        b64 = await readAsStringAsync(asset.uri, { encoding: EncodingType.Base64 });
+      }
       const kind = (asset.mimeType ?? '').startsWith('image/') ? 'image' : 'file';
       const res = await api.sendMessage(token, active.id, {
         reply_to_message_id: replyTo?.id,
@@ -273,6 +288,10 @@ export function ChatScreen({
 
   async function toggleRecord() {
     if (!active) {
+      return;
+    }
+    if (Platform.OS === 'web') {
+      onError('Voice notes are available in the mobile app');
       return;
     }
     try {

@@ -10,7 +10,7 @@ import {
   space,
   useTheme,
 } from './theme';
-import { Card, Field, PrimaryButton, SecondaryButton, SectionLabel } from './ui';
+import { Card, Field, PrimaryButton, ScreenHeader, SecondaryButton, SectionLabel } from './ui';
 
 type Props = {
   onBack: () => void;
@@ -168,12 +168,7 @@ export function ThemesScreen({ onBack }: Props) {
   if (creating) {
     return (
       <View style={{ gap: space.md }}>
-        <Pressable onPress={() => setCreating(false)}>
-          <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 14 }}>← Themes</Text>
-        </Pressable>
-        <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>
-          {editingId ? 'Edit theme' : 'Create theme'}
-        </Text>
+        <ScreenHeader title={editingId ? 'Edit theme' : 'Create theme'} onBack={() => setCreating(false)} />
         <View style={{ alignItems: 'center' }}>
           <PhonePreview palette={draft} active />
         </View>
@@ -234,10 +229,7 @@ export function ThemesScreen({ onBack }: Props) {
 
   return (
     <View style={{ gap: space.md }}>
-      <Pressable onPress={onBack}>
-        <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 14 }}>← Settings</Text>
-      </Pressable>
-      <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>Themes</Text>
+      <ScreenHeader title="Themes" onBack={onBack} />
 
       <PrimaryButton label="Create custom theme" onPress={startCreate} />
 

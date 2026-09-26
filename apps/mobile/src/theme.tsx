@@ -1,5 +1,5 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import * as SecureStore from 'expo-secure-store';
+﻿import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { storageGet, storageSet } from './secureStorage';
 
 export type ThemeMode = 'light' | 'dark';
 
@@ -178,7 +178,7 @@ export const BUILTIN_THEMES: ThemePreset[] = [
   { id: 'midnight', name: 'Midnight', kind: 'preset', colors: midnightColors },
 ];
 
-/** @deprecated Prefer useTheme().colors — kept for gradual migration */
+/** @deprecated Prefer useTheme().colors â€” kept for gradual migration */
 export const colors = lightColors;
 
 export const fonts = {
@@ -248,9 +248,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     (async () => {
       try {
         const [savedMode, savedId, rawCustom] = await Promise.all([
-          SecureStore.getItemAsync(THEME_KEY),
-          SecureStore.getItemAsync(THEME_ID_KEY),
-          SecureStore.getItemAsync(CUSTOM_THEMES_KEY),
+          storageGet(THEME_KEY),
+          storageGet(THEME_ID_KEY),
+          storageGet(CUSTOM_THEMES_KEY),
         ]);
         if (savedMode === 'light' || savedMode === 'dark') {
           setModeState(savedMode);
@@ -274,35 +274,35 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   const setMode = (next: ThemeMode) => {
     setModeState(next);
-    SecureStore.setItemAsync(THEME_KEY, next).catch(() => undefined);
+    storageSet(THEME_KEY, next).catch(() => undefined);
     const fallback = next === 'dark' ? 'lony-dark' : 'lony-light';
     setThemeIdState(fallback);
-    SecureStore.setItemAsync(THEME_ID_KEY, fallback).catch(() => undefined);
+    storageSet(THEME_ID_KEY, fallback).catch(() => undefined);
   };
 
   const setThemeId = (id: string) => {
     setThemeIdState(id);
-    SecureStore.setItemAsync(THEME_ID_KEY, id).catch(() => undefined);
+    storageSet(THEME_ID_KEY, id).catch(() => undefined);
     const all = [...BUILTIN_THEMES, ...customThemes];
     const hit = all.find((t) => t.id === id);
     if (hit) {
       const nextMode: ThemeMode = isDarkPalette(hit.colors) ? 'dark' : 'light';
       setModeState(nextMode);
-      SecureStore.setItemAsync(THEME_KEY, nextMode).catch(() => undefined);
+      storageSet(THEME_KEY, nextMode).catch(() => undefined);
     }
   };
 
   const saveCustomTheme = async (theme: ThemePreset) => {
     const next = [...customThemes.filter((t) => t.id !== theme.id), { ...theme, kind: 'custom' as const }];
     setCustomThemes(next);
-    await SecureStore.setItemAsync(CUSTOM_THEMES_KEY, JSON.stringify(next));
+    await storageSet(CUSTOM_THEMES_KEY, JSON.stringify(next));
     setThemeId(theme.id);
   };
 
   const deleteCustomTheme = async (id: string) => {
     const next = customThemes.filter((t) => t.id !== id);
     setCustomThemes(next);
-    await SecureStore.setItemAsync(CUSTOM_THEMES_KEY, JSON.stringify(next));
+    await storageSet(CUSTOM_THEMES_KEY, JSON.stringify(next));
     if (themeId === id) {
       setThemeId('lony-light');
     }

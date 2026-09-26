@@ -23,6 +23,7 @@ import (
 	"equilend/api/internal/insights"
 	"equilend/api/internal/ai"
 	"equilend/api/internal/ai/llm"
+	"equilend/api/internal/banklink"
 	"equilend/api/internal/score"
 	"equilend/api/internal/legal"
 	"equilend/api/internal/loans"
@@ -97,6 +98,14 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 		Model:   cfg.OpenAIModel,
 	}), cfg.AIDailyUserCap)
 	aiH := ai.NewHandler(aiSvc)
+	bankLinkSvc := banklink.NewService(store.BankLinkAdapter(sqlStore), banklink.Config{
+		ClientID:    cfg.PlaidClientID,
+		Secret:      cfg.PlaidSecret,
+		Env:         cfg.PlaidEnv,
+		RedirectURI: cfg.PlaidRedirectURI,
+		PublicBase:  cfg.PublicBaseURL,
+	})
+	bankLinkH := banklink.NewHandler(bankLinkSvc)
 	banksSvc := banks.NewService(sqlStore, loansSvc, friendsSvc, cfg.BankKey)
 	banksH := banks.NewHandler(banksSvc)
 	repaySvc := repayments.NewService(sqlStore, loansSvc)
@@ -156,6 +165,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 	// Telegram Login Widget HTML (public; no JWT). Domain must match BotFather settings in production.
 	r.Get("/auth/telegram/widget", authH.TelegramWidget)
 	r.Get("/auth/telegram/callback", authH.TelegramCallback)
+	r.Get("/api/v1/bank-links/link-ui", bankLinkH.LinkUI)
 
 	legalH := legal.NewHandler()
 	railsH := rails.NewHandler()
@@ -250,6 +260,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 				r.Get("/users/{userID}", adminH.GetUser)
 				r.With(idem.Handler("admin.suspend")).Post("/users/{userID}/suspend", adminH.Suspend)
 				r.With(idem.Handler("admin.unsuspend")).Post("/users/{userID}/unsuspend", adminH.Unsuspend)
+				r.With(idem.Handler("admin.plan")).Patch("/users/{userID}/plan", adminH.SetPlanTier)
 				r.Get("/audit", adminH.ListAudit)
 				r.Get("/settings", adminH.GetSettings)
 				r.With(idem.Handler("admin.ai")).Post("/settings/ai", adminH.SetAIDisabled)
@@ -259,6 +270,9 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 				r.Get("/catalogs/institutions", adminH.ListCatalogInstitutionsAdmin)
 				r.With(idem.Handler("admin.catalog.inst")).Post("/catalogs/institutions", adminH.CreateCatalogInstitution)
 				r.Patch("/catalogs/institutions/{institutionID}", adminH.UpdateCatalogInstitution)
+				r.Get("/categories", adminH.ListSystemCategories)
+				r.With(idem.Handler("admin.category")).Post("/categories", adminH.CreateSystemCategory)
+				r.Patch("/categories/{categoryID}", adminH.UpdateSystemCategory)
 			})
 
 			r.Get("/ai/insights", aiH.ListInsights)
@@ -269,6 +283,11 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 			r.Get("/ai/coach/thread", aiH.GetCoachThread)
 			r.With(idem.Handler("ai.coach")).Post("/ai/coach/messages", aiH.Coach)
 			r.Post("/ai/coach/messages/stream", aiH.CoachStream)
+			r.Get("/bank-links/status", bankLinkH.Status)
+			r.Get("/bank-links", bankLinkH.List)
+			r.With(idem.Handler("banklink.session")).Post("/bank-links/session", bankLinkH.CreateSession)
+			r.With(idem.Handler("banklink.exchange")).Post("/bank-links/exchange", bankLinkH.Exchange)
+			r.With(idem.Handler("banklink.disconnect")).Post("/bank-links/{id}/disconnect", bankLinkH.Disconnect)
 			r.With(idem.Handler("loans.create")).Post("/loans", loansH.Create)
 			r.Get("/loans", loansH.List)
 			r.Get("/loans/{id}", loansH.Get)

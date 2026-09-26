@@ -12,6 +12,7 @@ import {
   EmptyState,
   Field,
   PrimaryButton,
+  ScreenHeader,
   SecondaryButton,
   SectionLabel,
 } from './ui';
@@ -22,9 +23,10 @@ type Props = {
   formatMoney: (amount: string | null | undefined, currency: string | null | undefined, locale?: string) => string;
   onError: (message: string) => void;
   reloadToken?: number;
+  onDetailChange?: (open: boolean) => void;
 };
 
-const GOAL_TYPES = [
+const FALLBACK_GOAL_TYPES = [
   { id: 'travel', label: 'Travel' },
   { id: 'purchase', label: 'Purchase' },
   { id: 'savings', label: 'Savings' },
@@ -39,9 +41,10 @@ function resolveMediaURL(path: string | null | undefined): string | null {
   return `${origin}${path.startsWith('/') ? path : `/${path}`}`;
 }
 
-function typeDisplay(g: Goal): string {
+function typeDisplay(g: Goal, goalTypes: { id: string; label: string }[]): string {
   if (g.goal_type === 'custom' && g.type_label) return g.type_label;
-  return GOAL_TYPES.find((t) => t.id === g.goal_type)?.label || g.goal_type;
+  const id = g.goal_type === 'custom' ? 'other' : g.goal_type;
+  return goalTypes.find((t) => t.id === id)?.label || g.goal_type;
 }
 
 function filterKey(g: Goal): string {
@@ -49,10 +52,11 @@ function filterKey(g: Goal): string {
   return g.goal_type;
 }
 
-export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0 }: Props) {
+export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0, onDetailChange }: Props) {
   const { colors } = useTheme();
   const [goals, setGoals] = useState<Goal[]>([]);
   const [accounts, setAccounts] = useState<MoneyAccount[]>([]);
+  const [goalTypes, setGoalTypes] = useState(FALLBACK_GOAL_TYPES);
   const [busy, setBusy] = useState(false);
   const [mode, setMode] = useState<'index' | 'create' | 'show'>('index');
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -79,9 +83,25 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0 
 
   const reload = useCallback(async () => {
     try {
-      const [g, a] = await Promise.all([api.listGoals(token), api.listAccounts(token).catch(() => ({ accounts: [] }))]);
+      const [g, a, types] = await Promise.all([
+        api.listGoals(token),
+        api.listAccounts(token).catch(() => ({ accounts: [] })),
+        api.listCatalogTypes(token, 'goal_type').catch(() => ({ types: [] })),
+      ]);
       setGoals(g.goals ?? []);
       setAccounts(a.accounts ?? []);
+      const fromCatalog = (types.types ?? [])
+        .filter((t) => t.active !== false)
+        .map((t) => ({
+          id: t.code === 'custom' ? 'other' : t.code,
+          label: t.label,
+        }));
+      if (fromCatalog.length) {
+        const hasOther = fromCatalog.some((t) => t.id === 'other');
+        setGoalTypes(hasOther ? fromCatalog : [...fromCatalog, { id: 'other', label: 'Other' }]);
+      } else {
+        setGoalTypes(FALLBACK_GOAL_TYPES);
+      }
     } catch (e) {
       onError(e instanceof Error ? e.message : 'Could not load plans');
     }
@@ -97,10 +117,10 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0 
     const seen = new Map<string, string>();
     for (const g of goals) {
       const key = filterKey(g);
-      if (!seen.has(key)) seen.set(key, typeDisplay(g));
+      if (!seen.has(key)) seen.set(key, typeDisplay(g, goalTypes));
     }
     return [{ id: 'all', label: 'All' }, ...[...seen.entries()].map(([id, label]) => ({ id, label }))];
-  }, [goals, showFilters]);
+  }, [goals, showFilters, goalTypes]);
 
   const visible = useMemo(() => {
     if (!showFilters || filter === 'all') return goals;
@@ -128,6 +148,7 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0 
     setContributeAmount('');
     setContributeAccount('');
     resetForm();
+    onDetailChange?.(false);
   }
 
   async function pickCover(forGoalId?: string) {
@@ -277,13 +298,10 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0 
   if (mode === 'create') {
     return (
       <View style={{ gap: space.md }}>
-        <Pressable onPress={goIndex}>
-          <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 14 }}>← Back</Text>
-        </Pressable>
-        <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>New plan</Text>
+        <ScreenHeader title="New plan" onBack={goIndex} />
         <Card>
           <Field label="Title" value={title} onChange={setTitle} />
-          <SearchSelect label="Type" value={goalType} onChange={setGoalType} options={GOAL_TYPES} />
+          <SearchSelect label="Type" value={goalType} onChange={setGoalType} options={goalTypes} />
           {goalType === 'other' ? <Field label="Type name" value={otherType} onChange={setOtherType} /> : null}
           <SearchSelect label="Currency" value={currency} onChange={setCurrency} options={CURRENCIES} />
           <Field label="Target amount" value={target} onChange={setTarget} money />
@@ -318,9 +336,7 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0 
     const cover = resolveMediaURL(selected.cover_image_url);
     return (
       <View style={{ gap: space.md }}>
-        <Pressable onPress={goIndex}>
-          <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 14 }}>← Back</Text>
-        </Pressable>
+        <ScreenHeader title={selected.title} onBack={goIndex} />
         <Card>
           {cover ? (
             <Image
@@ -334,7 +350,7 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0 
           ) : null}
           <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>{selected.title}</Text>
           <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
-            {typeDisplay(selected)}
+            {typeDisplay(selected, goalTypes)}
             {selected.target_date ? ` · ${selected.target_date}` : ''}
             {done ? ' · Done' : ''}
           </Text>
@@ -409,6 +425,7 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0 
         onPress={() => {
           resetForm();
           setMode('create');
+          onDetailChange?.(true);
         }}
       />
 
@@ -461,6 +478,7 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0 
                   setContributeAmount('');
                   setDebitAccount(true);
                   setMode('show');
+                  onDetailChange?.(true);
                 }}
                 style={{
                   gap: 10,
@@ -489,7 +507,7 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0 
                     }}
                   >
                     <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 13 }}>
-                      {typeDisplay(g)}
+                      {typeDisplay(g, goalTypes)}
                     </Text>
                   </View>
                 )}
@@ -497,7 +515,7 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0 
                   <View style={{ flex: 1, gap: 2 }}>
                     <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>{g.title}</Text>
                     <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
-                      {typeDisplay(g)}
+                      {typeDisplay(g, goalTypes)}
                       {g.target_date ? ` · ${g.target_date}` : ''}
                     </Text>
                   </View>

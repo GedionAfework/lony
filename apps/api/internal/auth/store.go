@@ -25,6 +25,7 @@ type UserRecord struct {
 	EmailVerifiedAt       *time.Time
 	Status                string
 	Role                  string
+	PlanTier              string
 	Timezone              string
 	Locale                string
 	DefaultCurrencyCode   *string

@@ -1,4 +1,4 @@
-import * as FileSystem from 'expo-file-system/legacy';
+import { Platform } from 'react-native';
 
 export type CashflowDraft = {
   id: string;
@@ -15,13 +15,21 @@ export type CashflowDraft = {
   created_at: string;
 };
 
-const DRAFT_FILE = `${FileSystem.documentDirectory ?? ''}lony-cashflow-drafts.json`;
+const WEB_KEY = 'lony.cashflow_drafts';
 
 async function readAll(): Promise<CashflowDraft[]> {
   try {
-    const info = await FileSystem.getInfoAsync(DRAFT_FILE);
+    if (Platform.OS === 'web') {
+      const raw = localStorage.getItem(WEB_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? (parsed as CashflowDraft[]) : [];
+    }
+    const FileSystem = await import('expo-file-system/legacy');
+    const path = `${FileSystem.documentDirectory ?? ''}lony-cashflow-drafts.json`;
+    const info = await FileSystem.getInfoAsync(path);
     if (!info.exists) return [];
-    const raw = await FileSystem.readAsStringAsync(DRAFT_FILE);
+    const raw = await FileSystem.readAsStringAsync(path);
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? (parsed as CashflowDraft[]) : [];
   } catch {
@@ -30,7 +38,13 @@ async function readAll(): Promise<CashflowDraft[]> {
 }
 
 async function writeAll(rows: CashflowDraft[]): Promise<void> {
-  await FileSystem.writeAsStringAsync(DRAFT_FILE, JSON.stringify(rows));
+  if (Platform.OS === 'web') {
+    localStorage.setItem(WEB_KEY, JSON.stringify(rows));
+    return;
+  }
+  const FileSystem = await import('expo-file-system/legacy');
+  const path = `${FileSystem.documentDirectory ?? ''}lony-cashflow-drafts.json`;
+  await FileSystem.writeAsStringAsync(path, JSON.stringify(rows));
 }
 
 export async function listCashflowDrafts(): Promise<CashflowDraft[]> {

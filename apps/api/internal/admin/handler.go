@@ -106,6 +106,27 @@ func (h *Handler) Unsuspend(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"user": out})
 }
 
+func (h *Handler) SetPlanTier(w http.ResponseWriter, r *http.Request) {
+	id, err := parseUserID(r)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	var body struct {
+		PlanTier string `json:"plan_tier"`
+	}
+	if err := httpx.Decode(r, &body); err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	out, err := h.svc.SetPlanTier(r.Context(), auth.UserIDFrom(r.Context()), id, body.PlanTier)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"user": out})
+}
+
 func (h *Handler) ListAudit(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	out, err := h.svc.ListAudit(r.Context(), limit)
@@ -285,6 +306,54 @@ func (h *Handler) UpdateCatalogInstitution(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"institution": out})
+}
+
+func (h *Handler) ListSystemCategories(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.svc.ListSystemCategories(r.Context(), r.URL.Query().Get("kind"))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"categories": rows})
+}
+
+func (h *Handler) CreateSystemCategory(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Kind string `json:"kind"`
+		Name string `json:"name"`
+	}
+	if err := httpx.Decode(r, &body); err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	out, err := h.svc.CreateSystemCategory(r.Context(), auth.UserIDFrom(r.Context()), body.Kind, body.Name)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusCreated, map[string]any{"category": out})
+}
+
+func (h *Handler) UpdateSystemCategory(w http.ResponseWriter, r *http.Request) {
+	id, err := parseCatalogID(r, "categoryID")
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	var body struct {
+		Name   *string `json:"name"`
+		Active *bool   `json:"active"`
+	}
+	if err := httpx.Decode(r, &body); err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	out, err := h.svc.UpdateSystemCategory(r.Context(), auth.UserIDFrom(r.Context()), id, body.Name, body.Active)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"category": out})
 }
 
 func parseCatalogID(r *http.Request, param string) (uuid.UUID, error) {

@@ -1,4 +1,5 @@
 import { Modal, Pressable, Text, View } from 'react-native';
+import { t } from './i18n';
 import { fonts, radii, space, useTheme } from './theme';
 
 export type DrawerItem = 'expenses' | 'accounts' | 'loans' | 'analytics' | 'plan' | 'settings';
@@ -6,20 +7,21 @@ export type DrawerItem = 'expenses' | 'accounts' | 'loans' | 'analytics' | 'plan
 type Props = {
   open: boolean;
   active?: DrawerItem | null;
+  locale?: string | null;
   onClose: () => void;
   onSelect: (item: DrawerItem) => void;
 };
 
-const ITEMS: { id: DrawerItem; label: string }[] = [
-  { id: 'expenses', label: 'Expenses' },
-  { id: 'accounts', label: 'Accounts' },
-  { id: 'loans', label: 'Loans' },
-  { id: 'analytics', label: 'Insights' },
-  { id: 'plan', label: 'Plan' },
-  { id: 'settings', label: 'Settings' },
+const ITEM_KEYS: { id: DrawerItem; key: 'expenses' | 'accounts' | 'loans' | 'insights' | 'plan' | 'settings' }[] = [
+  { id: 'expenses', key: 'expenses' },
+  { id: 'accounts', key: 'accounts' },
+  { id: 'loans', key: 'loans' },
+  { id: 'analytics', key: 'insights' },
+  { id: 'plan', key: 'plan' },
+  { id: 'settings', key: 'settings' },
 ];
 
-export function DrawerMenu({ open, active, onClose, onSelect }: Props) {
+export function DrawerMenu({ open, active, locale, onClose, onSelect }: Props) {
   const { colors } = useTheme();
   return (
     <Modal visible={open} animationType="fade" transparent onRequestClose={onClose}>
@@ -46,9 +48,9 @@ export function DrawerMenu({ open, active, onClose, onSelect }: Props) {
               marginBottom: 12,
             }}
           >
-            MENU
+            {t(locale, 'menu')}
           </Text>
-          {ITEMS.map((item) => {
+          {ITEM_KEYS.map((item) => {
             const selected = active === item.id;
             return (
               <Pressable
@@ -71,7 +73,7 @@ export function DrawerMenu({ open, active, onClose, onSelect }: Props) {
                     fontSize: 17,
                   }}
                 >
-                  {item.label}
+                  {t(locale, item.key)}
                 </Text>
               </Pressable>
             );

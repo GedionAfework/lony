@@ -97,6 +97,7 @@ type Store interface {
 
 type Gate interface {
 	AIDisabled(ctx context.Context) (bool, error)
+	UserCanUseAI(ctx context.Context, userID uuid.UUID) (bool, error)
 }
 
 type InsightsAPI interface {
@@ -135,22 +136,28 @@ func (s *Service) SetLLM(c *llm.Client, dailyCap int) {
 	}
 }
 
-func (s *Service) ensureAIEnabled(ctx context.Context) error {
-	if s.gate == nil {
-		return nil
-	}
-	off, err := s.gate.AIDisabled(ctx)
-	if err != nil {
-		return err
-	}
-	if off {
-		return httpx.E(http.StatusServiceUnavailable, "AI_DISABLED", "AI features are temporarily disabled")
+func (s *Service) ensureAIEnabled(ctx context.Context, userID uuid.UUID) error {
+	if s.gate != nil {
+		off, err := s.gate.AIDisabled(ctx)
+		if err != nil {
+			return err
+		}
+		if off {
+			return httpx.E(http.StatusServiceUnavailable, "AI_DISABLED", "AI features are temporarily disabled")
+		}
+		ok, err := s.gate.UserCanUseAI(ctx, userID)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return httpx.E(http.StatusPaymentRequired, "AI_PREMIUM_REQUIRED", "AI personas require a Premium plan")
+		}
 	}
 	return nil
 }
 
 func (s *Service) ListInsights(ctx context.Context, userID uuid.UUID) ([]InsightDTO, error) {
-	if err := s.ensureAIEnabled(ctx); err != nil {
+	if err := s.ensureAIEnabled(ctx, userID); err != nil {
 		return nil, err
 	}
 	rows, err := s.store.ListInsights(ctx, userID, 30)
@@ -165,7 +172,7 @@ func (s *Service) ListInsights(ctx context.Context, userID uuid.UUID) ([]Insight
 }
 
 func (s *Service) RefreshInsights(ctx context.Context, userID uuid.UUID, currency string) ([]InsightDTO, error) {
-	if err := s.ensureAIEnabled(ctx); err != nil {
+	if err := s.ensureAIEnabled(ctx, userID); err != nil {
 		return nil, err
 	}
 	currency = strings.ToUpper(strings.TrimSpace(currency))
@@ -290,7 +297,7 @@ func (s *Service) ClearHistory(ctx context.Context, userID uuid.UUID) (int64, er
 }
 
 func (s *Service) Report(ctx context.Context, userID uuid.UUID, currency string, months int) (Report, error) {
-	if err := s.ensureAIEnabled(ctx); err != nil {
+	if err := s.ensureAIEnabled(ctx, userID); err != nil {
 		return Report{}, err
 	}
 	currency = strings.ToUpper(strings.TrimSpace(currency))
@@ -371,7 +378,7 @@ func (s *Service) Report(ctx context.Context, userID uuid.UUID, currency string,
 }
 
 func (s *Service) Coach(ctx context.Context, userID uuid.UUID, currency, message string) (CoachReply, error) {
-	if err := s.ensureAIEnabled(ctx); err != nil {
+	if err := s.ensureAIEnabled(ctx, userID); err != nil {
 		return CoachReply{}, err
 	}
 	currency = strings.ToUpper(strings.TrimSpace(currency))

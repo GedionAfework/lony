@@ -272,9 +272,10 @@ func (s *SQLStore) ListCashflowCategories(ctx context.Context, userID uuid.UUID,
 		clause += ` AND kind = $` + itoa(len(args))
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT id, user_id, kind, name, slug, is_system
+		SELECT id, user_id, kind, name, slug, is_system, COALESCE(active, true)
 		FROM cashflow_categories
 		WHERE `+clause+`
+		  AND (user_id IS NOT NULL OR COALESCE(active, true) = true)
 		ORDER BY is_system DESC, name ASC
 	`, args...)
 	if err != nil {
@@ -284,7 +285,7 @@ func (s *SQLStore) ListCashflowCategories(ctx context.Context, userID uuid.UUID,
 	var out []expenses.Category
 	for rows.Next() {
 		var c expenses.Category
-		if err := rows.Scan(&c.ID, &c.UserID, &c.Kind, &c.Name, &c.Slug, &c.IsSystem); err != nil {
+		if err := rows.Scan(&c.ID, &c.UserID, &c.Kind, &c.Name, &c.Slug, &c.IsSystem, &c.Active); err != nil {
 			return nil, err
 		}
 		out = append(out, c)
@@ -296,10 +297,10 @@ func (s *SQLStore) InsertCashflowCategory(ctx context.Context, cat expenses.Cate
 	row := s.pool.QueryRow(ctx, `
 		INSERT INTO cashflow_categories (user_id, kind, name, slug, is_system)
 		VALUES ($1, $2, $3, $4, false)
-		RETURNING id, user_id, kind, name, slug, is_system
+		RETURNING id, user_id, kind, name, slug, is_system, COALESCE(active, true)
 	`, cat.UserID, cat.Kind, cat.Name, cat.Slug)
 	var out expenses.Category
-	if err := row.Scan(&out.ID, &out.UserID, &out.Kind, &out.Name, &out.Slug, &out.IsSystem); err != nil {
+	if err := row.Scan(&out.ID, &out.UserID, &out.Kind, &out.Name, &out.Slug, &out.IsSystem, &out.Active); err != nil {
 		return expenses.Category{}, err
 	}
 	return out, nil

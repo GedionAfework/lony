@@ -19,6 +19,8 @@ export type User = {
   default_currency_code: string | null;
   email_verified: boolean;
   status: string;
+  role?: string;
+  plan_tier?: string;
   created_at: string;
   profile_complete?: boolean;
 };
@@ -499,6 +501,38 @@ export const api = {
     }),
   getCoachThread: (token: string) =>
     request<{ thread: CoachThread; disclaimer: string }>('/ai/coach/thread', { method: 'GET' }, token),
+  adminOverview: (token: string) =>
+    request<{ overview: AdminOverview }>('/admin/overview', { method: 'GET' }, token),
+  adminGetSettings: (token: string) =>
+    request<{ settings: { ai_disabled: boolean } }>('/admin/settings', { method: 'GET' }, token),
+  adminSetAI: (token: string, aiDisabled: boolean) =>
+    request<{ settings: { ai_disabled: boolean } }>('/admin/settings/ai', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('admin-ai') },
+      body: JSON.stringify({ ai_disabled: aiDisabled }),
+    }, token),
+  bankLinkStatus: (token: string) =>
+    request<BankLinkStatus>('/bank-links/status', { method: 'GET' }, token),
+  listBankLinks: (token: string) =>
+    request<{ connections: BankLinkConnection[]; status: BankLinkStatus }>('/bank-links', { method: 'GET' }, token),
+  createBankLinkSession: (token: string) =>
+    request<{ link_token: string; link_url?: string; provider: string; env: string }>('/bank-links/session', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('bank-link-session') },
+      body: '{}',
+    }, token),
+  exchangeBankLink: (token: string, publicToken: string) =>
+    request<{ connection: BankLinkConnection }>('/bank-links/exchange', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('bank-link-exchange') },
+      body: JSON.stringify({ public_token: publicToken }),
+    }, token),
+  disconnectBankLink: (token: string, id: string) =>
+    request<{ ok: boolean }>(`/bank-links/${id}/disconnect`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('bank-link-disconnect') },
+      body: '{}',
+    }, token),
   cashflowSummary: (token: string, query: { from?: string; to?: string } = {}) => {
     const params = new URLSearchParams();
     if (query.from) params.set('from', query.from);
@@ -1161,6 +1195,42 @@ export type CoachThread = {
   messages: CoachMessage[];
   created_at: string;
   updated_at: string;
+};
+
+export type AdminOverview = {
+  total_users: number;
+  active_users: number;
+  suspended_users: number;
+  signups_7d: number;
+  signups_30d: number;
+  dau: number;
+  wau: number;
+  open_loans: number;
+  overdue_loans: number;
+  cashflow_entries_7d: number;
+  ai_insights_7d: number;
+  ai_runs_7d: number;
+  ai_users_7d: number;
+  ai_tokens_7d: number;
+  ai_requests_today: number;
+};
+
+export type BankLinkStatus = {
+  available: boolean;
+  provider?: string;
+  env?: string;
+  message?: string;
+};
+
+export type BankLinkConnection = {
+  id: string;
+  provider: string;
+  item_id?: string;
+  institution_label?: string;
+  status: string;
+  account_id?: string | null;
+  last_synced_at?: string | null;
+  created_at: string;
 };
 
 export type CashflowSummarySlice = {

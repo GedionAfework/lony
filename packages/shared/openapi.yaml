@@ -1531,14 +1531,57 @@ paths:
           description: Report with charts, tables, summary, disclaimer
         "503":
           description: AI disabled
+  /bank-links/status:
+    get:
+      summary: Whether live bank OAuth (Plaid) is configured
+      operationId: bankLinkStatus
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Availability + message
+  /bank-links:
+    get:
+      summary: List linked bank connections
+      operationId: listBankLinks
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Connections + status
+  /bank-links/session:
+    post:
+      summary: Create Plaid Link session
+      operationId: createBankLinkSession
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: link_token and link_url
+        "503":
+          description: Plaid not configured
+  /bank-links/exchange:
+    post:
+      summary: Exchange Plaid public_token for a stored connection
+      operationId: exchangeBankLink
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Connection
+  /bank-links/{id}/disconnect:
+    post:
+      summary: Remove a bank link connection
+      operationId: disconnectBankLink
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Ok
   /admin/overview:
     get:
       summary: Platform KPIs (admin)
+      description: Includes AI usage counters (ai_runs_7d, ai_users_7d, ai_tokens_7d, ai_requests_today).
       operationId: adminOverview
       security: [{ bearerAuth: [] }]
       responses:
         "200":
-          description: Overview
+          description: Overview with AI usage fields
         "403":
           description: Not admin
   /admin/users:

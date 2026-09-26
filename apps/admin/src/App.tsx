@@ -1,10 +1,20 @@
 import { FormEvent, useEffect, useState } from 'react';
 import { api, type AdminUser, type AuditEntry, type Overview, type PublicUser } from './api';
 import { CatalogsPanel } from './CatalogsPanel';
+import { CategoriesPanel } from './CategoriesPanel';
 
-type Tab = 'overview' | 'users' | 'catalogs' | 'audit';
+type Tab = 'overview' | 'users' | 'categories' | 'catalogs' | 'settings' | 'audit';
 
 const TOKEN_KEY = 'lony_admin_token';
+
+const NAV: { id: Tab; label: string }[] = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'users', label: 'Users' },
+  { id: 'categories', label: 'Categories' },
+  { id: 'catalogs', label: 'Catalogs' },
+  { id: 'settings', label: 'Settings' },
+  { id: 'audit', label: 'Audit' },
+];
 
 export function App() {
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY));
@@ -51,7 +61,7 @@ export function App() {
     if (!token || !me) return;
     let cancelled = false;
     setError(null);
-    if (tab === 'overview') {
+    if (tab === 'overview' || tab === 'settings') {
       Promise.all([api.overview(token), api.getSettings(token)])
         .then(([ov, settings]) => {
           if (cancelled) return;
@@ -139,6 +149,23 @@ export function App() {
     }
   }
 
+  async function setPlan(tier: 'free' | 'premium') {
+    if (!token || !selected) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api.setPlanTier(token, selected.id, tier);
+      setSelected(res.user);
+      setUsers((prev) =>
+        prev.map((u) => (u.id === res.user.id ? { ...u, plan_tier: res.user.plan_tier } : u)),
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not update plan');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (!token || !me) {
     return (
       <div className="login-wrap">
@@ -147,7 +174,7 @@ export function App() {
             <h1 className="brand">
               Lony <span>Admin</span>
             </h1>
-            <p className="muted">Operator console — admin role required</p>
+            <p className="muted">SaaS control panel — admin role required</p>
           </div>
           <label>
             Email
@@ -173,232 +200,303 @@ export function App() {
   }
 
   return (
-    <div className="app-shell">
-      <div className="row" style={{ justifyContent: 'space-between' }}>
-        <div>
+    <div className="saas-shell">
+      <aside className="saas-sidebar">
+        <div className="saas-brand">
           <h1 className="brand">
             Lony <span>Admin</span>
           </h1>
-          <p className="muted" style={{ margin: '4px 0 0' }}>
-            Signed in as {me.email}
+          <p className="muted" style={{ margin: '6px 0 0', fontSize: 13 }}>
+            {me.email}
           </p>
         </div>
-        <button className="btn" type="button" onClick={logout}>
-          Sign out
-        </button>
-      </div>
-
-      <div className="nav-tabs">
-        {([
-          ['overview', 'Overview'],
-          ['users', 'Users'],
-          ['catalogs', 'Catalogs'],
-          ['audit', 'Audit'],
-        ] as const).map(([id, label]) => (
-          <button
-            key={id}
-            type="button"
-            className="btn"
-            aria-current={tab === id ? 'page' : undefined}
-            onClick={() => {
-              setTab(id);
-              setSelected(null);
-            }}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-
-      {error ? <p className="error">{error}</p> : null}
-
-      {tab === 'overview' && overview ? (
-        <div className="grid" style={{ gap: 18 }}>
-          <div className="grid kpi-grid">
-            {(
-              [
-                ['Users', overview.total_users],
-                ['Active', overview.active_users],
-                ['Suspended', overview.suspended_users],
-                ['Signups 7d', overview.signups_7d],
-                ['Signups 30d', overview.signups_30d],
-                ['DAU', overview.dau],
-                ['WAU', overview.wau],
-                ['Open loans', overview.open_loans],
-                ['Overdue', overview.overdue_loans],
-                ['Cashflow 7d', overview.cashflow_entries_7d],
-                ['AI insights 7d', overview.ai_insights_7d],
-              ] as const
-            ).map(([label, value]) => (
-              <div key={label} className="card kpi">
-                <span className="muted">{label}</span>
-                <strong>{value}</strong>
-              </div>
-            ))}
-          </div>
-          <div className="card row" style={{ justifyContent: 'space-between' }}>
-            <div>
-              <strong>AI features</strong>
-              <p className="muted" style={{ margin: '4px 0 0' }}>
-                {aiDisabled ? 'Globally disabled' : 'Enabled for users'}
-              </p>
-            </div>
+        <nav className="saas-nav">
+          {NAV.map((item) => (
             <button
+              key={item.id}
               type="button"
-              className={`btn ${aiDisabled ? 'primary' : 'danger'}`}
-              disabled={busy}
-              onClick={async () => {
-                if (!token) return;
-                setBusy(true);
-                try {
-                  const res = await api.setAIDisabled(token, !aiDisabled);
-                  setAIDisabled(Boolean(res.settings?.ai_disabled));
-                } catch (e) {
-                  setError(e instanceof Error ? e.message : 'Could not update AI setting');
-                } finally {
-                  setBusy(false);
-                }
+              className="saas-nav-btn"
+              aria-current={tab === item.id ? 'page' : undefined}
+              onClick={() => {
+                setTab(item.id);
+                setSelected(null);
               }}
             >
-              {aiDisabled ? 'Enable AI' : 'Disable AI'}
+              {item.label}
             </button>
-          </div>
-        </div>
-      ) : null}
+          ))}
+        </nav>
+        <button className="btn" type="button" onClick={logout} style={{ marginTop: 'auto' }}>
+          Sign out
+        </button>
+      </aside>
 
-      {tab === 'users' ? (
-        <div className="grid" style={{ gap: 18 }}>
-          <div className="card row">
-            <label style={{ flex: 1, minWidth: 180 }}>
-              Search
-              <input
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                placeholder="email, name, username"
-              />
-            </label>
-            <label>
-              Status
-              <select value={status} onChange={(e) => setStatus(e.target.value)}>
-                <option value="">All</option>
-                <option value="active">Active</option>
-                <option value="suspended">Suspended</option>
-              </select>
-            </label>
-            <span className="muted">{total} users</span>
-          </div>
+      <main className="saas-main">
+        <header className="saas-header">
+          <h2>{NAV.find((n) => n.id === tab)?.label}</h2>
+        </header>
 
+        {error ? <p className="error">{error}</p> : null}
+
+        {tab === 'overview' && overview ? (
+          <div className="grid" style={{ gap: 18 }}>
+            <div className="grid kpi-grid">
+              {(
+                [
+                  ['Users', overview.total_users],
+                  ['Active', overview.active_users],
+                  ['Suspended', overview.suspended_users],
+                  ['Signups 7d', overview.signups_7d],
+                  ['Signups 30d', overview.signups_30d],
+                  ['DAU', overview.dau],
+                  ['WAU', overview.wau],
+                  ['Open loans', overview.open_loans],
+                  ['Overdue', overview.overdue_loans],
+                  ['Cashflow 7d', overview.cashflow_entries_7d],
+                  ['AI insights 7d', overview.ai_insights_7d],
+                  ['AI runs 7d', overview.ai_runs_7d ?? 0],
+                  ['AI users 7d', overview.ai_users_7d ?? 0],
+                  ['AI tokens 7d', overview.ai_tokens_7d ?? 0],
+                  ['AI req today', overview.ai_requests_today ?? 0],
+                ] as const
+              ).map(([label, value]) => (
+                <div key={label} className="card kpi">
+                  <span className="muted">{label}</span>
+                  <strong>{value}</strong>
+                </div>
+              ))}
+            </div>
+            <div className="card row" style={{ justifyContent: 'space-between' }}>
+              <div>
+                <strong>AI features</strong>
+                <p className="muted" style={{ margin: '4px 0 0' }}>
+                  {aiDisabled ? 'Globally disabled' : 'Enabled (Premium users)'}
+                </p>
+              </div>
+              <button
+                type="button"
+                className={`btn ${aiDisabled ? 'primary' : 'danger'}`}
+                disabled={busy}
+                onClick={async () => {
+                  if (!token) return;
+                  setBusy(true);
+                  try {
+                    const res = await api.setAIDisabled(token, !aiDisabled);
+                    setAIDisabled(Boolean(res.settings?.ai_disabled));
+                  } catch (e) {
+                    setError(e instanceof Error ? e.message : 'Could not update AI setting');
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                {aiDisabled ? 'Enable AI' : 'Disable AI'}
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {tab === 'users' ? (
+          <div className="grid" style={{ gap: 18 }}>
+            <div className="card row">
+              <label style={{ flex: 1, minWidth: 180 }}>
+                Search
+                <input
+                  value={q}
+                  onChange={(e) => setQ(e.target.value)}
+                  placeholder="email, name, username"
+                />
+              </label>
+              <label>
+                Status
+                <select value={status} onChange={(e) => setStatus(e.target.value)}>
+                  <option value="">All</option>
+                  <option value="active">Active</option>
+                  <option value="suspended">Suspended</option>
+                </select>
+              </label>
+              <span className="muted">{total} users</span>
+            </div>
+
+            <div className="card" style={{ overflowX: 'auto' }}>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Email</th>
+                    <th>Status</th>
+                    <th>Plan</th>
+                    <th>Role</th>
+                    <th>Created</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {users.map((u) => (
+                    <tr key={u.id} className="clickable" onClick={() => openUser(u.id)}>
+                      <td>{u.display_name}</td>
+                      <td className="mono">{u.email}</td>
+                      <td>
+                        <span className={`badge ${u.status}`}>{u.status}</span>
+                      </td>
+                      <td>
+                        <span className={`badge ${(u.plan_tier || 'free') === 'premium' ? 'active' : ''}`}>
+                          {u.plan_tier || 'free'}
+                        </span>
+                      </td>
+                      <td>{u.role}</td>
+                      <td className="muted">{new Date(u.created_at).toLocaleDateString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {selected ? (
+              <div className="card stack">
+                <div className="row" style={{ justifyContent: 'space-between' }}>
+                  <div>
+                    <h2 style={{ margin: 0 }}>{selected.display_name}</h2>
+                    <p className="muted mono" style={{ margin: '4px 0 0' }}>
+                      {selected.email}
+                    </p>
+                  </div>
+                  <div className="row">
+                    <button
+                      className={`btn ${(selected.plan_tier || 'free') === 'premium' ? '' : 'primary'}`}
+                      type="button"
+                      disabled={busy}
+                      onClick={() =>
+                        setPlan((selected.plan_tier || 'free') === 'premium' ? 'free' : 'premium')
+                      }
+                    >
+                      {(selected.plan_tier || 'free') === 'premium' ? 'Downgrade to Free' : 'Grant Premium'}
+                    </button>
+                    <button
+                      className={`btn ${selected.status === 'suspended' ? 'primary' : 'danger'}`}
+                      type="button"
+                      disabled={busy || selected.role === 'admin'}
+                      onClick={toggleSuspend}
+                    >
+                      {selected.status === 'suspended' ? 'Unsuspend' : 'Suspend'}
+                    </button>
+                  </div>
+                </div>
+                <div className="grid kpi-grid">
+                  <div>
+                    <span className="muted">Plan</span>
+                    <div className="mono">{selected.plan_tier || 'free'}</div>
+                  </div>
+                  <div>
+                    <span className="muted">Trust</span>
+                    <div>
+                      <strong className="mono">{selected.trust_grade ?? '—'}</strong>{' '}
+                      <span className="muted">{selected.trust_band ?? ''}</span>
+                    </div>
+                  </div>
+                  <div>
+                    <span className="muted">Open / overdue loans</span>
+                    <div className="mono">
+                      {selected.open_loans ?? 0} / {selected.overdue_loans ?? 0}
+                    </div>
+                  </div>
+                  <div>
+                    <span className="muted">Cashflow 30d</span>
+                    <div className="mono">
+                      {selected.cashflow_entries_30d ?? 0} · {selected.cashflow_volume_30d ?? '0'}
+                    </div>
+                  </div>
+                  <div>
+                    <span className="muted">Friends</span>
+                    <div className="mono">{selected.friends_count ?? 0}</div>
+                  </div>
+                  <div>
+                    <span className="muted">Last active</span>
+                    <div>
+                      {selected.last_active_at
+                        ? new Date(selected.last_active_at).toLocaleString()
+                        : '—'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+
+        {tab === 'categories' ? (
+          <CategoriesPanel token={token} onError={(message) => setError(message)} />
+        ) : null}
+
+        {tab === 'catalogs' ? (
+          <CatalogsPanel token={token} onError={(message) => setError(message)} />
+        ) : null}
+
+        {tab === 'settings' ? (
+          <div className="grid" style={{ gap: 18 }}>
+            <div className="card stack">
+              <strong>AI global kill switch</strong>
+              <p className="muted" style={{ margin: 0 }}>
+                When disabled, Premium AI endpoints return AI_DISABLED. Plan tier still gates access when enabled.
+              </p>
+              <div className="row">
+                <span className={`badge ${aiDisabled ? 'suspended' : 'active'}`}>
+                  {aiDisabled ? 'disabled' : 'enabled'}
+                </span>
+                <button
+                  type="button"
+                  className={`btn ${aiDisabled ? 'primary' : 'danger'}`}
+                  disabled={busy}
+                  onClick={async () => {
+                    if (!token) return;
+                    setBusy(true);
+                    try {
+                      const res = await api.setAIDisabled(token, !aiDisabled);
+                      setAIDisabled(Boolean(res.settings?.ai_disabled));
+                    } catch (e) {
+                      setError(e instanceof Error ? e.message : 'Could not update AI setting');
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                >
+                  {aiDisabled ? 'Enable AI' : 'Disable AI'}
+                </button>
+              </div>
+            </div>
+            <div className="card stack">
+              <strong>Billing note</strong>
+              <p className="muted" style={{ margin: 0 }}>
+                v1 uses admin-managed plan_tier (free / premium). Stripe checkout is out of scope.
+              </p>
+            </div>
+          </div>
+        ) : null}
+
+        {tab === 'audit' ? (
           <div className="card" style={{ overflowX: 'auto' }}>
             <table>
               <thead>
                 <tr>
-                  <th>Name</th>
-                  <th>Email</th>
-                  <th>Status</th>
-                  <th>Role</th>
-                  <th>Created</th>
+                  <th>When</th>
+                  <th>Actor</th>
+                  <th>Action</th>
+                  <th>Target</th>
                 </tr>
               </thead>
               <tbody>
-                {users.map((u) => (
-                  <tr key={u.id} className="clickable" onClick={() => openUser(u.id)}>
-                    <td>{u.display_name}</td>
-                    <td className="mono">{u.email}</td>
-                    <td>
-                      <span className={`badge ${u.status}`}>{u.status}</span>
-                    </td>
-                    <td>{u.role}</td>
-                    <td className="muted">{new Date(u.created_at).toLocaleDateString()}</td>
+                {audit.map((a) => (
+                  <tr key={a.id}>
+                    <td className="muted">{new Date(a.created_at).toLocaleString()}</td>
+                    <td className="mono">{a.actor_email || a.actor_id}</td>
+                    <td>{a.action}</td>
+                    <td className="mono">{a.target_user_id || '—'}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-
-          {selected ? (
-            <div className="card stack">
-              <div className="row" style={{ justifyContent: 'space-between' }}>
-                <div>
-                  <h2 style={{ margin: 0 }}>{selected.display_name}</h2>
-                  <p className="muted mono" style={{ margin: '4px 0 0' }}>
-                    {selected.email}
-                  </p>
-                </div>
-                <button
-                  className={`btn ${selected.status === 'suspended' ? 'primary' : 'danger'}`}
-                  type="button"
-                  disabled={busy || selected.role === 'admin'}
-                  onClick={toggleSuspend}
-                >
-                  {selected.status === 'suspended' ? 'Unsuspend' : 'Suspend'}
-                </button>
-              </div>
-              <div className="grid kpi-grid">
-                <div>
-                  <span className="muted">Trust</span>
-                  <div>
-                    <strong className="mono">{selected.trust_grade ?? '—'}</strong>{' '}
-                    <span className="muted">{selected.trust_band ?? ''}</span>
-                  </div>
-                </div>
-                <div>
-                  <span className="muted">Open / overdue loans</span>
-                  <div className="mono">
-                    {selected.open_loans ?? 0} / {selected.overdue_loans ?? 0}
-                  </div>
-                </div>
-                <div>
-                  <span className="muted">Cashflow 30d</span>
-                  <div className="mono">
-                    {selected.cashflow_entries_30d ?? 0} · {selected.cashflow_volume_30d ?? '0'}
-                  </div>
-                </div>
-                <div>
-                  <span className="muted">Friends</span>
-                  <div className="mono">{selected.friends_count ?? 0}</div>
-                </div>
-                <div>
-                  <span className="muted">Last active</span>
-                  <div>
-                    {selected.last_active_at
-                      ? new Date(selected.last_active_at).toLocaleString()
-                      : '—'}
-                  </div>
-                </div>
-              </div>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
-
-      {tab === 'catalogs' ? (
-        <CatalogsPanel token={token} onError={(message) => setError(message)} />
-      ) : null}
-
-      {tab === 'audit' ? (
-        <div className="card" style={{ overflowX: 'auto' }}>
-          <table>
-            <thead>
-              <tr>
-                <th>When</th>
-                <th>Actor</th>
-                <th>Action</th>
-                <th>Target</th>
-              </tr>
-            </thead>
-            <tbody>
-              {audit.map((a) => (
-                <tr key={a.id}>
-                  <td className="muted">{new Date(a.created_at).toLocaleString()}</td>
-                  <td className="mono">{a.actor_email || a.actor_id}</td>
-                  <td>{a.action}</td>
-                  <td className="mono">{a.target_user_id || '—'}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : null}
+        ) : null}
+      </main>
     </div>
   );
 }

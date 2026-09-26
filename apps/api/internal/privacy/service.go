@@ -37,6 +37,7 @@ type Store interface {
 	RevokeAllSessions(ctx context.Context, userID uuid.UUID) error
 	GetSetting(ctx context.Context, key string) (string, error)
 	SetSetting(ctx context.Context, key, value string) error
+	GetUserPlanAccess(ctx context.Context, userID uuid.UUID) (planTier string, role string, err error)
 }
 
 type Service struct {
@@ -259,6 +260,17 @@ func (s *Service) AIDisabled(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	return strings.EqualFold(strings.TrimSpace(v), "true") || v == "1", nil
+}
+
+func (s *Service) UserCanUseAI(ctx context.Context, userID uuid.UUID) (bool, error) {
+	tier, role, err := s.store.GetUserPlanAccess(ctx, userID)
+	if err != nil {
+		return false, err
+	}
+	if strings.EqualFold(role, "admin") {
+		return true, nil
+	}
+	return strings.EqualFold(strings.TrimSpace(tier), "premium"), nil
 }
 
 func (s *Service) SetAIDisabled(ctx context.Context, disabled bool) error {

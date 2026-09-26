@@ -11,16 +11,19 @@ import (
 func (s *SQLStore) hydrateUser(ctx context.Context, u auth.UserRecord) (auth.UserRecord, error) {
 	err := s.pool.QueryRow(ctx, `
 SELECT first_name, middle_name, last_name, country_code, preferred_auth_provider, tos_version, tos_accepted_at,
-       COALESCE(role, 'user')
+       COALESCE(role, 'user'), COALESCE(plan_tier, 'free')
 FROM users WHERE id=$1`, u.ID).Scan(
 		&u.FirstName, &u.MiddleName, &u.LastName, &u.CountryCode, &u.PreferredAuthProvider, &u.TOSVersion, &u.TOSAcceptedAt,
-		&u.Role,
+		&u.Role, &u.PlanTier,
 	)
 	if err != nil {
 		return u, err
 	}
 	if u.Role == "" {
 		u.Role = "user"
+	}
+	if u.PlanTier == "" {
+		u.PlanTier = "free"
 	}
 	return u, nil
 }

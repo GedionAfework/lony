@@ -14,13 +14,17 @@ const (
 
 	ActionSuspend       = "user.suspend"
 	ActionUnsuspend     = "user.unsuspend"
+	ActionSetPlanTier   = "user.set_plan_tier"
 	ActionAIDisable     = "settings.ai_disable"
 	ActionAIEnable      = "settings.ai_enable"
 	ActionCatalogCreate = "catalog.create"
 	ActionCatalogUpdate = "catalog.update"
+	ActionCategoryCreate = "category.create"
+	ActionCategoryUpdate = "category.update"
 
 	KindAccountType     = "account_type"
 	KindInstitutionType = "institution_type"
+	KindGoalType        = "goal_type"
 )
 
 type CatalogType struct {
@@ -47,18 +51,32 @@ type CatalogInstitution struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
+type SystemCategory struct {
+	ID        uuid.UUID `json:"id"`
+	Kind      string    `json:"kind"`
+	Name      string    `json:"name"`
+	Slug      string    `json:"slug"`
+	IsSystem  bool      `json:"is_system"`
+	Active    bool      `json:"active"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type Overview struct {
-	TotalUsers       int `json:"total_users"`
-	ActiveUsers      int `json:"active_users"`
-	SuspendedUsers   int `json:"suspended_users"`
-	Signups7d        int `json:"signups_7d"`
-	Signups30d       int `json:"signups_30d"`
-	DAU              int `json:"dau"`
-	WAU              int `json:"wau"`
-	OpenLoans        int `json:"open_loans"`
-	OverdueLoans     int `json:"overdue_loans"`
+	TotalUsers        int `json:"total_users"`
+	ActiveUsers       int `json:"active_users"`
+	SuspendedUsers    int `json:"suspended_users"`
+	Signups7d         int `json:"signups_7d"`
+	Signups30d        int `json:"signups_30d"`
+	DAU               int `json:"dau"`
+	WAU               int `json:"wau"`
+	OpenLoans         int `json:"open_loans"`
+	OverdueLoans      int `json:"overdue_loans"`
 	CashflowEntries7d int `json:"cashflow_entries_7d"`
-	AIInsights7d     int `json:"ai_insights_7d"`
+	AIInsights7d      int `json:"ai_insights_7d"`
+	AIRuns7d          int `json:"ai_runs_7d"`
+	AIUsers7d         int `json:"ai_users_7d"`
+	AITokens7d        int `json:"ai_tokens_7d"`
+	AIRequestsToday   int `json:"ai_requests_today"`
 }
 
 type UserListItem struct {
@@ -68,6 +86,7 @@ type UserListItem struct {
 	Username    *string   `json:"username,omitempty"`
 	Status      string    `json:"status"`
 	Role        string    `json:"role"`
+	PlanTier    string    `json:"plan_tier"`
 	CountryCode *string   `json:"country_code,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 	LastActiveAt *time.Time `json:"last_active_at,omitempty"`
@@ -107,6 +126,7 @@ type Store interface {
 	ListUsers(ctx context.Context, q, status string, limit, offset int) ([]UserListItem, int, error)
 	GetUser(ctx context.Context, id uuid.UUID) (UserDetail, error)
 	SetUserStatus(ctx context.Context, id uuid.UUID, status string) error
+	SetUserPlanTier(ctx context.Context, id uuid.UUID, planTier string) error
 	RevokeUserSessions(ctx context.Context, id uuid.UUID) error
 	InsertAudit(ctx context.Context, actorID uuid.UUID, action string, target *uuid.UUID, meta json.RawMessage) error
 	ListAudit(ctx context.Context, limit int) ([]AuditEntry, error)
@@ -121,4 +141,8 @@ type Store interface {
 	ListCatalogInstitutions(ctx context.Context, typeKind, typeCode string, activeOnly bool) ([]CatalogInstitution, error)
 	CreateCatalogInstitution(ctx context.Context, code, label, typeKind, typeCode string, country *string, sortOrder int) (CatalogInstitution, error)
 	UpdateCatalogInstitution(ctx context.Context, id uuid.UUID, label *string, typeKind, typeCode *string, country *string, sortOrder *int, active *bool) (CatalogInstitution, error)
+
+	ListSystemCategories(ctx context.Context, kind string) ([]SystemCategory, error)
+	CreateSystemCategory(ctx context.Context, kind, name, slug string) (SystemCategory, error)
+	UpdateSystemCategory(ctx context.Context, id uuid.UUID, name *string, active *bool) (SystemCategory, error)
 }

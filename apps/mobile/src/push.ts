@@ -5,7 +5,7 @@ import { api } from './api';
 /** Register Expo push token. No-op in Expo Go (remote push throws on Android SDK 53+). */
 export async function registerPushToken(access: string): Promise<void> {
   // Must not import expo-notifications in Expo Go — getDevicePushTokenAsync throws on Android.
-  if (isRunningInExpoGo()) {
+  if (Platform.OS === 'web' || isRunningInExpoGo()) {
     return;
   }
 

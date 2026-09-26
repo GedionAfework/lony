@@ -120,14 +120,14 @@ export function CashflowFormScreen({
   const [currency, setCurrency] = useState(
     (editing?.currency_code || user.default_currency_code || 'USD').toUpperCase(),
   );
-  const [recurrence, setRecurrence] = useState(editing?.recurrence || 'monthly');
+  const [recurrence, setRecurrence] = useState<string>(editing?.recurrence || 'monthly');
   const [accounts, setAccounts] = useState<MoneyAccount[]>([]);
   const [accountId, setAccountId] = useState(editing?.account_id ?? '');
 
   // Expense flow choices
   const [isLoanPayment, setIsLoanPayment] = useState('no');
   const [isRecurring, setIsRecurring] = useState(
-    editing?.recurrence && editing.recurrence !== 'none' ? 'yes' : 'no',
+    editing?.recurrence ? 'yes' : 'no',
   );
   const [payWith, setPayWith] = useState('alone');
   const [splitMode, setSplitMode] = useState<'equal' | 'percent' | 'flat'>('equal');
@@ -145,7 +145,7 @@ export function CashflowFormScreen({
 
   // Income period
   const [incomePeriodic, setIncomePeriodic] = useState(
-    editing?.is_template || (editing?.recurrence && editing.recurrence !== 'none') ? 'yes' : 'no',
+    editing?.is_template || editing?.recurrence ? 'yes' : 'no',
   );
 
   const acceptedFriends = useMemo(
@@ -205,7 +205,13 @@ export function CashflowFormScreen({
     api
       .listCashflowCategories(token, kind)
       .then((res) => {
-        const list = res.categories ?? [];
+        const list = [...(res.categories ?? [])].sort((a, b) => {
+          const aOther = (a.slug || a.name || '').toLowerCase() === 'other' ? 1 : 0;
+          const bOther = (b.slug || b.name || '').toLowerCase() === 'other' ? 1 : 0;
+          if (a.is_system !== b.is_system) return a.is_system ? -1 : 1;
+          if (aOther !== bOther) return aOther - bOther;
+          return (a.name || '').localeCompare(b.name || '');
+        });
         setCategories(list);
         if (!categoryId && list[0]) setCategoryId(list[0].id);
       })

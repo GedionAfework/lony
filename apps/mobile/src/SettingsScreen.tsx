@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { Alert, Pressable, Share, Switch, Text, View } from 'react-native';
+import { AdminScreen } from './AdminScreen';
 import { COUNTRIES, CURRENCIES, LOCALES, TIMEZONES } from './catalogs';
+import { t } from './i18n';
 import { PhoneField } from './PhoneField';
 import { SearchSelect } from './SearchSelect';
 import { ThemesScreen } from './ThemesScreen';
@@ -9,6 +11,7 @@ import {
   Card,
   Field,
   PrimaryButton,
+  ScreenHeader,
   SecondaryButton,
   SectionLabel,
 } from './ui';
@@ -20,7 +23,8 @@ type SettingsPage =
   | 'notifications'
   | 'privacy'
   | 'themes'
-  | 'legal';
+  | 'legal'
+  | 'admin';
 
 type Props = {
   email: string;
@@ -38,6 +42,9 @@ type Props = {
   profileComplete: boolean;
   tosAccepted: boolean;
   tosVersion?: string | null;
+  isAdmin?: boolean;
+  planTier?: string;
+  token?: string;
   busy: boolean;
   onUsername: (v: string) => void;
   onFirstName: (v: string) => void;
@@ -59,6 +66,7 @@ type Props = {
   onDeleteAccount: () => void;
   onClearAI: () => void;
   onLogout: () => void;
+  onSettingsPageChange?: (detail: boolean) => void;
 };
 
 function HubRow({
@@ -95,6 +103,16 @@ export function SettingsScreen(props: Props) {
   const [pushGoals, setPushGoals] = useState(true);
   const [inAppAll, setInAppAll] = useState(true);
 
+  function goHub() {
+    setPage('hub');
+    props.onSettingsPageChange?.(false);
+  }
+
+  function goPage(p: SettingsPage) {
+    setPage(p);
+    props.onSettingsPageChange?.(p !== 'hub');
+  }
+
   function confirmDelete() {
     Alert.alert(
       'Delete account?',
@@ -115,23 +133,29 @@ export function SettingsScreen(props: Props) {
     );
   }
 
-  function Back({ label = 'Settings' }: { label?: string }) {
-    return (
-      <Pressable onPress={() => setPage('hub')}>
-        <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 14 }}>← {label}</Text>
-      </Pressable>
-    );
+  function Back({ title }: { title: string }) {
+    return <ScreenHeader title={title} onBack={goHub} />;
   }
 
   if (page === 'themes') {
-    return <ThemesScreen onBack={() => setPage('hub')} />;
+    return <ThemesScreen onBack={goHub} />;
+  }
+
+  if (page === 'admin' && props.isAdmin && props.token) {
+    return (
+      <AdminScreen
+        token={props.token}
+        locale={props.locale}
+        onBack={goHub}
+        onError={(msg) => Alert.alert(t(props.locale, 'admin'), msg)}
+      />
+    );
   }
 
   if (page === 'profile') {
     return (
       <View style={{ gap: space.md }}>
-        <Back />
-        <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>Profile</Text>
+        <Back title="Profile" />
         {!props.profileComplete ? (
           <Text style={{ color: colors.error, fontFamily: fonts.ui, fontSize: 14 }}>
             Finish your account details to use Lony fully.
@@ -181,8 +205,7 @@ export function SettingsScreen(props: Props) {
   if (page === 'payments') {
     return (
       <View style={{ gap: space.md }}>
-        <Back />
-        <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>Payments</Text>
+        <Back title="Payments" />
         <Card>
           <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
             Banks and wallets used when sharing how to get paid on loans.
@@ -196,8 +219,7 @@ export function SettingsScreen(props: Props) {
   if (page === 'notifications') {
     return (
       <View style={{ gap: space.md }}>
-        <Back />
-        <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>Notifications</Text>
+        <Back title="Notifications" />
         <Card>
           <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13, marginBottom: 8 }}>
             Choose what you want to hear about. Device push still requires a registered token.
@@ -238,8 +260,7 @@ export function SettingsScreen(props: Props) {
   if (page === 'privacy') {
     return (
       <View style={{ gap: space.md }}>
-        <Back />
-        <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>Data & privacy</Text>
+        <Back title="Data & privacy" />
         <Card>
           <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
             Download a copy of your Lony data, clear AI insight history, or delete your account.
@@ -270,8 +291,7 @@ export function SettingsScreen(props: Props) {
   if (page === 'legal') {
     return (
       <View style={{ gap: space.md }}>
-        <Back />
-        <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>Legal</Text>
+        <Back title="Legal" />
         <Card>
           <SecondaryButton label="Terms of Service" onPress={props.onTos} />
           {props.tosAccepted ? (
@@ -288,21 +308,41 @@ export function SettingsScreen(props: Props) {
 
   return (
     <View style={{ gap: space.md }}>
-      <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>Settings</Text>
+      <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>
+        {t(props.locale, 'settings')}
+      </Text>
       {!props.profileComplete ? (
         <Text style={{ color: colors.error, fontFamily: fonts.ui, fontSize: 14 }}>
           Finish your profile to use Lony fully.
         </Text>
       ) : null}
+      {(props.planTier || 'free').toLowerCase() !== 'premium' && !props.isAdmin ? (
+        <Card>
+          <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>Free plan</Text>
+          <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13, marginTop: 4 }}>
+            Insights AI (Analysis, Reports, Coach) requires Premium. Ask an admin to upgrade your account.
+          </Text>
+        </Card>
+      ) : (
+        <Card>
+          <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>Premium</Text>
+          <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13, marginTop: 4 }}>
+            AI personas are unlocked for this account.
+          </Text>
+        </Card>
+      )}
       <Card>
-        <HubRow title="Profile" subtitle="Photo, name, locale, sign-in preference" onPress={() => setPage('profile')} />
-        <HubRow title="Themes" subtitle="Built-in looks and custom colors" onPress={() => setPage('themes')} />
-        <HubRow title="Payments" subtitle="Banks & wallets for getting paid" onPress={() => setPage('payments')} />
-        <HubRow title="Notifications" subtitle="Loans, splits, and goals" onPress={() => setPage('notifications')} />
-        <HubRow title="Data & privacy" subtitle="Export, clear AI, delete account" onPress={() => setPage('privacy')} />
-        <HubRow title="Legal" subtitle="Terms of Service" onPress={() => setPage('legal')} />
+        <HubRow title={t(props.locale, 'profile')} subtitle="Photo, name, locale, sign-in preference" onPress={() => goPage('profile')} />
+        <HubRow title={t(props.locale, 'themes')} subtitle="Built-in looks and custom colors" onPress={() => goPage('themes')} />
+        <HubRow title={t(props.locale, 'payments')} subtitle="Banks & wallets for getting paid" onPress={() => goPage('payments')} />
+        <HubRow title={t(props.locale, 'notifications')} subtitle="Loans, splits, and goals" onPress={() => goPage('notifications')} />
+        <HubRow title={t(props.locale, 'privacy')} subtitle="Export, clear AI, delete account" onPress={() => goPage('privacy')} />
+        <HubRow title={t(props.locale, 'legal')} subtitle="Terms of Service" onPress={() => goPage('legal')} />
+        {props.isAdmin ? (
+          <HubRow title={t(props.locale, 'admin')} subtitle="Platform KPIs and AI kill switch" onPress={() => goPage('admin')} />
+        ) : null}
       </Card>
-      <SecondaryButton label="Sign out" onPress={props.onLogout} />
+      <SecondaryButton label={t(props.locale, 'signOut')} onPress={props.onLogout} />
     </View>
   );
 }

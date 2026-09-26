@@ -13,11 +13,13 @@ type Props = {
 export function CatalogsPanel({ token, onError }: Props) {
   const [types, setTypes] = useState<CatalogType[]>([]);
   const [institutions, setInstitutions] = useState<CatalogInstitution[]>([]);
-  const [kindFilter, setKindFilter] = useState<'account_type' | 'institution_type' | ''>('account_type');
+  const [kindFilter, setKindFilter] = useState<'account_type' | 'institution_type' | 'goal_type' | ''>(
+    'account_type',
+  );
   const [typeCodeFilter, setTypeCodeFilter] = useState('');
   const [busy, setBusy] = useState(false);
   const [typeLabel, setTypeLabel] = useState('');
-  const [typeKind, setTypeKind] = useState<'account_type' | 'institution_type'>('account_type');
+  const [typeKind, setTypeKind] = useState<'account_type' | 'institution_type' | 'goal_type'>('account_type');
   const [instLabel, setInstLabel] = useState('');
   const [instTypeKind, setInstTypeKind] = useState<'account_type' | 'institution_type'>('account_type');
   const [instTypeCode, setInstTypeCode] = useState('bank');
@@ -115,6 +117,7 @@ export function CatalogsPanel({ token, onError }: Props) {
             <option value="">All</option>
             <option value="account_type">Account types</option>
             <option value="institution_type">Institution types</option>
+            <option value="goal_type">Goal types</option>
           </select>
         </label>
         <label>
@@ -134,7 +137,7 @@ export function CatalogsPanel({ token, onError }: Props) {
         <form className="card stack" onSubmit={onCreateType}>
           <strong>Add type</strong>
           <p className="muted" style={{ margin: 0 }}>
-            Account types (bank, wallet…) or lender institution types.
+            Account types, institution types, or goal types shown in Plan create.
           </p>
           <label>
             Kind
@@ -144,6 +147,7 @@ export function CatalogsPanel({ token, onError }: Props) {
             >
               <option value="account_type">Account type</option>
               <option value="institution_type">Institution type</option>
+              <option value="goal_type">Goal type</option>
             </select>
           </label>
           <label>

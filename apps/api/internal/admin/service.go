@@ -103,6 +103,28 @@ func (s *Service) Unsuspend(ctx context.Context, actor, target uuid.UUID) (UserD
 	return s.store.GetUser(ctx, target)
 }
 
+func (s *Service) SetPlanTier(ctx context.Context, actor, target uuid.UUID, planTier string) (UserDetail, error) {
+	planTier = strings.ToLower(strings.TrimSpace(planTier))
+	if planTier != "free" && planTier != "premium" {
+		return UserDetail{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"plan_tier": "must be free or premium",
+		})
+	}
+	detail, err := s.store.GetUser(ctx, target)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return UserDetail{}, httpx.E(http.StatusNotFound, "NOT_FOUND", "user not found")
+	}
+	if err != nil {
+		return UserDetail{}, err
+	}
+	if err := s.store.SetUserPlanTier(ctx, target, planTier); err != nil {
+		return UserDetail{}, err
+	}
+	meta, _ := json.Marshal(map[string]any{"previous": detail.PlanTier, "plan_tier": planTier})
+	_ = s.store.InsertAudit(ctx, actor, ActionSetPlanTier, &target, meta)
+	return s.store.GetUser(ctx, target)
+}
+
 func (s *Service) ListAudit(ctx context.Context, limit int) ([]AuditEntry, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 50
@@ -137,7 +159,7 @@ func (s *Service) SetAIDisabled(ctx context.Context, actor uuid.UUID, disabled b
 }
 
 func validCatalogKind(kind string) bool {
-	return kind == KindAccountType || kind == KindInstitutionType
+	return kind == KindAccountType || kind == KindInstitutionType || kind == KindGoalType
 }
 
 func slugCode(raw string) string {
@@ -166,7 +188,7 @@ func (s *Service) ListCatalogTypes(ctx context.Context, kind string, activeOnly 
 	kind = strings.TrimSpace(kind)
 	if kind != "" && !validCatalogKind(kind) {
 		return nil, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
-			"kind": "must be account_type or institution_type",
+			"kind": "must be account_type, institution_type, or goal_type",
 		})
 	}
 	return s.store.ListCatalogTypes(ctx, kind, activeOnly)
@@ -181,7 +203,7 @@ func (s *Service) CreateCatalogType(ctx context.Context, actor uuid.UUID, kind, 
 	}
 	if !validCatalogKind(kind) {
 		return CatalogType{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
-			"kind": "must be account_type or institution_type",
+			"kind": "must be account_type, institution_type, or goal_type",
 		})
 	}
 	if label == "" || code == "" {
@@ -338,4 +360,65 @@ func isUniqueViolation(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "duplicate key") || strings.Contains(msg, "unique constraint")
+}
+
+func (s *Service) ListSystemCategories(ctx context.Context, kind string) ([]SystemCategory, error) {
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	if kind != "" && kind != "income" && kind != "expense" {
+		return nil, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"kind": "must be income or expense",
+		})
+	}
+	return s.store.ListSystemCategories(ctx, kind)
+}
+
+func (s *Service) CreateSystemCategory(ctx context.Context, actor uuid.UUID, kind, name string) (SystemCategory, error) {
+	kind = strings.ToLower(strings.TrimSpace(kind))
+	name = strings.TrimSpace(name)
+	if kind != "income" && kind != "expense" {
+		return SystemCategory{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"kind": "must be income or expense",
+		})
+	}
+	if name == "" || len(name) > 64 {
+		return SystemCategory{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"name": "required, max 64 characters",
+		})
+	}
+	slug := slugCode(name)
+	if slug == "" {
+		slug = "category"
+	}
+	out, err := s.store.CreateSystemCategory(ctx, kind, name, slug)
+	if isUniqueViolation(err) {
+		return SystemCategory{}, httpx.E(http.StatusConflict, "CONFLICT", "category already exists")
+	}
+	if err != nil {
+		return SystemCategory{}, err
+	}
+	meta, _ := json.Marshal(map[string]any{"entity": "category", "id": out.ID, "kind": kind})
+	_ = s.store.InsertAudit(ctx, actor, ActionCategoryCreate, nil, meta)
+	return out, nil
+}
+
+func (s *Service) UpdateSystemCategory(ctx context.Context, actor, id uuid.UUID, name *string, active *bool) (SystemCategory, error) {
+	if name != nil {
+		v := strings.TrimSpace(*name)
+		name = &v
+		if v == "" || len(v) > 64 {
+			return SystemCategory{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+				"name": "required, max 64 characters",
+			})
+		}
+	}
+	out, err := s.store.UpdateSystemCategory(ctx, id, name, active)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return SystemCategory{}, httpx.E(http.StatusNotFound, "NOT_FOUND", "category not found")
+	}
+	if err != nil {
+		return SystemCategory{}, err
+	}
+	meta, _ := json.Marshal(map[string]any{"entity": "category", "id": id})
+	_ = s.store.InsertAudit(ctx, actor, ActionCategoryUpdate, nil, meta)
+	return out, nil
 }

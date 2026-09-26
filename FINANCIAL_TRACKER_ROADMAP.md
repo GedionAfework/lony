@@ -662,8 +662,12 @@ Do not wait for M5 to ship M1–M4; each milestone should be usable alone.
 **Already have:** social lending, chat, payment-profile sharing, cashflow income/expenses with recurrence and confirmation, accounts/net worth, budgets, goals (**Plan** = multi-plan hub with optional cover images), insights, A–E Trust, admin + catalogs, export/delete (JSON/zip/CSV), offline drafts, bill calendar, locale/timezone pickers, statement CSV import (open banking v1), modular Settings (Profile / Themes / Payments / Notifications / Privacy / Legal), custom themes, **bonds via loan/split accept**.
 
 **Still open / deferred:**
-- Soft AI polish (richer Visualizer-driven charts, admin AI usage counters) — core personas shipped; see [`AI_PERSONAS_ROADMAP.md`](./AI_PERSONAS_ROADMAP.md)
-- Live bank OAuth connectors (Plaid / TrueLayer) — statement import covers v1 without provider keys
+- Transaction auto-sync after Plaid link (connection storage + Link UI shipped; sync into cashflow next)
+- Fuller UI string coverage beyond en/am/fr packs; dedicated admin mobile catalogs editor
+
+**Shipped recently:** Admin KPI screen (Settings → Admin); i18n packs (en/am/fr) for nav/settings; Plaid bank-link OAuth scaffold (`/bank-links/*`, Accounts → Connect bank). Statement CSV remains the default for regions without Plaid coverage.
+
+**AI personas (2026-09-26):** Analyst / Visualizer / Coach + SSE streaming shipped — see [`AI_PERSONAS_ROADMAP.md`](./AI_PERSONAS_ROADMAP.md). Admin AI usage fields on overview; Insights net sparkline + report tables.
 
 **Operate:** Admin catalogs for institutions/types — shipped; expand KPIs/charts as needed.
 
@@ -677,8 +681,8 @@ Do not wait for M5 to ship M1–M4; each milestone should be usable alone.
 
 ## 22. Immediate next actions
 
-1. Soft polish as needed: richer Insights charts, fuller i18n packs, admin KPI / AI usage charts.  
-2. Optional later: Plaid/TrueLayer (or regional connector) for live balance sync.  
+1. Optional: Plaid transaction sync into cashflow after Link.  
+2. Soft polish: expand i18n string coverage; admin catalogs editor on mobile.  
 3. Keep manual balances + statement import as the default money-in path until live open banking is deliberate.
 
 ---

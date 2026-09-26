@@ -568,7 +568,7 @@ export function EmptyState({ title, body }: { title: string; body: string }) {
   );
 }
 
-export function SectionLabel({ children }: { children: string }) {
+export function SectionLabel({ children }: { children: React.ReactNode }) {
   const { colors } = useTheme();
   return (
     <Text

@@ -31,6 +31,17 @@ func (a privacyStoreAdapter) GetSetting(ctx context.Context, key string) (string
 func (a privacyStoreAdapter) SetSetting(ctx context.Context, key, value string) error {
 	return a.Inner.SetPlatformSetting(ctx, key, value)
 }
+func (a privacyStoreAdapter) GetUserPlanAccess(ctx context.Context, userID uuid.UUID) (string, string, error) {
+	return a.Inner.GetUserPlanAccess(ctx, userID)
+}
+
+func (s *SQLStore) GetUserPlanAccess(ctx context.Context, userID uuid.UUID) (planTier string, role string, err error) {
+	err = s.pool.QueryRow(ctx, `
+		SELECT COALESCE(plan_tier, 'free'), COALESCE(role, 'user')
+		FROM users WHERE id=$1 AND deleted_at IS NULL
+	`, userID).Scan(&planTier, &role)
+	return planTier, role, err
+}
 
 func (s *SQLStore) GetPlatformSetting(ctx context.Context, key string) (string, error) {
 	var v string
@@ -75,6 +86,7 @@ func (s *SQLStore) SoftDeleteUser(ctx context.Context, userID uuid.UUID) error {
 	_ = s.DeleteAIConversations(ctx, userID)
 	_ = s.DeleteAIRuns(ctx, userID)
 	_ = s.DeleteAIUsage(ctx, userID)
+	_, _ = s.pool.Exec(ctx, `DELETE FROM bank_link_connections WHERE user_id=$1`, userID)
 	return nil
 }
 

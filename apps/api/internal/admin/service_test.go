@@ -34,6 +34,12 @@ func (m *memStore) SetUserStatus(_ context.Context, id uuid.UUID, status string)
 	m.users[id] = u
 	return nil
 }
+func (m *memStore) SetUserPlanTier(_ context.Context, id uuid.UUID, planTier string) error {
+	u := m.users[id]
+	u.PlanTier = planTier
+	m.users[id] = u
+	return nil
+}
 func (m *memStore) RevokeUserSessions(context.Context, uuid.UUID) error { return nil }
 func (m *memStore) InsertAudit(_ context.Context, actor uuid.UUID, action string, target *uuid.UUID, meta json.RawMessage) error {
 	m.audits = append(m.audits, AuditEntry{ActorID: actor, Action: action, TargetUserID: target, Meta: meta})
@@ -61,6 +67,15 @@ func (m *memStore) CreateCatalogInstitution(context.Context, string, string, str
 }
 func (m *memStore) UpdateCatalogInstitution(context.Context, uuid.UUID, *string, *string, *string, *string, *int, *bool) (CatalogInstitution, error) {
 	return CatalogInstitution{}, pgx.ErrNoRows
+}
+func (m *memStore) ListSystemCategories(context.Context, string) ([]SystemCategory, error) {
+	return nil, nil
+}
+func (m *memStore) CreateSystemCategory(context.Context, string, string, string) (SystemCategory, error) {
+	return SystemCategory{}, nil
+}
+func (m *memStore) UpdateSystemCategory(context.Context, uuid.UUID, *string, *bool) (SystemCategory, error) {
+	return SystemCategory{}, pgx.ErrNoRows
 }
 
 func TestSuspendSelfRejected(t *testing.T) {

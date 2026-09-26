@@ -45,24 +45,28 @@ function MonthBars({
   formatMoney,
   currency,
   locale,
+  showNet = false,
 }: {
   series: InsightsMonthPoint[];
   formatMoney: Props['formatMoney'];
   currency: string;
   locale?: string;
+  showNet?: boolean;
 }) {
   const { colors } = useTheme();
   const max = Math.max(
     1,
-    ...series.map((s) => Math.max(Number(s.income) || 0, Number(s.expense) || 0)),
+    ...series.map((s) => Math.max(Number(s.income) || 0, Number(s.expense) || 0, Math.abs(Number(s.net) || 0))),
   );
   return (
     <View style={{ gap: 10 }}>
       {series.map((row) => {
         const income = Number(row.income) || 0;
         const expense = Number(row.expense) || 0;
+        const net = Number(row.net) || income - expense;
         const iH = Math.max(income > 0 ? 4 : 0, Math.round((income / max) * 72));
         const eH = Math.max(expense > 0 ? 4 : 0, Math.round((expense / max) * 72));
+        const nH = Math.max(Math.abs(net) > 0 ? 3 : 0, Math.round((Math.abs(net) / max) * 72));
         const label = row.month.slice(5);
         return (
           <View key={row.month} style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 10 }}>
@@ -86,6 +90,17 @@ function MonthBars({
                   opacity: 0.85,
                 }}
               />
+              {showNet ? (
+                <View
+                  style={{
+                    width: 6,
+                    height: nH,
+                    borderRadius: 3,
+                    backgroundColor: net >= 0 ? colors.primary : colors.error,
+                    opacity: 0.9,
+                  }}
+                />
+              ) : null}
             </View>
             <View style={{ width: 88, alignItems: 'flex-end' }}>
               <Text style={{ color: colors.success, fontFamily: fonts.ui, fontSize: 10 }} numberOfLines={1}>
@@ -94,13 +109,131 @@ function MonthBars({
               <Text style={{ color: colors.warning, fontFamily: fonts.ui, fontSize: 10 }} numberOfLines={1}>
                 {formatMoney(row.expense, currency, locale)}
               </Text>
+              {showNet ? (
+                <Text
+                  style={{
+                    color: net >= 0 ? colors.primary : colors.warning,
+                    fontFamily: fonts.uiSemi,
+                    fontSize: 10,
+                  }}
+                  numberOfLines={1}
+                >
+                  {formatMoney(String(net), currency, locale)}
+                </Text>
+              ) : null}
             </View>
           </View>
         );
       })}
-      <View style={{ flexDirection: 'row', gap: 16, marginTop: 4 }}>
+      <View style={{ flexDirection: 'row', gap: 16, marginTop: 4, flexWrap: 'wrap' }}>
         <Text style={{ color: colors.success, fontFamily: fonts.ui, fontSize: 11 }}>Income</Text>
         <Text style={{ color: colors.warning, fontFamily: fonts.ui, fontSize: 11 }}>Expense</Text>
+        {showNet ? (
+          <Text style={{ color: colors.primary, fontFamily: fonts.ui, fontSize: 11 }}>Net</Text>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
+function NetSparkline({ series }: { series: InsightsMonthPoint[] }) {
+  const { colors } = useTheme();
+  if (series.length === 0) return null;
+  const nets = series.map((s) => Number(s.net) || Number(s.income) - Number(s.expense) || 0);
+  const maxAbs = Math.max(1, ...nets.map((n) => Math.abs(n)));
+  return (
+    <View style={{ gap: 6 }}>
+      <Text style={{ color: colors.muted, fontFamily: fonts.uiSemi, fontSize: 11, textTransform: 'uppercase' }}>
+        Net trend
+      </Text>
+      <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 4, height: 48 }}>
+        {nets.map((n, i) => {
+          const h = Math.max(4, Math.round((Math.abs(n) / maxAbs) * 44));
+          return (
+            <View
+              key={series[i]?.month ?? i}
+              style={{
+                flex: 1,
+                height: h,
+                borderRadius: 3,
+                backgroundColor: n >= 0 ? colors.success : colors.warning,
+                opacity: 0.8,
+              }}
+            />
+          );
+        })}
+      </View>
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+        <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 10 }}>
+          {series[0]?.month?.slice(5) ?? ''}
+        </Text>
+        <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 10 }}>
+          {series[series.length - 1]?.month?.slice(5) ?? ''}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+function ReportTableView({
+  table,
+}: {
+  table: { id: string; title: string; columns: string[]; rows: string[][] };
+}) {
+  const { colors } = useTheme();
+  return (
+    <View style={{ gap: 6 }}>
+      <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }}>{table.title}</Text>
+      <View
+        style={{
+          borderWidth: 1,
+          borderColor: colors.border,
+          borderRadius: radii.md,
+          overflow: 'hidden',
+        }}
+      >
+        <View
+          style={{
+            flexDirection: 'row',
+            backgroundColor: colors.surfaceMuted,
+            paddingHorizontal: 8,
+            paddingVertical: 6,
+            gap: 6,
+          }}
+        >
+          {table.columns.map((col) => (
+            <Text
+              key={col}
+              style={{ flex: 1, color: colors.muted, fontFamily: fonts.uiSemi, fontSize: 10, textTransform: 'uppercase' }}
+              numberOfLines={1}
+            >
+              {col.replace(/_/g, ' ')}
+            </Text>
+          ))}
+        </View>
+        {table.rows.slice(0, 8).map((row, idx) => (
+          <View
+            key={`${table.id}-${idx}`}
+            style={{
+              flexDirection: 'row',
+              paddingHorizontal: 8,
+              paddingVertical: 7,
+              gap: 6,
+              borderTopWidth: 1,
+              borderTopColor: colors.border,
+            }}
+          >
+            {row.map((cell, ci) => (
+              <Text
+                key={`${table.id}-${idx}-${ci}`}
+                style={{ flex: 1, color: colors.text, fontFamily: fonts.ui, fontSize: 12 }}
+                numberOfLines={1}
+              >
+                {cell}
+              </Text>
+            ))}
+          </View>
+        ))}
       </View>
     </View>
   );
@@ -172,6 +305,9 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError }
     preferred ? { [preferred]: 1 } : {},
   );
 
+  const isPremium =
+    user.role === 'admin' || (user.plan_tier || 'free').toLowerCase() === 'premium';
+
   const reload = useCallback(async () => {
     if (!preferred || !token) return;
     try {
@@ -187,20 +323,25 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError }
       setCategories(cats.categories ?? []);
       setGoals(gs.goals ?? []);
       setLonyScore(sc?.score ?? null);
-      const ai = await api.listAIInsights(token).catch(() => null);
-      if (ai) {
-        setInsights(ai.insights ?? []);
-        setDisclaimer(ai.disclaimer || '');
-      }
-      const thread = await api.getCoachThread(token).catch(() => null);
-      if (thread?.thread?.messages) {
-        setCoachMessages(thread.thread.messages);
-        if (thread.disclaimer) setDisclaimer(thread.disclaimer);
+      if (isPremium) {
+        const ai = await api.listAIInsights(token).catch(() => null);
+        if (ai) {
+          setInsights(ai.insights ?? []);
+          setDisclaimer(ai.disclaimer || '');
+        }
+        const thread = await api.getCoachThread(token).catch(() => null);
+        if (thread?.thread?.messages) {
+          setCoachMessages(thread.thread.messages);
+          if (thread.disclaimer) setDisclaimer(thread.disclaimer);
+        }
+      } else {
+        setInsights([]);
+        setCoachMessages([]);
       }
     } catch (e) {
       onError?.(e instanceof Error ? e.message : 'Could not load insights');
     }
-  }, [preferred, token, onError]);
+  }, [preferred, token, onError, isPremium]);
 
   useEffect(() => {
     void reload();
@@ -255,10 +396,20 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError }
     { id: 'cashflow', label: 'Cashflow' },
     { id: 'debts', label: 'Debts' },
     { id: 'goals', label: 'Goals' },
-    { id: 'analysis', label: 'Analysis' },
-    { id: 'reports', label: 'Reports' },
-    { id: 'coach', label: 'Coach' },
+    ...(isPremium
+      ? ([
+          { id: 'analysis', label: 'Analysis' },
+          { id: 'reports', label: 'Reports' },
+          { id: 'coach', label: 'Coach' },
+        ] as { id: Tab; label: string }[])
+      : []),
   ];
+
+  useEffect(() => {
+    if (!isPremium && (tab === 'analysis' || tab === 'reports' || tab === 'coach')) {
+      setTab('overview');
+    }
+  }, [isPremium, tab]);
 
   async function onLoadReport() {
     if (!preferred) return;
@@ -350,6 +501,11 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError }
   return (
     <View style={{ gap: space.md }}>
       <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>Insights</Text>
+      {!isPremium ? (
+        <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
+          AI Analysis, Reports, and Coach unlock with Premium.
+        </Text>
+      ) : null}
 
       {!preferred ? (
         <Card>
@@ -475,12 +631,16 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError }
                 {series.every((s) => Number(s.income) === 0 && Number(s.expense) === 0) ? (
                   <EmptyState title="No cashflow yet" body="Log income and expenses to see the trend." />
                 ) : (
-                  <MonthBars
-                    series={series}
-                    formatMoney={formatMoney}
-                    currency={preferred}
-                    locale={user.locale}
-                  />
+                  <View style={{ gap: 14 }}>
+                    <NetSparkline series={series} />
+                    <MonthBars
+                      series={series}
+                      formatMoney={formatMoney}
+                      currency={preferred}
+                      locale={user.locale}
+                      showNet
+                    />
+                  </View>
                 )}
               </Card>
 
@@ -499,12 +659,16 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError }
                 <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>
                   Income vs expense
                 </Text>
-                <MonthBars
-                  series={series}
-                  formatMoney={formatMoney}
-                  currency={preferred}
-                  locale={user.locale}
-                />
+                <View style={{ gap: 14 }}>
+                  <NetSparkline series={series} />
+                  <MonthBars
+                    series={series}
+                    formatMoney={formatMoney}
+                    currency={preferred}
+                    locale={user.locale}
+                    showNet
+                  />
+                </View>
               </Card>
               <Card>
                 <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>Categories</Text>
@@ -722,12 +886,16 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError }
                         <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>{chart.title}</Text>
                         <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>{chart.caption}</Text>
                         {chart.type === 'grouped_bar' && seriesData.length > 0 ? (
-                          <MonthBars
-                            series={seriesData}
-                            formatMoney={formatMoney}
-                            currency={report.currency_code}
-                            locale={user.locale}
-                          />
+                          <View style={{ gap: 12 }}>
+                            <NetSparkline series={seriesData} />
+                            <MonthBars
+                              series={seriesData}
+                              formatMoney={formatMoney}
+                              currency={report.currency_code}
+                              locale={user.locale}
+                              showNet
+                            />
+                          </View>
                         ) : null}
                         {chart.type === 'bar' && catData.length > 0 ? (
                           <CategoryBars rows={catData} formatMoney={formatMoney} locale={user.locale} />
@@ -746,18 +914,7 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError }
                     );
                   })}
                   {(report.tables ?? []).map((table) => (
-                    <View key={table.id} style={{ gap: 6 }}>
-                      <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }}>{table.title}</Text>
-                      {table.rows.slice(0, 8).map((row, idx) => (
-                        <Text
-                          key={`${table.id}-${idx}`}
-                          style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}
-                          numberOfLines={1}
-                        >
-                          {row.join(' · ')}
-                        </Text>
-                      ))}
-                    </View>
+                    <ReportTableView key={table.id} table={table} />
                   ))}
                   <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 11 }}>
                     {report.disclaimer || disclaimer}

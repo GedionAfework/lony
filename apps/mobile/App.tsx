@@ -1,8 +1,7 @@
-import { StatusBar } from 'expo-status-bar';
+﻿import { StatusBar } from 'expo-status-bar';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
-import * as SecureStore from 'expo-secure-store';
 import {
   JetBrainsMono_500Medium,
   JetBrainsMono_600SemiBold,
@@ -57,6 +56,7 @@ import { OnboardingScreen } from './src/OnboardingScreen';
 import { TermsScreen } from './src/TermsScreen';
 import { ThemeProvider, fonts, radii, useTheme } from './src/theme';
 import { registerPushToken } from './src/push';
+import { storageDelete, storageGet, storageSet } from './src/secureStorage';
 import { SearchSelect } from './src/SearchSelect';
 import { SettingsScreen, shareExportJSON, shareExportNote } from './src/SettingsScreen';
 import { Card, DueDatePill, EmptyState, Field, Money, PrimaryButton, ScreenHeader, SecondaryButton, SectionLabel, useAppStyles } from './src/ui';
@@ -169,6 +169,9 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   const [loanFriendId, setLoanFriendId] = useState<string>('');
   const [loanLockedPeer, setLoanLockedPeer] = useState<{ id: string; display_name: string } | null>(null);
   const [chatThreadOpen, setChatThreadOpen] = useState(false);
+  const [planDetailOpen, setPlanDetailOpen] = useState(false);
+  const [accountsPanelOpen, setAccountsPanelOpen] = useState(false);
+  const [settingsDetailOpen, setSettingsDetailOpen] = useState(false);
   const [loanRole, setLoanRole] = useState<'borrower' | 'lender'>('borrower');
   const [loanKind, setLoanKind] = useState<'one_time' | 'long_term'>('one_time');
   const [partyMode, setPartyMode] = useState<'alone' | 'shared'>('alone');
@@ -281,8 +284,8 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   useEffect(() => {
     (async () => {
       try {
-        const access = await SecureStore.getItemAsync(ACCESS_KEY);
-        const refresh = await SecureStore.getItemAsync(REFRESH_KEY);
+        const access = await storageGet(ACCESS_KEY);
+        const refresh = await storageGet(REFRESH_KEY);
         if (!access && !refresh) {
           return;
         }
@@ -297,16 +300,16 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         }
         if (refresh) {
           const tokens = await api.refresh(refresh);
-          await SecureStore.setItemAsync(ACCESS_KEY, tokens.access_token);
-          await SecureStore.setItemAsync(REFRESH_KEY, tokens.refresh_token);
+          await storageSet(ACCESS_KEY, tokens.access_token);
+          await storageSet(REFRESH_KEY, tokens.refresh_token);
           enterAuthed(tokens.user, tokens.access_token);
           return;
         }
-        await SecureStore.deleteItemAsync(ACCESS_KEY);
-        await SecureStore.deleteItemAsync(REFRESH_KEY);
+        await storageDelete(ACCESS_KEY);
+        await storageDelete(REFRESH_KEY);
       } catch {
-        await SecureStore.deleteItemAsync(ACCESS_KEY);
-        await SecureStore.deleteItemAsync(REFRESH_KEY);
+        await storageDelete(ACCESS_KEY);
+        await storageDelete(REFRESH_KEY);
       } finally {
         setBooting(false);
       }
@@ -337,8 +340,8 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   }, [acceptedDisclaimer]);
 
   async function persistTokens(access: string, refresh: string, nextUser: User) {
-    await SecureStore.setItemAsync(ACCESS_KEY, access);
-    await SecureStore.setItemAsync(REFRESH_KEY, refresh);
+    await storageSet(ACCESS_KEY, access);
+    await storageSet(REFRESH_KEY, refresh);
     enterAuthed(nextUser, access);
   }
 
@@ -388,7 +391,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   }
 
   async function onLogout() {
-    const token = await SecureStore.getItemAsync(ACCESS_KEY);
+    const token = await storageGet(ACCESS_KEY);
     if (token) {
       try {
         await api.logout(token);
@@ -396,8 +399,8 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         // still clear local session
       }
     }
-    await SecureStore.deleteItemAsync(ACCESS_KEY);
-    await SecureStore.deleteItemAsync(REFRESH_KEY);
+    await storageDelete(ACCESS_KEY);
+    await storageDelete(REFRESH_KEY);
     setUser(null);
     setToken(null);
     setFriends([]);
@@ -555,7 +558,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     if (!token) {
       return;
     }
-    // Bonds form when a loan/split is accepted — open a loan with this person.
+    // Bonds form when a loan/split is accepted â€” open a loan with this person.
     setLoanFriendId(hit.id);
     setLoanLockedPeer({ id: hit.id, display_name: hit.display_name });
     setCurrency(user?.default_currency_code ?? '');
@@ -987,7 +990,21 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         const asset = picked.assets[0];
         body.proof_filename = asset.name;
         body.proof_mime = asset.mimeType ?? 'application/octet-stream';
-        body.proof_base64 = await FileSystem.readAsStringAsync(asset.uri, { encoding: 'base64' });
+        if (Platform.OS === 'web' && typeof fetch === 'function') {
+          const blob = await fetch(asset.uri).then((r) => r.blob());
+          body.proof_base64 = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+              const result = String(reader.result || '');
+              const idx = result.indexOf(',');
+              resolve(idx >= 0 ? result.slice(idx + 1) : result);
+            };
+            reader.onerror = () => reject(reader.error);
+            reader.readAsDataURL(blob);
+          });
+        } else {
+          body.proof_base64 = await FileSystem.readAsStringAsync(asset.uri, { encoding: 'base64' });
+        }
       }
       await api.claimRepayment(token, selectedLoan.id, body);
       const [loanRes, repayRes] = await Promise.all([
@@ -1233,17 +1250,23 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   }
 
   const authed = Boolean(user && token);
+  const detailChromeHidden =
+    chatThreadOpen ||
+    planDetailOpen ||
+    accountsPanelOpen ||
+    settingsDetailOpen;
+
   const showNav =
     authed &&
     user?.profile_complete &&
-    !chatThreadOpen &&
+    !detailChromeHidden &&
     (screen === 'home' || screen === 'loans' || screen === 'chats' || screen === 'chat-search');
 
   const showChrome =
     authed &&
     user?.profile_complete &&
-    !chatThreadOpen &&
-    !['login', 'register', 'verify', 'onboarding', 'tos', 'loan', 'installment', 'new-loan', 'cashflow-new', 'cashflow-show'].includes(screen);
+    !detailChromeHidden &&
+    !['login', 'register', 'verify', 'onboarding', 'tos', 'loan', 'installment', 'new-loan', 'cashflow-new', 'cashflow-show', 'peer-profile', 'banks'].includes(screen);
 
   function drawerActive(): DrawerItem | null {
     if (screen === 'expenses' || screen === 'home' || screen === 'cashflow-new' || screen === 'cashflow-show') {
@@ -1337,6 +1360,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         <DrawerMenu
           open={drawerOpen}
           active={drawerActive()}
+          locale={user?.locale}
           onClose={() => setDrawerOpen(false)}
           onSelect={onDrawerSelect}
         />
@@ -1470,6 +1494,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               formatMoney={formatMoney}
               onError={(message) => setError(message)}
               reloadToken={accountsReload}
+              onPanelChange={setAccountsPanelOpen}
             />
           ) : null}
 
@@ -1571,6 +1596,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               token={token}
               formatMoney={formatMoney}
               onError={(message) => setError(message)}
+              onDetailChange={setPlanDetailOpen}
             />
           ) : null}
 
@@ -1609,7 +1635,11 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               profileComplete={Boolean(user.profile_complete)}
               tosAccepted={Boolean(user.tos_accepted_at)}
               tosVersion={user.tos_version}
+              isAdmin={user.role === 'admin'}
+              planTier={user.plan_tier}
+              token={token ?? undefined}
               busy={busy}
+              onSettingsPageChange={setSettingsDetailOpen}
               onUsername={setProfileUsername}
               onFirstName={setProfileFirstName}
               onMiddleName={setProfileMiddleName}
@@ -1799,17 +1829,17 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                       </Pressable>
                     );
                   }
-                  return <Text style={styles.muted}>{prefix} — Invite to Lony</Text>;
+                  return <Text style={styles.muted}>{prefix} â€” Invite to Lony</Text>;
                 })()}
                 {selectedLoan.loan_kind === 'long_term' && selectedLoan.installment_amount ? (
                   <Text style={[styles.muted, { marginTop: 6 }]}>
                     {formatMoney(selectedLoan.installment_amount, selectedLoan.currency_code, user?.locale)}/mo
-                    {selectedLoan.installment_count ? ` · ${selectedLoan.installment_count} months` : ''}
+                    {selectedLoan.installment_count ? ` Â· ${selectedLoan.installment_count} months` : ''}
                   </Text>
                 ) : null}
                 {selectedLoan.interest_period_months && selectedLoan.loan_kind !== 'long_term' ? (
                   <Text style={[styles.muted, { marginTop: 4 }]}>
-                    Interest period · {selectedLoan.interest_period_months} mo
+                    Interest period Â· {selectedLoan.interest_period_months} mo
                   </Text>
                 ) : null}
               </Card>
@@ -1902,7 +1932,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                   <SearchSelect label="Currency" value={currency} onChange={setCurrency} options={CURRENCIES} />
                   <DateField label="Due date" value={dueDate} onChange={setDueDate} />
                   <Field label="Note" value={note} onChange={setNote} />
-                  <PrimaryButton label={busy ? 'Working…' : 'Send terms'} onPress={onProposeTerms} disabled={busy} />
+                  <PrimaryButton label={busy ? 'Workingâ€¦' : 'Send terms'} onPress={onProposeTerms} disabled={busy} />
                 </Card>
               ) : null}
 
@@ -1923,7 +1953,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               (selectedLoan.status === 'active' || selectedLoan.status === 'overdue') &&
               !(selectedLoan.installments && selectedLoan.installments.length > 0) ? (
                 <Card>
-                  <PrimaryButton label={busy ? 'Working…' : 'I paid (optional proof)'} onPress={onClaimRepayment} disabled={busy} />
+                  <PrimaryButton label={busy ? 'Workingâ€¦' : 'I paid (optional proof)'} onPress={onClaimRepayment} disabled={busy} />
                 </Card>
               ) : null}
 
@@ -1933,10 +1963,10 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                   {repayments.map((rep) => (
                     <View key={rep.id} style={{ gap: 8 }}>
                       <Text style={styles.rowTitle}>
-                        {formatMoney(rep.amount, selectedLoan.currency_code, user?.locale)} · {statusLabel(rep.status)}
+                        {formatMoney(rep.amount, selectedLoan.currency_code, user?.locale)} Â· {statusLabel(rep.status)}
                       </Text>
                       {rep.note ? <Text style={styles.muted}>{rep.note}</Text> : null}
-                      {rep.proof_url ? <Text style={styles.dev}>Proof · {rep.proof_name || 'attachment'}</Text> : null}
+                      {rep.proof_url ? <Text style={styles.dev}>Proof Â· {rep.proof_name || 'attachment'}</Text> : null}
                       {rep.can_confirm ? (
                         <PrimaryButton label="Confirm received" onPress={() => onConfirmRepayment(rep.id)} disabled={busy} />
                       ) : null}
@@ -2000,7 +2030,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                             Share {profile.label}
                           </Text>
                           <Text style={{ color: colors.onPrimary, opacity: 0.8, fontFamily: fonts.ui, fontSize: 12 }}>
-                            •••• {profile.account_last4} → {selectedLoan.borrower.display_name}
+                            â€¢â€¢â€¢â€¢ {profile.account_last4} â†’ {selectedLoan.borrower.display_name}
                           </Text>
                         </View>
                       </Pressable>
@@ -2015,11 +2045,11 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                   {paymentProfile ? (
                     <>
                       <Text style={styles.rowTitle}>
-                        {paymentProfile.label} · •••• {paymentProfile.account_last4}
+                        {paymentProfile.label} Â· â€¢â€¢â€¢â€¢ {paymentProfile.account_last4}
                       </Text>
                       {revealedNumber ? <Text style={styles.dev}>{revealedNumber}</Text> : null}
                       <SecondaryButton
-                        label={busy ? 'Working…' : 'Reveal number'}
+                        label={busy ? 'Workingâ€¦' : 'Reveal number'}
                         onPress={() => onRevealProfile(paymentProfile.id, true)}
                         disabled={busy}
                       />
@@ -2138,7 +2168,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               (selectedLoan.status === 'active' || selectedLoan.status === 'overdue') ? (
                 <Card>
                   <PrimaryButton
-                    label={busy ? 'Working…' : 'I paid'}
+                    label={busy ? 'Workingâ€¦' : 'I paid'}
                     onPress={onMarkInstallmentPaid}
                     disabled={busy}
                   />
@@ -2163,10 +2193,10 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                         <View style={styles.flex}>
                           <Text style={styles.rowTitle}>
                             {profile.label}
-                            {profile.is_preferred ? ' · preferred' : ''}
+                            {profile.is_preferred ? ' Â· preferred' : ''}
                           </Text>
                           <Text style={styles.muted}>
-                            {profile.profile_type} · •••• {profile.account_last4}
+                            {profile.profile_type} Â· â€¢â€¢â€¢â€¢ {profile.account_last4}
                           </Text>
                         </View>
                       </View>
@@ -2196,7 +2226,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                       {editingBankId === profile.id ? (
                         <View style={{ gap: 8 }}>
                           <Field label="Label" value={editBankLabel} onChange={setEditBankLabel} />
-                          <PrimaryButton label={busy ? 'Saving…' : 'Save label'} onPress={() => onPatchBank(profile.id)} disabled={busy} />
+                          <PrimaryButton label={busy ? 'Savingâ€¦' : 'Save label'} onPress={() => onPatchBank(profile.id)} disabled={busy} />
                         </View>
                       ) : null}
                       {friends.length > 0 ? (
@@ -2277,7 +2307,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                   </>
                 ) : null}
                 <PrimaryButton
-                  label={busy ? 'Working…' : 'Save encrypted profile'}
+                  label={busy ? 'Workingâ€¦' : 'Save encrypted profile'}
                   onPress={onCreateBank}
                   disabled={busy || !bankIdentifier.trim() || !bankCountry || !selectedRail}
                 />
@@ -2289,7 +2319,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                   {outgoingShares.filter((s) => !s.revoked_at).map((share) => (
                     <View key={share.id} style={styles.row}>
                       <View style={styles.flex}>
-                        <Text style={styles.rowTitle}>{share.profile.label} · •••• {share.profile.account_last4}</Text>
+                        <Text style={styles.rowTitle}>{share.profile.label} Â· â€¢â€¢â€¢â€¢ {share.profile.account_last4}</Text>
                         <Text style={styles.muted}>{share.loan_id ? 'Loan share' : 'Friend share'}</Text>
                       </View>
                       <Pressable style={styles.ghostButton} onPress={() => onRevokeShare(share.id)} disabled={busy}>
@@ -2306,7 +2336,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                   {incomingShares.map((share) => (
                     <View key={share.id} style={styles.row}>
                       <View style={styles.flex}>
-                        <Text style={styles.rowTitle}>{share.profile.label} · •••• {share.profile.account_last4}</Text>
+                        <Text style={styles.rowTitle}>{share.profile.label} Â· â€¢â€¢â€¢â€¢ {share.profile.account_last4}</Text>
                         <Text style={styles.muted}>Masked until you reveal</Text>
                       </View>
                       <Pressable style={styles.ghostButton} onPress={() => onRevealProfile(share.profile.id)} disabled={busy}>

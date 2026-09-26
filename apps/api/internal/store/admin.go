@@ -27,6 +27,9 @@ func (a adminStoreAdapter) GetUser(ctx context.Context, id uuid.UUID) (admin.Use
 func (a adminStoreAdapter) SetUserStatus(ctx context.Context, id uuid.UUID, status string) error {
 	return a.Inner.AdminSetUserStatus(ctx, id, status)
 }
+func (a adminStoreAdapter) SetUserPlanTier(ctx context.Context, id uuid.UUID, planTier string) error {
+	return a.Inner.AdminSetUserPlanTier(ctx, id, planTier)
+}
 func (a adminStoreAdapter) RevokeUserSessions(ctx context.Context, id uuid.UUID) error {
 	return a.Inner.AdminRevokeUserSessions(ctx, id)
 }
@@ -65,6 +68,15 @@ func (a adminStoreAdapter) CreateCatalogInstitution(ctx context.Context, code, l
 }
 func (a adminStoreAdapter) UpdateCatalogInstitution(ctx context.Context, id uuid.UUID, label *string, typeKind, typeCode *string, country *string, sortOrder *int, active *bool) (admin.CatalogInstitution, error) {
 	return a.Inner.UpdateCatalogInstitution(ctx, id, label, typeKind, typeCode, country, sortOrder, active)
+}
+func (a adminStoreAdapter) ListSystemCategories(ctx context.Context, kind string) ([]admin.SystemCategory, error) {
+	return a.Inner.AdminListSystemCategories(ctx, kind)
+}
+func (a adminStoreAdapter) CreateSystemCategory(ctx context.Context, kind, name, slug string) (admin.SystemCategory, error) {
+	return a.Inner.AdminCreateSystemCategory(ctx, kind, name, slug)
+}
+func (a adminStoreAdapter) UpdateSystemCategory(ctx context.Context, id uuid.UUID, name *string, active *bool) (admin.SystemCategory, error) {
+	return a.Inner.AdminUpdateSystemCategory(ctx, id, name, active)
 }
 
 func (s *SQLStore) AdminUserRole(ctx context.Context, id uuid.UUID) (string, error) {
@@ -123,6 +135,18 @@ func (s *SQLStore) AdminOverview(ctx context.Context) (admin.Overview, error) {
 	_ = s.pool.QueryRow(ctx, `
 		SELECT COUNT(*)::int FROM ai_insights WHERE created_at >= now() - interval '7 days'
 	`).Scan(&out.AIInsights7d)
+	_ = s.pool.QueryRow(ctx, `
+		SELECT COUNT(*)::int,
+		       COUNT(DISTINCT user_id)::int,
+		       COALESCE(SUM(prompt_tokens + completion_tokens), 0)::int
+		FROM ai_runs
+		WHERE created_at >= now() - interval '7 days'
+	`).Scan(&out.AIRuns7d, &out.AIUsers7d, &out.AITokens7d)
+	_ = s.pool.QueryRow(ctx, `
+		SELECT COALESCE(SUM(request_count), 0)::int
+		FROM ai_usage_daily
+		WHERE day = (now() AT TIME ZONE 'UTC')::date
+	`).Scan(&out.AIRequestsToday)
 	return out, nil
 }
 
@@ -146,7 +170,7 @@ func (s *SQLStore) AdminListUsers(ctx context.Context, q, status string, limit, 
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT u.id, u.email::text, u.display_name, u.username, u.status, COALESCE(u.role,'user'),
-		       u.country_code, u.created_at,
+		       COALESCE(u.plan_tier,'free'), u.country_code, u.created_at,
 		       (
 		         SELECT MAX(s.last_used_at) FROM user_sessions s
 		         WHERE s.user_id = u.id AND s.revoked_at IS NULL
@@ -172,7 +196,7 @@ func (s *SQLStore) AdminListUsers(ctx context.Context, q, status string, limit, 
 		var item admin.UserListItem
 		if err := rows.Scan(
 			&item.ID, &item.Email, &item.DisplayName, &item.Username, &item.Status, &item.Role,
-			&item.CountryCode, &item.CreatedAt, &item.LastActiveAt,
+			&item.PlanTier, &item.CountryCode, &item.CreatedAt, &item.LastActiveAt,
 		); err != nil {
 			return nil, 0, err
 		}
@@ -186,7 +210,7 @@ func (s *SQLStore) AdminGetUser(ctx context.Context, id uuid.UUID) (admin.UserDe
 	var verifiedAt *time.Time
 	err := s.pool.QueryRow(ctx, `
 		SELECT u.id, u.email::text, u.display_name, u.username, u.status, COALESCE(u.role,'user'),
-		       u.country_code, u.created_at, u.phone_e164, u.locale, u.timezone, u.default_currency_code,
+		       COALESCE(u.plan_tier,'free'), u.country_code, u.created_at, u.phone_e164, u.locale, u.timezone, u.default_currency_code,
 		       u.email_verified_at,
 		       (
 		         SELECT MAX(s.last_used_at) FROM user_sessions s
@@ -196,7 +220,7 @@ func (s *SQLStore) AdminGetUser(ctx context.Context, id uuid.UUID) (admin.UserDe
 		WHERE u.id = $1 AND u.deleted_at IS NULL
 	`, id).Scan(
 		&d.ID, &d.Email, &d.DisplayName, &d.Username, &d.Status, &d.Role,
-		&d.CountryCode, &d.CreatedAt, &d.PhoneE164, &d.Locale, &d.Timezone, &d.DefaultCurrencyCode,
+		&d.PlanTier, &d.CountryCode, &d.CreatedAt, &d.PhoneE164, &d.Locale, &d.Timezone, &d.DefaultCurrencyCode,
 		&verifiedAt, &d.LastActiveAt,
 	)
 	if err != nil {
@@ -249,6 +273,56 @@ func (s *SQLStore) AdminGetUser(ctx context.Context, id uuid.UUID) (admin.UserDe
 func (s *SQLStore) AdminSetUserStatus(ctx context.Context, id uuid.UUID, status string) error {
 	_, err := s.pool.Exec(ctx, `UPDATE users SET status=$2, updated_at=now() WHERE id=$1 AND deleted_at IS NULL`, id, status)
 	return err
+}
+
+func (s *SQLStore) AdminSetUserPlanTier(ctx context.Context, id uuid.UUID, planTier string) error {
+	_, err := s.pool.Exec(ctx, `UPDATE users SET plan_tier=$2, updated_at=now() WHERE id=$1 AND deleted_at IS NULL`, id, planTier)
+	return err
+}
+
+func (s *SQLStore) AdminListSystemCategories(ctx context.Context, kind string) ([]admin.SystemCategory, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, kind, name, slug, is_system, COALESCE(active, true), created_at
+		FROM cashflow_categories
+		WHERE user_id IS NULL
+		  AND ($1 = '' OR kind = $1)
+		ORDER BY kind ASC, name ASC
+	`, kind)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []admin.SystemCategory
+	for rows.Next() {
+		var c admin.SystemCategory
+		if err := rows.Scan(&c.ID, &c.Kind, &c.Name, &c.Slug, &c.IsSystem, &c.Active, &c.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLStore) AdminCreateSystemCategory(ctx context.Context, kind, name, slug string) (admin.SystemCategory, error) {
+	var c admin.SystemCategory
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO cashflow_categories (user_id, kind, name, slug, is_system, active)
+		VALUES (NULL, $1, $2, $3, true, true)
+		RETURNING id, kind, name, slug, is_system, COALESCE(active, true), created_at
+	`, kind, name, slug).Scan(&c.ID, &c.Kind, &c.Name, &c.Slug, &c.IsSystem, &c.Active, &c.CreatedAt)
+	return c, err
+}
+
+func (s *SQLStore) AdminUpdateSystemCategory(ctx context.Context, id uuid.UUID, name *string, active *bool) (admin.SystemCategory, error) {
+	var c admin.SystemCategory
+	err := s.pool.QueryRow(ctx, `
+		UPDATE cashflow_categories SET
+			name = COALESCE($2, name),
+			active = COALESCE($3, active)
+		WHERE id = $1 AND user_id IS NULL
+		RETURNING id, kind, name, slug, is_system, COALESCE(active, true), created_at
+	`, id, name, active).Scan(&c.ID, &c.Kind, &c.Name, &c.Slug, &c.IsSystem, &c.Active, &c.CreatedAt)
+	return c, err
 }
 
 func (s *SQLStore) AdminRevokeUserSessions(ctx context.Context, id uuid.UUID) error {

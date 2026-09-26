@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Modal, Pressable, Text, View } from 'react-native';
 import {
   api,
   type Budget,
@@ -93,6 +93,7 @@ export function ExpensesScreen({
   const [drafts, setDrafts] = useState<CashflowDraft[]>([]);
   const [draftBusy, setDraftBusy] = useState(false);
   const [selectedDate, setSelectedDate] = useState(() => new Date());
+  const [calendarOpen, setCalendarOpen] = useState(false);
 
   const period = useMemo(() => monthBounds(selectedDate), [selectedDate]);
   const selectedIso = useMemo(() => toIsoLocal(selectedDate), [selectedDate]);
@@ -298,9 +299,7 @@ export function ExpensesScreen({
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
         <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>Expenses</Text>
         <Pressable
-          onPress={() => {
-            if (tab !== 'dashboard') onTab('dashboard');
-          }}
+          onPress={() => setCalendarOpen(true)}
           style={{
             paddingHorizontal: 12,
             paddingVertical: 8,
@@ -316,6 +315,122 @@ export function ExpensesScreen({
           <Text style={{ color: colors.primary, fontFamily: fonts.ui, fontSize: 11, opacity: 0.85 }}>{period.short}</Text>
         </Pressable>
       </View>
+
+      <Modal visible={calendarOpen} transparent animationType="fade" onRequestClose={() => setCalendarOpen(false)}>
+        <Pressable
+          style={{ flex: 1, backgroundColor: colors.overlay, justifyContent: 'center', padding: 20 }}
+          onPress={() => setCalendarOpen(false)}
+        >
+          <Pressable
+            onPress={(e) => e.stopPropagation?.()}
+            style={{
+              backgroundColor: colors.surface,
+              borderRadius: radii.lg,
+              padding: 16,
+              borderWidth: 1,
+              borderColor: colors.border,
+              gap: 8,
+            }}
+          >
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <Pressable
+                onPress={() =>
+                  setSelectedDate(new Date(selectedDate.getFullYear(), selectedDate.getMonth() - 1, 1))
+                }
+              >
+                <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 14 }}>‹</Text>
+              </Pressable>
+              <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>{period.label}</Text>
+              <Pressable
+                onPress={() =>
+                  setSelectedDate(new Date(selectedDate.getFullYear(), selectedDate.getMonth() + 1, 1))
+                }
+              >
+                <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 14 }}>›</Text>
+              </Pressable>
+            </View>
+            <View style={{ flexDirection: 'row', marginBottom: 6 }}>
+              {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => (
+                <Text
+                  key={`${d}-${i}`}
+                  style={{
+                    flex: 1,
+                    textAlign: 'center',
+                    color: colors.muted,
+                    fontFamily: fonts.uiSemi,
+                    fontSize: 11,
+                  }}
+                >
+                  {d}
+                </Text>
+              ))}
+            </View>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+              {Array.from({ length: new Date(period.y, period.m, 1).getDay() }).map((_, i) => (
+                <View key={`pad-${i}`} style={{ width: `${100 / 7}%`, height: 36 }} />
+              ))}
+              {Array.from({ length: daysInMonth(period.y, period.m) }, (_, i) => i + 1).map((dayNum) => {
+                const iso = `${period.y}-${String(period.m + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
+                const active = selectedIso === iso;
+                const has =
+                  income.some((e) => e.occurred_at.slice(0, 10) === iso) ||
+                  expenseRows.some((e) => e.occurred_at.slice(0, 10) === iso);
+                return (
+                  <Pressable
+                    key={iso}
+                    onPress={() => {
+                      setSelectedDate(new Date(period.y, period.m, dayNum));
+                      setCalendarOpen(false);
+                    }}
+                    style={{
+                      width: `${100 / 7}%`,
+                      height: 36,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <View
+                      style={{
+                        width: 32,
+                        height: 32,
+                        borderRadius: 16,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        backgroundColor: active ? colors.primary : 'transparent',
+                      }}
+                    >
+                      <Text
+                        style={{
+                          color: active ? colors.onPrimary : colors.text,
+                          fontFamily: fonts.uiSemi,
+                          fontSize: 13,
+                        }}
+                      >
+                        {dayNum}
+                      </Text>
+                    </View>
+                    {has && !active ? (
+                      <View
+                        style={{
+                          position: 'absolute',
+                          bottom: 2,
+                          width: 4,
+                          height: 4,
+                          borderRadius: 2,
+                          backgroundColor: colors.primary,
+                        }}
+                      />
+                    ) : null}
+                  </Pressable>
+                );
+              })}
+            </View>
+            <Pressable onPress={() => setCalendarOpen(false)} style={{ alignSelf: 'flex-end', paddingTop: 8 }}>
+              <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 14 }}>Done</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       <View style={{ flexDirection: 'row', gap: 8 }}>
         {([
@@ -363,96 +478,45 @@ export function ExpensesScreen({
       {tab === 'dashboard' ? (
         <>
           <Card>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <Pressable
-                onPress={() =>
-                  setSelectedDate(new Date(selectedDate.getFullYear(), selectedDate.getMonth() - 1, 1))
-                }
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Text
+                style={{ color: colors.muted, fontFamily: fonts.uiSemi, fontSize: 12, textTransform: 'uppercase' }}
               >
-                <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 14 }}>‹</Text>
-              </Pressable>
-              <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>{period.label}</Text>
-              <Pressable
-                onPress={() =>
-                  setSelectedDate(new Date(selectedDate.getFullYear(), selectedDate.getMonth() + 1, 1))
-                }
-              >
-                <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 14 }}>›</Text>
-              </Pressable>
+                Net worth
+              </Text>
+              {onOpenAccounts ? (
+                <Pressable onPress={onOpenAccounts} hitSlop={8}>
+                  <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 13 }}>Accounts</Text>
+                </Pressable>
+              ) : null}
             </View>
-            <View style={{ flexDirection: 'row', marginBottom: 6 }}>
-              {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => (
-                <Text
-                  key={`${d}-${i}`}
-                  style={{
-                    flex: 1,
-                    textAlign: 'center',
-                    color: colors.muted,
-                    fontFamily: fonts.uiSemi,
-                    fontSize: 11,
-                  }}
-                >
-                  {d}
-                </Text>
-              ))}
+            <Money
+              value={formatMoney(wealth?.net_worth ?? '0', wealth?.preferred_currency || currency, user.locale)}
+              size="xl"
+              tone={Number(wealth?.net_worth || 0) >= 0 ? 'positive' : 'negative'}
+            />
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
+              <Mini
+                label="Cash on hand"
+                value={formatMoney(wealth?.cash_on_hand ?? '0', wealth?.preferred_currency || currency, user.locale)}
+                tone="positive"
+              />
+              <Mini
+                label="Owed to you"
+                value={formatMoney(wealth?.receivables ?? '0', wealth?.preferred_currency || currency, user.locale)}
+                tone="positive"
+              />
+              <Mini
+                label="You owe"
+                value={formatMoney(wealth?.payables ?? '0', wealth?.preferred_currency || currency, user.locale)}
+                tone="negative"
+              />
             </View>
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-              {Array.from({ length: new Date(period.y, period.m, 1).getDay() }).map((_, i) => (
-                <View key={`pad-${i}`} style={{ width: `${100 / 7}%`, height: 36 }} />
-              ))}
-              {Array.from({ length: daysInMonth(period.y, period.m) }, (_, i) => i + 1).map((dayNum) => {
-                const iso = `${period.y}-${String(period.m + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
-                const active = selectedIso === iso;
-                const has =
-                  income.some((e) => e.occurred_at.slice(0, 10) === iso) ||
-                  expenseRows.some((e) => e.occurred_at.slice(0, 10) === iso);
-                return (
-                  <Pressable
-                    key={iso}
-                    onPress={() => setSelectedDate(new Date(period.y, period.m, dayNum))}
-                    style={{
-                      width: `${100 / 7}%`,
-                      height: 36,
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}
-                  >
-                    <View
-                      style={{
-                        width: 32,
-                        height: 32,
-                        borderRadius: 16,
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        backgroundColor: active ? colors.primary : 'transparent',
-                      }}
-                    >
-                      <Text
-                        style={{
-                          color: active ? colors.onPrimary : colors.text,
-                          fontFamily: fonts.uiSemi,
-                          fontSize: 13,
-                        }}
-                      >
-                        {dayNum}
-                      </Text>
-                    </View>
-                    {has && !active ? (
-                      <View
-                        style={{
-                          position: 'absolute',
-                          bottom: 2,
-                          width: 4,
-                          height: 4,
-                          borderRadius: 2,
-                          backgroundColor: colors.primary,
-                        }}
-                      />
-                    ) : null}
-                  </Pressable>
-                );
-              })}
-            </View>
+            {(wealth?.accounts?.length ?? 0) === 0 ? (
+              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
+                Add account balances to complete net worth. Loan positions are included already.
+              </Text>
+            ) : null}
           </Card>
 
           <Card>
@@ -554,48 +618,6 @@ export function ExpensesScreen({
                 </Pressable>
               ))
             )}
-          </Card>
-
-          <Card>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text
-                style={{ color: colors.muted, fontFamily: fonts.uiSemi, fontSize: 12, textTransform: 'uppercase' }}
-              >
-                Net worth
-              </Text>
-              {onOpenAccounts ? (
-                <Pressable onPress={onOpenAccounts} hitSlop={8}>
-                  <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 13 }}>Accounts</Text>
-                </Pressable>
-              ) : null}
-            </View>
-            <Money
-              value={formatMoney(wealth?.net_worth ?? '0', wealth?.preferred_currency || currency, user.locale)}
-              size="xl"
-              tone={Number(wealth?.net_worth || 0) >= 0 ? 'positive' : 'negative'}
-            />
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
-              <Mini
-                label="Cash on hand"
-                value={formatMoney(wealth?.cash_on_hand ?? '0', wealth?.preferred_currency || currency, user.locale)}
-                tone="positive"
-              />
-              <Mini
-                label="Owed to you"
-                value={formatMoney(wealth?.receivables ?? '0', wealth?.preferred_currency || currency, user.locale)}
-                tone="positive"
-              />
-              <Mini
-                label="You owe"
-                value={formatMoney(wealth?.payables ?? '0', wealth?.preferred_currency || currency, user.locale)}
-                tone="negative"
-              />
-            </View>
-            {(wealth?.accounts?.length ?? 0) === 0 ? (
-              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
-                Add account balances to complete net worth. Loan positions are included already.
-              </Text>
-            ) : null}
           </Card>
 
           <Card>
@@ -878,7 +900,7 @@ function EntryRow({
         }}
       >
         {income ? '+' : '−'}
-        {formatMoney(entry.amount, entry.currency_code, locale)}
+        {formatMoney(entry.amount, entry.currency_code, locale ?? undefined)}
       </Text>
       <View
         style={{

@@ -2,7 +2,7 @@
 
 **Purpose:** Sequence the build of three LLM-backed advisors — **Analyst**, **Visualizer**, and **Coach** — on top of the deterministic Insights / Trust stack that already ships.
 
-**Status:** Epics L0–L4 shipped (platform, Analyst, Visualizer, Coach + SSE streaming, borrow filter, daily cap, eval tests). Soft polish (richer charts, admin usage counters) optional.
+**Status:** Epics L0–L4 shipped. Soft polish: admin AI usage counters + richer Insights/Visualizer charts.
 
 **Related:** Product overview and non-AI phases live in [`FINANCIAL_TRACKER_ROADMAP.md`](./FINANCIAL_TRACKER_ROADMAP.md). This file is the source of truth for LLM work only.
 
@@ -279,10 +279,7 @@ New migration (e.g. `00030_ai_llm.sql`):
 
 ## 14. Immediate next action
 
-Core personas are shipped. Optional follow-ups:
-1. Admin AI usage counters (L4 soft).  
-2. Richer Insights charts driven by Visualizer specs.  
-3. Keep `OPENAI_API_KEY` unset in environments that should stay rules-only.
+Core personas + soft polish shipped. Tracker leftovers: Plaid connection Link shipped (set `PLAID_*` + `PUBLIC_BASE_URL`); transaction sync into cashflow is the next bank-link step. Expand i18n keys as screens need them.
 
 ---
 
