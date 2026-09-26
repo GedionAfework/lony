@@ -437,6 +437,66 @@ export const api = {
       headers: { 'Idempotency-Key': idemKey('ai-coach') },
       body: JSON.stringify({ currency_code: currency, message }),
     }, token),
+  aiCoachStream: (
+    token: string,
+    currency: string,
+    message: string,
+    handlers: {
+      onToken?: (text: string) => void;
+      onReplace?: (text: string) => void;
+      onDone?: (coach: CoachReply) => void;
+      onError?: (message: string) => void;
+    },
+  ) =>
+    new Promise<void>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      let cursor = 0;
+      let eventName = 'message';
+      xhr.open('POST', `${apiBaseUrl}/ai/coach/messages/stream`);
+      xhr.setRequestHeader('Accept', 'text/event-stream');
+      xhr.setRequestHeader('Content-Type', 'application/json');
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      xhr.onprogress = () => {
+        const chunk = xhr.responseText.slice(cursor);
+        cursor = xhr.responseText.length;
+        for (const block of chunk.split('\n\n')) {
+          if (!block.trim()) continue;
+          let data = '';
+          for (const line of block.split('\n')) {
+            if (line.startsWith('event:')) eventName = line.slice(6).trim();
+            else if (line.startsWith('data:')) data += line.slice(5).trim();
+          }
+          if (!data) continue;
+          try {
+            const payload = JSON.parse(data) as Record<string, unknown>;
+            if (eventName === 'token' && typeof payload.text === 'string') handlers.onToken?.(payload.text);
+            else if (eventName === 'replace' && typeof payload.text === 'string') handlers.onReplace?.(payload.text);
+            else if (eventName === 'done' && payload.coach) handlers.onDone?.(payload.coach as CoachReply);
+            else if (eventName === 'error') {
+              const err = payload.error as { message?: string } | undefined;
+              handlers.onError?.(err?.message || 'Coach stream failed');
+            }
+          } catch {
+            /* ignore partial JSON */
+          }
+          eventName = 'message';
+        }
+      };
+      xhr.onerror = () => reject(new Error('Coach stream network error'));
+      xhr.onload = () => {
+        if (xhr.status >= 400) {
+          try {
+            const err = JSON.parse(xhr.responseText) as ApiError;
+            reject(new Error(err?.error?.message || `Request failed (${xhr.status})`));
+          } catch {
+            reject(new Error(`Request failed (${xhr.status})`));
+          }
+          return;
+        }
+        resolve();
+      };
+      xhr.send(JSON.stringify({ currency_code: currency, message }));
+    }),
   getCoachThread: (token: string) =>
     request<{ thread: CoachThread; disclaimer: string }>('/ai/coach/thread', { method: 'GET' }, token),
   cashflowSummary: (token: string, query: { from?: string; to?: string } = {}) => {
@@ -1076,7 +1136,9 @@ export type AIReport = {
   period_months: number;
   disclaimer: string;
   charts: { id: string; type: string; title: string; caption: string; data: Record<string, unknown> }[];
+  tables?: { id: string; title: string; columns: string[]; rows: string[][] }[];
   summary: string;
+  source?: string;
 };
 
 export type CoachReply = {

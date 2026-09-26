@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 
 	"equilend/api/internal/accounts"
@@ -122,7 +123,17 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.Timeout(30 * time.Second))
+	r.Use(func(next http.Handler) http.Handler {
+		fast := middleware.Timeout(30 * time.Second)(next)
+		slow := middleware.Timeout(120 * time.Second)(next)
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			if strings.HasSuffix(req.URL.Path, "/ai/coach/messages/stream") {
+				slow.ServeHTTP(w, req)
+				return
+			}
+			fast.ServeHTTP(w, req)
+		})
+	})
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PATCH", "PUT", "DELETE", "OPTIONS"},
@@ -257,6 +268,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 			r.With(idem.Handler("ai.report")).Post("/ai/analytics/report", aiH.Report)
 			r.Get("/ai/coach/thread", aiH.GetCoachThread)
 			r.With(idem.Handler("ai.coach")).Post("/ai/coach/messages", aiH.Coach)
+			r.Post("/ai/coach/messages/stream", aiH.CoachStream)
 			r.With(idem.Handler("loans.create")).Post("/loans", loansH.Create)
 			r.Get("/loans", loansH.List)
 			r.Get("/loans/{id}", loansH.Get)

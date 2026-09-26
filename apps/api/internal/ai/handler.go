@@ -115,3 +115,15 @@ func (h *Handler) GetCoachThread(w http.ResponseWriter, r *http.Request) {
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"thread": out, "disclaimer": Disclaimer})
 }
+
+func (h *Handler) CoachStream(w http.ResponseWriter, r *http.Request) {
+	var body coachBody
+	if err := httpx.Decode(r, &body); err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	if err := h.svc.CoachStream(r.Context(), w, auth.UserIDFrom(r.Context()), body.CurrencyCode, body.Message); err != nil {
+		// Headers may already be written for SSE; only use JSON errors before stream starts.
+		httpx.Error(w, err)
+	}
+}

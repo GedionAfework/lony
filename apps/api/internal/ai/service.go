@@ -54,12 +54,21 @@ type ReportChart struct {
 	Data    map[string]any `json:"data"`
 }
 
+type ReportTable struct {
+	ID      string     `json:"id"`
+	Title   string     `json:"title"`
+	Columns []string   `json:"columns"`
+	Rows    [][]string `json:"rows"`
+}
+
 type Report struct {
 	CurrencyCode string        `json:"currency_code"`
 	PeriodMonths int           `json:"period_months"`
 	Disclaimer   string        `json:"disclaimer"`
 	Charts       []ReportChart `json:"charts"`
+	Tables       []ReportTable `json:"tables,omitempty"`
 	Summary      string        `json:"summary"`
+	Source       string        `json:"source,omitempty"` // rules | llm_visualizer
 }
 
 type CoachReply struct {
@@ -325,14 +334,40 @@ func (s *Service) Report(ctx context.Context, userID uuid.UUID, currency string,
 			Data:    map[string]any{"net": ov.Net, "income": ov.Income, "expense": ov.Expense},
 		},
 	}
+	tables := []ReportTable{
+		{
+			ID: "monthly_cashflow", Title: fmt.Sprintf("Monthly cashflow (%s)", currency),
+			Columns: []string{"month", "income", "expense", "net"},
+			Rows:    make([][]string, 0, len(series)),
+		},
+		{
+			ID: "top_categories", Title: "Top categories this month",
+			Columns: []string{"category", "amount", "share_percent"},
+			Rows:    make([][]string, 0, len(cats)),
+		},
+	}
+	for _, p := range series {
+		tables[0].Rows = append(tables[0].Rows, []string{p.Month, p.Income, p.Expense, p.Net})
+	}
+	for i, c := range cats {
+		if i >= 8 {
+			break
+		}
+		tables[1].Rows = append(tables[1].Rows, []string{
+			c.Category, c.Amount, fmt.Sprintf("%.0f", c.SharePercent),
+		})
+	}
 	summary := fmt.Sprintf("Net %s %s this month (income %s, expense %s).", currency, ov.Net, ov.Income, ov.Expense)
-	return Report{
+	rep := Report{
 		CurrencyCode: currency,
 		PeriodMonths: months,
 		Disclaimer:   Disclaimer,
 		Charts:       charts,
+		Tables:       tables,
 		Summary:      summary,
-	}, nil
+		Source:       "rules",
+	}
+	return s.enrichReportLLM(ctx, userID, rep), nil
 }
 
 func (s *Service) Coach(ctx context.Context, userID uuid.UUID, currency, message string) (CoachReply, error) {

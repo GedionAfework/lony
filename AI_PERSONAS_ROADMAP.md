@@ -2,7 +2,7 @@
 
 **Purpose:** Sequence the build of three LLM-backed advisors — **Analyst**, **Visualizer**, and **Coach** — on top of the deterministic Insights / Trust stack that already ships.
 
-**Status:** Epic L0 platform shipped (OpenAI-compatible client, conversations/runs/usage, metric tools, privacy export). Analyst enrich (L1) and Coach LLM + thread UI (L3 core) wired with rule fallback. Visualizer LLM captions (L2) and streaming (L3b) remain.
+**Status:** Epics L0–L4 shipped (platform, Analyst, Visualizer, Coach + SSE streaming, borrow filter, daily cap, eval tests). Soft polish (richer charts, admin usage counters) optional.
 
 **Related:** Product overview and non-AI phases live in [`FINANCIAL_TRACKER_ROADMAP.md`](./FINANCIAL_TRACKER_ROADMAP.md). This file is the source of truth for LLM work only.
 
@@ -186,8 +186,8 @@ New migration (e.g. `00030_ai_llm.sql`):
 
 ### Exit criteria (L2)
 
-- [ ] Report numbers match Insights APIs for the same period.
-- [ ] Captions are short and disclaimer-backed.
+- [x] Report numbers match Insights APIs for the same period.
+- [x] Captions are short and disclaimer-backed.
 
 ---
 
@@ -217,12 +217,12 @@ New migration (e.g. `00030_ai_llm.sql`):
 
 - [x] Multi-turn history persists and exports.
 - [x] Tool-grounded answers when keyed; fallback when not.
-- [ ] No “borrow more” suggestions in prompt + light output filter.
+- [x] No “borrow more” suggestions in prompt + light output filter.
 
 ### L3b — Streaming (same epic if time)
 
-- SSE (or chunked) assistant tokens for Coach only.
-- Mobile: append tokens to the last bubble.
+- [x] SSE (or chunked) assistant tokens for Coach only.
+- [x] Mobile: append tokens to the last bubble.
 
 ---
 
@@ -236,8 +236,8 @@ New migration (e.g. `00030_ai_llm.sql`):
 
 ### Exit criteria (L4)
 
-- [ ] Cap returns `429` / clear error after limit.
-- [ ] Eval suite runs in CI or `go test` with mocked LLM.
+- [x] Cap returns `429` / clear error after limit.
+- [x] Eval suite runs in CI or `go test` with mocked LLM.
 
 ---
 
@@ -267,22 +267,22 @@ New migration (e.g. `00030_ai_llm.sql`):
 
 ## 13. Checklist — shipped when
 
-- [ ] L0 platform live in API  
-- [ ] L1 Analyst LLM enrich  
-- [ ] L2 Visualizer report  
-- [ ] L3 Coach multi-turn  
-- [ ] L3b streaming (optional but desired)  
-- [ ] L4 caps + eval + roadmap updated  
-- [ ] Keys documented; kill switch verified  
+- [x] L0 platform live in API  
+- [x] L1 Analyst LLM enrich  
+- [x] L2 Visualizer report  
+- [x] L3 Coach multi-turn  
+- [x] L3b streaming (optional but desired)  
+- [x] L4 caps + eval + roadmap updated  
+- [x] Keys documented; kill switch verified  
 
 ---
 
 ## 14. Immediate next action
 
-1. Add `OPENAI_*` / `AI_DAILY_USER_CAP` to config and `.env.example`.  
-2. Implement `internal/ai/llm` + tool wrappers over existing Insights/Score services.  
-3. Ship migration `ai_conversations` / `ai_messages` / `ai_runs`.  
-4. Wire Coach to LLM with rule fallback — first user-visible win after L0.
+Core personas are shipped. Optional follow-ups:
+1. Admin AI usage counters (L4 soft).  
+2. Richer Insights charts driven by Visualizer specs.  
+3. Keep `OPENAI_API_KEY` unset in environments that should stay rules-only.
 
 ---
 

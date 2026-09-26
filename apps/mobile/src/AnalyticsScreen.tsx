@@ -3,6 +3,7 @@ import { Pressable, Text, View } from 'react-native';
 import {
   api,
   type AIInsight,
+  type AIReport,
   type CoachMessage,
   type Dashboard,
   type InsightsCategoryPoint,
@@ -15,7 +16,7 @@ import {
 import { fonts, radii, space, useTheme } from './theme';
 import { Card, EmptyState, Field, Money, PrimaryButton } from './ui';
 
-type Tab = 'overview' | 'cashflow' | 'debts' | 'goals' | 'analysis' | 'coach';
+type Tab = 'overview' | 'cashflow' | 'debts' | 'goals' | 'analysis' | 'reports' | 'coach';
 
 type Props = {
   user: User;
@@ -165,6 +166,8 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError }
   const [coachMsg, setCoachMsg] = useState('');
   const [coachMessages, setCoachMessages] = useState<CoachMessage[]>([]);
   const [coachBusy, setCoachBusy] = useState(false);
+  const [report, setReport] = useState<AIReport | null>(null);
+  const [reportBusy, setReportBusy] = useState(false);
   const [rates, setRates] = useState<Record<string, number>>(() =>
     preferred ? { [preferred]: 1 } : {},
   );
@@ -253,8 +256,30 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError }
     { id: 'debts', label: 'Debts' },
     { id: 'goals', label: 'Goals' },
     { id: 'analysis', label: 'Analysis' },
+    { id: 'reports', label: 'Reports' },
     { id: 'coach', label: 'Coach' },
   ];
+
+  async function onLoadReport() {
+    if (!preferred) return;
+    setReportBusy(true);
+    try {
+      const res = await api.aiReport(token, preferred, 6);
+      setReport(res.report);
+      setDisclaimer(res.report.disclaimer || disclaimer);
+    } catch (e) {
+      onError?.(e instanceof Error ? e.message : 'Could not build report');
+    } finally {
+      setReportBusy(false);
+    }
+  }
+
+  function explainChart(chartId: string, title: string, caption: string) {
+    const months = report?.period_months ?? 6;
+    const prompt = `Explain the "${title}" chart (${chartId}) for the last ${months} months. Caption: ${caption}. What should I do next?`;
+    setCoachMsg(prompt);
+    setTab('coach');
+  }
 
   async function onRefreshInsights() {
     if (!preferred) return;
@@ -276,31 +301,47 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError }
     const question = coachMsg.trim();
     setCoachBusy(true);
     setCoachMsg('');
+    const userBubble: CoachMessage = {
+      id: `local-u-${Date.now()}`,
+      role: 'user',
+      content: question,
+      created_at: new Date().toISOString(),
+    };
+    const assistantId = `local-a-${Date.now()}`;
+    setCoachMessages((prev) => [
+      ...prev,
+      userBubble,
+      { id: assistantId, role: 'assistant', content: '', created_at: new Date().toISOString() },
+    ]);
     try {
-      const res = await api.aiCoach(token, preferred, question);
-      setDisclaimer(res.coach.disclaimer || disclaimer);
+      await api.aiCoachStream(token, preferred, question, {
+        onToken: (text) => {
+          setCoachMessages((prev) =>
+            prev.map((m) => (m.id === assistantId ? { ...m, content: m.content + text } : m)),
+          );
+        },
+        onReplace: (text) => {
+          setCoachMessages((prev) =>
+            prev.map((m) => (m.id === assistantId ? { ...m, content: text } : m)),
+          );
+        },
+        onDone: (coach) => {
+          setDisclaimer(coach.disclaimer || disclaimer);
+          setCoachMessages((prev) =>
+            prev.map((m) => (m.id === assistantId ? { ...m, content: coach.reply } : m)),
+          );
+        },
+        onError: (message) => {
+          onError?.(message);
+        },
+      });
       const thread = await api.getCoachThread(token).catch(() => null);
       if (thread?.thread?.messages?.length) {
         setCoachMessages(thread.thread.messages);
-      } else {
-        setCoachMessages((prev) => [
-          ...prev,
-          {
-            id: `local-u-${Date.now()}`,
-            role: 'user',
-            content: question,
-            created_at: new Date().toISOString(),
-          },
-          {
-            id: `local-a-${Date.now()}`,
-            role: 'assistant',
-            content: res.coach.reply,
-            created_at: new Date().toISOString(),
-          },
-        ]);
       }
     } catch (e) {
       onError?.(e instanceof Error ? e.message : 'Coach unavailable');
+      setCoachMessages((prev) => prev.filter((m) => m.id !== assistantId && m.id !== userBubble.id));
     } finally {
       setCoachBusy(false);
     }
@@ -649,6 +690,80 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError }
                 {disclaimer ||
                   'Lony insights are educational estimates, not credit scores, investment advice, or guaranteed outcomes.'}
               </Text>
+            </Card>
+          ) : null}
+
+          {tab === 'reports' ? (
+            <Card>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>Visualizer</Text>
+                <Pressable onPress={onLoadReport} hitSlop={8} disabled={reportBusy}>
+                  <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 13 }}>
+                    {reportBusy ? 'Building…' : report ? 'Refresh' : 'Build report'}
+                  </Text>
+                </Pressable>
+              </View>
+              {!report ? (
+                <EmptyState
+                  title="No report yet"
+                  body="Build a period pack with cashflow charts, category bars, and captions."
+                />
+              ) : (
+                <View style={{ gap: 14, marginTop: 8 }}>
+                  <Text style={{ color: colors.text, fontFamily: fonts.ui, fontSize: 14 }}>{report.summary}</Text>
+                  {report.source === 'llm_visualizer' ? (
+                    <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 11 }}>Captions AI-assisted</Text>
+                  ) : null}
+                  {report.charts.map((chart) => {
+                    const seriesData = (chart.data?.series as InsightsMonthPoint[] | undefined) ?? [];
+                    const catData = (chart.data?.categories as InsightsCategoryPoint[] | undefined) ?? [];
+                    return (
+                      <View key={chart.id} style={{ gap: 6 }}>
+                        <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>{chart.title}</Text>
+                        <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>{chart.caption}</Text>
+                        {chart.type === 'grouped_bar' && seriesData.length > 0 ? (
+                          <MonthBars
+                            series={seriesData}
+                            formatMoney={formatMoney}
+                            currency={report.currency_code}
+                            locale={user.locale}
+                          />
+                        ) : null}
+                        {chart.type === 'bar' && catData.length > 0 ? (
+                          <CategoryBars rows={catData} formatMoney={formatMoney} locale={user.locale} />
+                        ) : null}
+                        {chart.type === 'kpi' ? (
+                          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
+                            <Mini label="Income" value={formatMoney(String(chart.data?.income ?? ''), report.currency_code, user.locale)} />
+                            <Mini label="Expense" value={formatMoney(String(chart.data?.expense ?? ''), report.currency_code, user.locale)} />
+                            <Mini label="Net" value={formatMoney(String(chart.data?.net ?? ''), report.currency_code, user.locale)} />
+                          </View>
+                        ) : null}
+                        <Pressable onPress={() => explainChart(chart.id, chart.title, chart.caption)} hitSlop={8}>
+                          <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 13 }}>Explain this</Text>
+                        </Pressable>
+                      </View>
+                    );
+                  })}
+                  {(report.tables ?? []).map((table) => (
+                    <View key={table.id} style={{ gap: 6 }}>
+                      <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }}>{table.title}</Text>
+                      {table.rows.slice(0, 8).map((row, idx) => (
+                        <Text
+                          key={`${table.id}-${idx}`}
+                          style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}
+                          numberOfLines={1}
+                        >
+                          {row.join(' · ')}
+                        </Text>
+                      ))}
+                    </View>
+                  ))}
+                  <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 11 }}>
+                    {report.disclaimer || disclaimer}
+                  </Text>
+                </View>
+              )}
             </Card>
           ) : null}
 

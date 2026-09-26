@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -157,12 +158,13 @@ func (s *Service) coachLLM(ctx context.Context, userID uuid.UUID, currency, mess
 		return CoachReply{}, err
 	}
 
+	content := sanitizeCoachReply(res.Content)
 	_, _ = s.store.InsertMessage(ctx, Message{ConversationID: conv.ID, Role: "user", Content: message})
-	_, _ = s.store.InsertMessage(ctx, Message{ConversationID: conv.ID, Role: "assistant", Content: res.Content})
+	_, _ = s.store.InsertMessage(ctx, Message{ConversationID: conv.ID, Role: "assistant", Content: content})
 	model := res.Model
 	_, _ = s.store.InsertRun(ctx, Run{
 		UserID: userID, Persona: PersonaCoach, Kind: "chat", Model: &model,
-		InputSummary: strPtr(truncate(message, 200)), OutputSummary: strPtr(truncate(res.Content, 400)),
+		InputSummary: strPtr(truncate(message, 200)), OutputSummary: strPtr(truncate(content, 400)),
 		PromptTokens: res.PromptTokens, CompletionTokens: res.CompletionTokens, Status: "ok",
 	})
 
@@ -171,7 +173,7 @@ func (s *Service) coachLLM(ctx context.Context, userID uuid.UUID, currency, mess
 		{Label: "Open goals", DeepLink: "lony://plan"},
 		{Label: "View insights", DeepLink: "lony://insights"},
 	}
-	return CoachReply{Reply: res.Content, Disclaimer: Disclaimer, Actions: actions}, nil
+	return CoachReply{Reply: content, Disclaimer: Disclaimer, Actions: actions}, nil
 }
 
 func (s *Service) GetCoachThread(ctx context.Context, userID uuid.UUID) (ConversationDTO, error) {
@@ -197,6 +199,109 @@ func (s *Service) GetCoachThread(ctx context.Context, userID uuid.UUID) (Convers
 		})
 	}
 	return out, nil
+}
+
+// CoachStream writes SSE events: token, done|error. Falls back to a single token when LLM is unavailable.
+func (s *Service) CoachStream(ctx context.Context, w http.ResponseWriter, userID uuid.UUID, currency, message string) error {
+	if err := s.ensureAIEnabled(ctx); err != nil {
+		return err
+	}
+	currency = strings.ToUpper(strings.TrimSpace(currency))
+	if len(currency) != 3 {
+		return httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"currency": "must be a 3-letter currency code",
+		})
+	}
+	rawMsg := strings.TrimSpace(message)
+	if rawMsg == "" {
+		return httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"message": "required",
+		})
+	}
+	if s.data == nil {
+		return httpx.E(http.StatusServiceUnavailable, "UNAVAILABLE", "insights unavailable")
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+
+	actions := []Action{
+		{Label: "Log expense", DeepLink: "lony://expenses/new"},
+		{Label: "Open goals", DeepLink: "lony://plan"},
+		{Label: "View insights", DeepLink: "lony://insights"},
+	}
+
+	if s.llm == nil || !s.llm.Available() {
+		reply, err := s.Coach(ctx, userID, currency, rawMsg)
+		if err != nil {
+			_ = writeSSE(w, "error", map[string]any{"error": map[string]string{"code": "COACH", "message": err.Error()}})
+			return nil
+		}
+		_ = writeSSE(w, "token", map[string]any{"text": reply.Reply})
+		_ = writeSSE(w, "done", map[string]any{"coach": reply})
+		return nil
+	}
+
+	if err := s.allowLLM(ctx, userID); err != nil {
+		var api *httpx.APIError
+		if errors.As(err, &api) && api.Code == "AI_CAP" {
+			_ = writeSSE(w, "error", map[string]any{"error": map[string]string{"code": api.Code, "message": api.Message}})
+			return nil
+		}
+		reply, cErr := s.Coach(ctx, userID, currency, rawMsg)
+		if cErr != nil {
+			_ = writeSSE(w, "error", map[string]any{"error": map[string]string{"code": "COACH", "message": cErr.Error()}})
+			return nil
+		}
+		_ = writeSSE(w, "token", map[string]any{"text": reply.Reply})
+		_ = writeSSE(w, "done", map[string]any{"coach": reply})
+		return nil
+	}
+
+	snap, err := s.snapshotJSON(ctx, userID, currency)
+	if err != nil {
+		_ = writeSSE(w, "error", map[string]any{"error": map[string]string{"code": "SNAPSHOT", "message": err.Error()}})
+		return nil
+	}
+	conv, err := s.store.EnsureConversation(ctx, userID, PersonaCoach, "Coach")
+	if err != nil {
+		_ = writeSSE(w, "error", map[string]any{"error": map[string]string{"code": "STORE", "message": err.Error()}})
+		return nil
+	}
+	history, _ := s.store.ListMessages(ctx, conv.ID, 12)
+	msgs := []llm.Message{{Role: "system", Content: coachSystemPrompt + "\n\nUser metrics JSON:\n" + snap}}
+	for _, h := range history {
+		if h.Role == "user" || h.Role == "assistant" {
+			msgs = append(msgs, llm.Message{Role: h.Role, Content: h.Content})
+		}
+	}
+	msgs = append(msgs, llm.Message{Role: "user", Content: rawMsg})
+
+	res, err := s.llm.ChatStream(ctx, msgs, 500, func(delta string) error {
+		return writeSSE(w, "token", map[string]any{"text": delta})
+	})
+	if err != nil {
+		_ = writeSSE(w, "error", map[string]any{"error": map[string]string{"code": "LLM", "message": err.Error()}})
+		return nil
+	}
+	content := sanitizeCoachReply(res.Content)
+	if content != res.Content {
+		_ = writeSSE(w, "replace", map[string]any{"text": content})
+	}
+	_, _ = s.store.InsertMessage(ctx, Message{ConversationID: conv.ID, Role: "user", Content: rawMsg})
+	_, _ = s.store.InsertMessage(ctx, Message{ConversationID: conv.ID, Role: "assistant", Content: content})
+	model := res.Model
+	_, _ = s.store.InsertRun(ctx, Run{
+		UserID: userID, Persona: PersonaCoach, Kind: "chat_stream", Model: &model,
+		InputSummary: strPtr(truncate(rawMsg, 200)), OutputSummary: strPtr(truncate(content, 400)),
+		PromptTokens: res.PromptTokens, CompletionTokens: res.CompletionTokens, Status: "ok",
+	})
+	_ = writeSSE(w, "done", map[string]any{
+		"coach": CoachReply{Reply: content, Disclaimer: Disclaimer, Actions: actions},
+	})
+	return nil
 }
 
 const analystSystemPrompt = `You are Lony Analyst. Rewrite each insight card body to be clearer and more actionable using the metrics JSON.
@@ -260,6 +365,76 @@ func (s *Service) enrichInsightsLLM(ctx context.Context, userID uuid.UUID, curre
 		PromptTokens: res.PromptTokens, CompletionTokens: res.CompletionTokens, Status: "ok",
 	})
 	return rows
+}
+
+const visualizerSystemPrompt = `You are Lony Visualizer. Improve chart captions and write a short period summary from the report JSON.
+Rules:
+- Use ONLY numbers present in the report. Do not invent balances or account identifiers.
+- Never recommend borrowing more.
+- Return JSON only: {"summary":"...","captions":{"chart_id":"caption",...}}
+- Each caption under 25 words. Summary under 60 words.`
+
+func (s *Service) enrichReportLLM(ctx context.Context, userID uuid.UUID, rep Report) Report {
+	if s.llm == nil || !s.llm.Available() {
+		return rep
+	}
+	if _, ok, err := s.store.IncrementUsage(ctx, userID, s.now().UTC(), s.dailyCap); err != nil || !ok {
+		return rep
+	}
+	type chartIn struct {
+		ID      string `json:"id"`
+		Title   string `json:"title"`
+		Caption string `json:"caption"`
+	}
+	in := struct {
+		Currency string    `json:"currency"`
+		Months   int       `json:"months"`
+		Summary  string    `json:"summary"`
+		Charts   []chartIn `json:"charts"`
+		Tables   []ReportTable `json:"tables"`
+	}{
+		Currency: rep.CurrencyCode, Months: rep.PeriodMonths, Summary: rep.Summary, Tables: rep.Tables,
+	}
+	for _, c := range rep.Charts {
+		in.Charts = append(in.Charts, chartIn{ID: c.ID, Title: c.Title, Caption: c.Caption})
+	}
+	payload, _ := json.Marshal(in)
+	res, err := s.llm.Chat(ctx, []llm.Message{
+		{Role: "system", Content: visualizerSystemPrompt},
+		{Role: "user", Content: string(payload)},
+	}, 500)
+	if err != nil {
+		return rep
+	}
+	text := res.Content
+	if i := strings.Index(text, "{"); i >= 0 {
+		if j := strings.LastIndex(text, "}"); j > i {
+			text = text[i : j+1]
+		}
+	}
+	var out struct {
+		Summary  string            `json:"summary"`
+		Captions map[string]string `json:"captions"`
+	}
+	if err := json.Unmarshal([]byte(text), &out); err != nil {
+		return rep
+	}
+	if strings.TrimSpace(out.Summary) != "" {
+		rep.Summary = strings.TrimSpace(out.Summary)
+	}
+	for i := range rep.Charts {
+		if cap, ok := out.Captions[rep.Charts[i].ID]; ok && strings.TrimSpace(cap) != "" {
+			rep.Charts[i].Caption = strings.TrimSpace(cap)
+		}
+	}
+	rep.Source = "llm_visualizer"
+	model := res.Model
+	_, _ = s.store.InsertRun(ctx, Run{
+		UserID: userID, Persona: PersonaVisualizer, Kind: "report", Model: &model,
+		OutputSummary: strPtr(truncate(rep.Summary, 200)),
+		PromptTokens: res.PromptTokens, CompletionTokens: res.CompletionTokens, Status: "ok",
+	})
+	return rep
 }
 
 func strPtr(s string) *string { return &s }

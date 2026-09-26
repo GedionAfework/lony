@@ -1503,6 +1503,34 @@ paths:
           description: Coach reply + disclaimer
         "429":
           description: Daily AI cap reached
+  /ai/coach/messages/stream:
+    post:
+      summary: Stream Coach reply via SSE (token / replace / done / error events)
+      operationId: aiCoachStream
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: text/event-stream
+        "429":
+          description: Daily AI cap reached
+  /ai/analytics/report:
+    post:
+      summary: Period report pack (charts, tables, captions; LLM captions when keyed)
+      operationId: aiAnalyticsReport
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                currency_code: { type: string }
+                months: { type: integer, minimum: 1, maximum: 12 }
+      responses:
+        "200":
+          description: Report with charts, tables, summary, disclaimer
+        "503":
+          description: AI disabled
   /admin/overview:
     get:
       summary: Platform KPIs (admin)
