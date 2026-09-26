@@ -33,6 +33,10 @@ type Config struct {
 	SMTPPass            string
 	MailFrom            string
 	AdminEmails         []string
+	OpenAIAPIKey        string
+	OpenAIBaseURL       string
+	OpenAIModel         string
+	AIDailyUserCap      int
 }
 
 func Load() (Config, error) {
@@ -60,6 +64,10 @@ func Load() (Config, error) {
 		SMTPPass:            os.Getenv("SMTP_PASS"),
 		MailFrom:            getenv("MAIL_FROM", "Lony <noreply@lony.local>"),
 		AdminEmails:         splitCSV(os.Getenv("ADMIN_EMAILS")),
+		OpenAIAPIKey:        strings.TrimSpace(os.Getenv("OPENAI_API_KEY")),
+		OpenAIBaseURL:       strings.TrimRight(getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"), "/"),
+		OpenAIModel:         getenv("OPENAI_MODEL", "gpt-4o-mini"),
+		AIDailyUserCap:      intEnv("AI_DAILY_USER_CAP", 40),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -113,6 +121,18 @@ func durationEnv(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return d
+}
+
+func intEnv(key string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	var n int
+	if _, err := fmt.Sscanf(raw, "%d", &n); err != nil || n < 0 {
+		return fallback
+	}
+	return n
 }
 
 func splitCSV(raw string) []string {

@@ -3,11 +3,13 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
+	"equilend/api/internal/ai/llm"
 	"equilend/api/internal/httpx"
 	"equilend/api/internal/insights"
 	"equilend/api/internal/score"
@@ -76,6 +78,12 @@ type Store interface {
 	ListInsights(ctx context.Context, userID uuid.UUID, limit int) ([]Insight, error)
 	DismissInsight(ctx context.Context, userID, id uuid.UUID) error
 	DismissAllInsights(ctx context.Context, userID uuid.UUID) (int64, error)
+	EnsureConversation(ctx context.Context, userID uuid.UUID, persona, title string) (Conversation, error)
+	ListMessages(ctx context.Context, conversationID uuid.UUID, limit int) ([]Message, error)
+	InsertMessage(ctx context.Context, m Message) (Message, error)
+	InsertRun(ctx context.Context, r Run) (Run, error)
+	IncrementUsage(ctx context.Context, userID uuid.UUID, day time.Time, cap int) (count int, allowed bool, err error)
+	ClearConversations(ctx context.Context, userID uuid.UUID) error
 }
 
 type Gate interface {
@@ -86,6 +94,8 @@ type InsightsAPI interface {
 	Overview(ctx context.Context, userID uuid.UUID, currency string, monthsBack int) (insights.Overview, error)
 	CashflowSeries(ctx context.Context, userID uuid.UUID, currency string, months int) ([]insights.MonthPoint, error)
 	Categories(ctx context.Context, userID uuid.UUID, currency string, months int) ([]insights.CategoryPoint, error)
+	Debts(ctx context.Context, userID uuid.UUID, preferred string) (insights.DebtsSummary, error)
+	Goals(ctx context.Context, userID uuid.UUID) ([]insights.GoalInsight, error)
 }
 
 type ScoreAPI interface {
@@ -93,20 +103,28 @@ type ScoreAPI interface {
 }
 
 type Service struct {
-	store Store
-	data  InsightsAPI
-	score ScoreAPI
-	gate  Gate
-	now   func() time.Time
+	store      Store
+	data       InsightsAPI
+	score      ScoreAPI
+	gate       Gate
+	llm        *llm.Client
+	dailyCap   int
+	now        func() time.Time
 }
 
 func NewService(store Store) *Service {
-	return &Service{store: store, now: time.Now}
+	return &Service{store: store, now: time.Now, dailyCap: 40}
 }
 
 func (s *Service) SetInsights(i InsightsAPI) { s.data = i }
 func (s *Service) SetScore(sc ScoreAPI)     { s.score = sc }
 func (s *Service) SetGate(g Gate)           { s.gate = g }
+func (s *Service) SetLLM(c *llm.Client, dailyCap int) {
+	s.llm = c
+	if dailyCap > 0 {
+		s.dailyCap = dailyCap
+	}
+}
 
 func (s *Service) ensureAIEnabled(ctx context.Context) error {
 	if s.gate == nil {
@@ -241,6 +259,8 @@ func (s *Service) RefreshInsights(ctx context.Context, userID uuid.UUID, currenc
 			map[string]any{"income": ov.Income, "expense": ov.Expense})
 	}
 
+	rows = s.enrichInsightsLLM(ctx, userID, currency, rows)
+
 	if err := s.store.ReplaceInsights(ctx, userID, rows); err != nil {
 		return nil, err
 	}
@@ -252,7 +272,12 @@ func (s *Service) Dismiss(ctx context.Context, userID, id uuid.UUID) error {
 }
 
 func (s *Service) ClearHistory(ctx context.Context, userID uuid.UUID) (int64, error) {
-	return s.store.DismissAllInsights(ctx, userID)
+	n, err := s.store.DismissAllInsights(ctx, userID)
+	if err != nil {
+		return 0, err
+	}
+	_ = s.store.ClearConversations(ctx, userID)
+	return n, nil
 }
 
 func (s *Service) Report(ctx context.Context, userID uuid.UUID, currency string, months int) (Report, error) {
@@ -320,7 +345,8 @@ func (s *Service) Coach(ctx context.Context, userID uuid.UUID, currency, message
 			"currency": "must be a 3-letter currency code",
 		})
 	}
-	msg := strings.ToLower(strings.TrimSpace(message))
+	rawMsg := strings.TrimSpace(message)
+	msg := strings.ToLower(rawMsg)
 	if msg == "" {
 		return CoachReply{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
 			"message": "required",
@@ -328,6 +354,17 @@ func (s *Service) Coach(ctx context.Context, userID uuid.UUID, currency, message
 	}
 	if s.data == nil {
 		return CoachReply{}, httpx.E(http.StatusServiceUnavailable, "UNAVAILABLE", "insights unavailable")
+	}
+	if s.llm != nil && s.llm.Available() {
+		out, err := s.coachLLM(ctx, userID, currency, rawMsg)
+		if err == nil {
+			return out, nil
+		}
+		var api *httpx.APIError
+		if errors.As(err, &api) && api.Code == "AI_CAP" {
+			return CoachReply{}, err
+		}
+		// LLM failure → rule-based fallback
 	}
 	ov, err := s.data.Overview(ctx, userID, currency, 1)
 	if err != nil {

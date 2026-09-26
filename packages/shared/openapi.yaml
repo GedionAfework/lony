@@ -1477,20 +1477,32 @@ paths:
           description: AI disabled
   /ai/insights/clear:
     post:
-      summary: Dismiss all AI insights for the caller
+      summary: Dismiss all AI insights and clear coach transcripts for the caller
       operationId: clearAIInsights
       security: [{ bearerAuth: [] }]
       responses:
         "200":
           description: Cleared
+  /ai/coach/thread:
+    get:
+      summary: Get current Coach conversation thread
+      operationId: getAICoachThread
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Thread + messages + disclaimer
+        "503":
+          description: AI disabled
   /ai/coach/messages:
     post:
-      summary: Ask the financial coach
+      summary: Ask the financial coach (LLM when keyed, else rules)
       operationId: aiCoach
       security: [{ bearerAuth: [] }]
       responses:
         "200":
           description: Coach reply + disclaimer
+        "429":
+          description: Daily AI cap reached
   /admin/overview:
     get:
       summary: Platform KPIs (admin)

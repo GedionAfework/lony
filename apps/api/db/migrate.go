@@ -138,7 +138,10 @@ func applyLaterMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	if err := applyMigration(ctx, pool, "00028", "migrations/00028_goal_cover.sql"); err != nil {
 		return err
 	}
-	return applyMigration(ctx, pool, "00029", "migrations/00029_goal_type_label.sql")
+	if err := applyMigration(ctx, pool, "00029", "migrations/00029_goal_type_label.sql"); err != nil {
+		return err
+	}
+	return applyMigration(ctx, pool, "00030", "migrations/00030_ai_llm.sql")
 }
 
 func applyMigration(ctx context.Context, pool *pgxpool.Pool, version, path string) error {

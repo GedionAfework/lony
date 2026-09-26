@@ -72,6 +72,9 @@ func (s *SQLStore) SoftDeleteUser(ctx context.Context, userID uuid.UUID) error {
 	}
 	// Drop OAuth identities so the email/subject cannot re-link to this row.
 	_, _ = s.pool.Exec(ctx, `DELETE FROM user_identities WHERE user_id=$1`, userID)
+	_ = s.DeleteAIConversations(ctx, userID)
+	_ = s.DeleteAIRuns(ctx, userID)
+	_ = s.DeleteAIUsage(ctx, userID)
 	return nil
 }
 
@@ -85,6 +88,7 @@ func (s *SQLStore) BuildUserExport(ctx context.Context, userID uuid.UUID) (priva
 		Loans:      []map[string]any{},
 		Repayments: []map[string]any{},
 		AIInsights: []map[string]any{},
+		AIConversations: []map[string]any{},
 	}
 
 	var email, display, status, role, locale, tz string
@@ -144,6 +148,7 @@ func (s *SQLStore) BuildUserExport(ctx context.Context, userID uuid.UUID) (priva
 		SELECT id, theme, severity, title, body, source, created_at, dismissed_at
 		FROM ai_insights WHERE user_id=$1 ORDER BY created_at DESC LIMIT 500
 	`, userID)
+	out.AIConversations, _ = s.ListAIConversationsExport(ctx, userID)
 
 	var grade string
 	var points float64

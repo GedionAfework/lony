@@ -239,6 +239,24 @@ func (a aiStoreAdapter) DismissInsight(ctx context.Context, userID, id uuid.UUID
 func (a aiStoreAdapter) DismissAllInsights(ctx context.Context, userID uuid.UUID) (int64, error) {
 	return a.Inner.DismissAllAIInsights(ctx, userID)
 }
+func (a aiStoreAdapter) EnsureConversation(ctx context.Context, userID uuid.UUID, persona, title string) (ai.Conversation, error) {
+	return a.Inner.EnsureAIConversation(ctx, userID, persona, title)
+}
+func (a aiStoreAdapter) ListMessages(ctx context.Context, conversationID uuid.UUID, limit int) ([]ai.Message, error) {
+	return a.Inner.ListAIMessages(ctx, conversationID, limit)
+}
+func (a aiStoreAdapter) InsertMessage(ctx context.Context, m ai.Message) (ai.Message, error) {
+	return a.Inner.InsertAIMessage(ctx, m)
+}
+func (a aiStoreAdapter) InsertRun(ctx context.Context, r ai.Run) (ai.Run, error) {
+	return a.Inner.InsertAIRun(ctx, r)
+}
+func (a aiStoreAdapter) IncrementUsage(ctx context.Context, userID uuid.UUID, day time.Time, cap int) (int, bool, error) {
+	return a.Inner.IncrementAIUsage(ctx, userID, day, cap)
+}
+func (a aiStoreAdapter) ClearConversations(ctx context.Context, userID uuid.UUID) error {
+	return a.Inner.ClearAIConversations(ctx, userID)
+}
 
 func AIAdapter(s *SQLStore) ai.Store { return aiStoreAdapter{Inner: s} }
 

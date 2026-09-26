@@ -662,7 +662,7 @@ Do not wait for M5 to ship M1–M4; each milestone should be usable alone.
 **Already have:** social lending, chat, payment-profile sharing, cashflow income/expenses with recurrence and confirmation, accounts/net worth, budgets, goals (**Plan** = multi-plan hub with optional cover images), insights, A–E Trust, admin + catalogs, export/delete (JSON/zip/CSV), offline drafts, bill calendar, locale/timezone pickers, statement CSV import (open banking v1), modular Settings (Profile / Themes / Payments / Notifications / Privacy / Legal), custom themes, **bonds via loan/split accept**.
 
 **Still open / deferred:**
-- LLM-backed Analyst / Visualizer / Coach personas (rule-based AI exists)
+- LLM-backed Analyst / Visualizer / Coach personas — see [`AI_PERSONAS_ROADMAP.md`](./AI_PERSONAS_ROADMAP.md) (rule-based AI exists)
 - Live bank OAuth connectors (Plaid / TrueLayer) — statement import covers v1 without provider keys
 
 **Operate:** Admin catalogs for institutions/types — shipped; expand KPIs/charts as needed.

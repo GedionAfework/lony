@@ -27,6 +27,7 @@ type ExportBundle struct {
 	Loans      []map[string]any `json:"loans"`
 	Repayments []map[string]any `json:"repayments"`
 	AIInsights []map[string]any `json:"ai_insights"`
+	AIConversations []map[string]any `json:"ai_conversations,omitempty"`
 	Trust      map[string]any   `json:"trust,omitempty"`
 }
 
@@ -100,6 +101,9 @@ func (s *Service) ExportZip(ctx context.Context, userID uuid.UUID) ([]byte, erro
 		return nil, err
 	}
 	if err := write("ai_insights.json", bundle.AIInsights); err != nil {
+		return nil, err
+	}
+	if err := write("ai_conversations.json", bundle.AIConversations); err != nil {
 		return nil, err
 	}
 	if bundle.Trust != nil {

@@ -106,3 +106,12 @@ func (h *Handler) Coach(w http.ResponseWriter, r *http.Request) {
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"coach": out})
 }
+
+func (h *Handler) GetCoachThread(w http.ResponseWriter, r *http.Request) {
+	out, err := h.svc.GetCoachThread(r.Context(), auth.UserIDFrom(r.Context()))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"thread": out, "disclaimer": Disclaimer})
+}

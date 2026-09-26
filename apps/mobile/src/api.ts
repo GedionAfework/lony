@@ -437,6 +437,8 @@ export const api = {
       headers: { 'Idempotency-Key': idemKey('ai-coach') },
       body: JSON.stringify({ currency_code: currency, message }),
     }, token),
+  getCoachThread: (token: string) =>
+    request<{ thread: CoachThread; disclaimer: string }>('/ai/coach/thread', { method: 'GET' }, token),
   cashflowSummary: (token: string, query: { from?: string; to?: string } = {}) => {
     const params = new URLSearchParams();
     if (query.from) params.set('from', query.from);
@@ -1081,6 +1083,22 @@ export type CoachReply = {
   reply: string;
   disclaimer: string;
   actions?: { label: string; deep_link: string }[];
+};
+
+export type CoachMessage = {
+  id: string;
+  role: string;
+  content: string;
+  created_at: string;
+};
+
+export type CoachThread = {
+  id: string;
+  persona: string;
+  title?: string | null;
+  messages: CoachMessage[];
+  created_at: string;
+  updated_at: string;
 };
 
 export type CashflowSummarySlice = {

@@ -3,6 +3,7 @@ import { Pressable, Text, View } from 'react-native';
 import {
   api,
   type AIInsight,
+  type CoachMessage,
   type Dashboard,
   type InsightsCategoryPoint,
   type InsightsGoal,
@@ -162,7 +163,7 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError }
   const [insights, setInsights] = useState<AIInsight[]>([]);
   const [disclaimer, setDisclaimer] = useState('');
   const [coachMsg, setCoachMsg] = useState('');
-  const [coachReply, setCoachReply] = useState<string | null>(null);
+  const [coachMessages, setCoachMessages] = useState<CoachMessage[]>([]);
   const [coachBusy, setCoachBusy] = useState(false);
   const [rates, setRates] = useState<Record<string, number>>(() =>
     preferred ? { [preferred]: 1 } : {},
@@ -187,6 +188,11 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError }
       if (ai) {
         setInsights(ai.insights ?? []);
         setDisclaimer(ai.disclaimer || '');
+      }
+      const thread = await api.getCoachThread(token).catch(() => null);
+      if (thread?.thread?.messages) {
+        setCoachMessages(thread.thread.messages);
+        if (thread.disclaimer) setDisclaimer(thread.disclaimer);
       }
     } catch (e) {
       onError?.(e instanceof Error ? e.message : 'Could not load insights');
@@ -267,11 +273,32 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError }
 
   async function onAskCoach() {
     if (!coachMsg.trim() || !preferred) return;
+    const question = coachMsg.trim();
     setCoachBusy(true);
+    setCoachMsg('');
     try {
-      const res = await api.aiCoach(token, preferred, coachMsg.trim());
-      setCoachReply(res.coach.reply);
+      const res = await api.aiCoach(token, preferred, question);
       setDisclaimer(res.coach.disclaimer || disclaimer);
+      const thread = await api.getCoachThread(token).catch(() => null);
+      if (thread?.thread?.messages?.length) {
+        setCoachMessages(thread.thread.messages);
+      } else {
+        setCoachMessages((prev) => [
+          ...prev,
+          {
+            id: `local-u-${Date.now()}`,
+            role: 'user',
+            content: question,
+            created_at: new Date().toISOString(),
+          },
+          {
+            id: `local-a-${Date.now()}`,
+            role: 'assistant',
+            content: res.coach.reply,
+            created_at: new Date().toISOString(),
+          },
+        ]);
+      }
     } catch (e) {
       onError?.(e instanceof Error ? e.message : 'Coach unavailable');
     } finally {
@@ -567,6 +594,7 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError }
                       try {
                         await api.clearAIInsights(token);
                         setInsights([]);
+                        setCoachMessages([]);
                       } catch (e) {
                         onError?.(e instanceof Error ? e.message : 'Could not clear');
                       }
@@ -610,6 +638,7 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError }
                       }}
                     >
                       {card.severity} · {card.theme}
+                      {card.source === 'llm_analyst' ? ' · AI' : ''}
                     </Text>
                     <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>{card.title}</Text>
                     <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>{card.body}</Text>
@@ -627,8 +656,34 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError }
             <Card>
               <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>Coach</Text>
               <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13, marginBottom: 8 }}>
-                Ask where to cut spending, how debt looks, or how to improve your score.
+                Ask where to cut spending, how debt looks, or how to improve your score. Never suggests new borrowing.
               </Text>
+              {coachMessages.length === 0 ? (
+                <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13, marginBottom: 8 }}>
+                  No messages yet — ask a question below.
+                </Text>
+              ) : (
+                <View style={{ gap: 8, marginBottom: 12 }}>
+                  {coachMessages.map((m) => (
+                    <View
+                      key={m.id}
+                      style={{
+                        alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
+                        maxWidth: '92%',
+                        backgroundColor: m.role === 'user' ? colors.primary + '22' : colors.surfaceMuted,
+                        borderRadius: radii.md,
+                        paddingHorizontal: 10,
+                        paddingVertical: 8,
+                      }}
+                    >
+                      <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 10, marginBottom: 2 }}>
+                        {m.role === 'user' ? 'You' : 'Coach'}
+                      </Text>
+                      <Text style={{ color: colors.text, fontFamily: fonts.ui, fontSize: 14 }}>{m.content}</Text>
+                    </View>
+                  ))}
+                </View>
+              )}
               <Field
                 label="Your question"
                 value={coachMsg}
@@ -640,11 +695,6 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError }
                 onPress={onAskCoach}
                 disabled={coachBusy}
               />
-              {coachReply ? (
-                <Text style={{ color: colors.text, fontFamily: fonts.ui, fontSize: 14, marginTop: 12 }}>
-                  {coachReply}
-                </Text>
-              ) : null}
               <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 11, marginTop: 10 }}>
                 {disclaimer ||
                   'Lony insights are educational estimates, not credit scores, investment advice, or guaranteed outcomes.'}

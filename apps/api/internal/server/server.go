@@ -21,6 +21,7 @@ import (
 	"equilend/api/internal/imports"
 	"equilend/api/internal/insights"
 	"equilend/api/internal/ai"
+	"equilend/api/internal/ai/llm"
 	"equilend/api/internal/score"
 	"equilend/api/internal/legal"
 	"equilend/api/internal/loans"
@@ -89,6 +90,11 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 	aiSvc.SetInsights(insightsSvc)
 	aiSvc.SetScore(scoreSvc)
 	aiSvc.SetGate(privacySvc)
+	aiSvc.SetLLM(llm.New(llm.Config{
+		APIKey:  cfg.OpenAIAPIKey,
+		BaseURL: cfg.OpenAIBaseURL,
+		Model:   cfg.OpenAIModel,
+	}), cfg.AIDailyUserCap)
 	aiH := ai.NewHandler(aiSvc)
 	banksSvc := banks.NewService(sqlStore, loansSvc, friendsSvc, cfg.BankKey)
 	banksH := banks.NewHandler(banksSvc)
@@ -249,6 +255,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 			r.With(idem.Handler("ai.insights.clear")).Post("/ai/insights/clear", aiH.ClearHistory)
 			r.With(idem.Handler("ai.insights.dismiss")).Post("/ai/insights/{id}/dismiss", aiH.DismissInsight)
 			r.With(idem.Handler("ai.report")).Post("/ai/analytics/report", aiH.Report)
+			r.Get("/ai/coach/thread", aiH.GetCoachThread)
 			r.With(idem.Handler("ai.coach")).Post("/ai/coach/messages", aiH.Coach)
 			r.With(idem.Handler("loans.create")).Post("/loans", loansH.Create)
 			r.Get("/loans", loansH.List)
