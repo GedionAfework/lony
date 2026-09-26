@@ -18,6 +18,7 @@ import (
 	"equilend/api/internal/goals"
 	"equilend/api/internal/httpx"
 	"equilend/api/internal/idempotency"
+	"equilend/api/internal/imports"
 	"equilend/api/internal/insights"
 	"equilend/api/internal/ai"
 	"equilend/api/internal/score"
@@ -57,9 +58,11 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 	expensesSvc.SetAccounts(accountsSvc)
 	expensesH := expenses.NewHandler(expensesSvc)
 	accountsH := accounts.NewHandler(accountsSvc)
+	importsSvc := imports.NewService(expensesSvc, accountsSvc)
+	importsH := imports.NewHandler(importsSvc)
 	goalsSvc := goals.NewService(store.GoalsAdapter(sqlStore))
 	goalsSvc.SetAccounts(accountsSvc)
-	goalsH := goals.NewHandler(goalsSvc)
+	goalsH := goals.NewHandler(goalsSvc).WithMedia(mediaStore, sqlStore)
 	insightsSvc := insights.NewService(store.InsightsAdapter(sqlStore))
 	insightsSvc.SetLoans(loansSvc)
 	insightsSvc.SetGoals(goalsSvc)
@@ -188,6 +191,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 			r.Get("/accounts/{id}/reconcile", accountsH.Reconcile)
 			r.Patch("/accounts/{id}", accountsH.Update)
 			r.With(idem.Handler("accounts.balance")).Post("/accounts/{id}/balance", accountsH.SetBalance)
+			r.With(idem.Handler("accounts.import")).Post("/accounts/{id}/import", importsH.Import)
 			r.With(idem.Handler("accounts.archive")).Post("/accounts/{id}/archive", accountsH.Archive)
 			r.Get("/cashflow/summary", expensesH.Summary)
 			r.Get("/cashflow/breakdown", expensesH.CategoryBreakdown)
@@ -206,6 +210,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 			r.With(idem.Handler("goals.create")).Post("/goals", goalsH.Create)
 			r.Get("/goals/{id}", goalsH.Get)
 			r.Patch("/goals/{id}", goalsH.Update)
+			r.With(idem.Handler("goals.cover")).Post("/goals/{id}/cover", goalsH.UploadCover)
 			r.With(idem.Handler("goals.contribute")).Post("/goals/{id}/contribute", goalsH.Contribute)
 			r.Get("/goals/{id}/contributions", goalsH.ListContributions)
 			r.Get("/goals/{id}/projection", goalsH.Projection)

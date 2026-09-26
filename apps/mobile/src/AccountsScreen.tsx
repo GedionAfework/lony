@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Alert, Pressable, Text, TextInput, View } from 'react-native';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system/legacy';
 import { api, type AccountReconcile, type MoneyAccount, type User } from './api';
 import { stripAmount } from './amountFormat';
 import type { CatalogOption } from './catalogs';
@@ -79,6 +81,11 @@ export function AccountsScreen({ user, token, formatMoney, onError, reloadToken 
   const [remoteInstitutions, setRemoteInstitutions] = useState<CatalogOption[]>([]);
   const [reconcileOpen, setReconcileOpen] = useState(false);
   const [reconcileRows, setReconcileRows] = useState<AccountReconcile[]>([]);
+  const [importId, setImportId] = useState<string | null>(null);
+  const [importCsv, setImportCsv] = useState('');
+  const [importFileName, setImportFileName] = useState('');
+  const [importEndingBalance, setImportEndingBalance] = useState('');
+  const [importResult, setImportResult] = useState<string | null>(null);
 
   const accountTypes = useMemo(
     () => mergeOptions(remoteTypes, FALLBACK_ACCOUNT_TYPES),
@@ -354,18 +361,78 @@ export function AccountsScreen({ user, token, formatMoney, onError, reloadToken 
     }
   }
 
+  function resetImport() {
+    setImportId(null);
+    setImportCsv('');
+    setImportFileName('');
+    setImportEndingBalance('');
+    setImportResult(null);
+  }
+
+  async function pickImportFile() {
+    try {
+      const picked = await DocumentPicker.getDocumentAsync({
+        type: ['text/csv', 'text/comma-separated-values', 'text/plain', 'application/vnd.ms-excel'],
+        copyToCacheDirectory: true,
+        multiple: false,
+      });
+      if (picked.canceled || !picked.assets?.[0]) return;
+      const asset = picked.assets[0];
+      const text = await FileSystem.readAsStringAsync(asset.uri);
+      setImportCsv(text);
+      setImportFileName(asset.name || 'statement.csv');
+      setImportResult(null);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Could not open file');
+    }
+  }
+
+  async function onImportStatement() {
+    if (!importId) return;
+    const csv = importCsv.trim();
+    if (!csv) {
+      onError('Paste CSV or pick a statement file');
+      return;
+    }
+    setBusy(true);
+    setImportResult(null);
+    try {
+      const ending = stripAmount(importEndingBalance);
+      const res = await api.importAccountStatement(token, importId, {
+        csv,
+        set_balance: ending && Number(ending) >= 0 ? ending : undefined,
+        balance_note: ending ? 'statement import ending balance' : undefined,
+      });
+      const errN = res.import.errors?.length ?? 0;
+      const msg = `Imported ${res.import.imported}, skipped ${res.import.skipped}${
+        errN ? `, ${errN} row issue(s)` : ''
+      }.`;
+      setImportResult(msg);
+      if (errN && res.import.errors[0]) {
+        Alert.alert('Import notes', res.import.errors.slice(0, 5).join('\n'));
+      }
+      await reload();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Import failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const formOpen = creating || editId;
+  const panelOpen = formOpen || transferOpen || reconcileOpen || Boolean(importId);
   const accountOptions = accounts.map((a) => ({
     id: a.id,
     label: `${a.name} (${a.currency_code})`,
     keywords: `${a.name} ${a.currency_code}`.toLowerCase(),
   }));
+  const importAccount = accounts.find((a) => a.id === importId);
 
   return (
     <View style={{ gap: space.md }}>
       <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>Accounts</Text>
 
-      {!formOpen && !transferOpen && !reconcileOpen ? (
+      {!panelOpen ? (
         <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
           <View style={{ flex: 1, minWidth: 100 }}>
             <PrimaryButton
@@ -387,6 +454,76 @@ export function AccountsScreen({ user, token, formatMoney, onError, reloadToken 
             </View>
           ) : null}
         </View>
+      ) : null}
+
+      {importId && importAccount ? (
+        <Card>
+          <SectionLabel>Import statement · {importAccount.name}</SectionLabel>
+          <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
+            CSV with Date + Amount (signed) or Debit/Credit columns. Re-uploads skip duplicates.
+          </Text>
+          <SecondaryButton
+            label={importFileName ? `File: ${importFileName}` : 'Pick CSV file'}
+            onPress={() => void pickImportFile()}
+            disabled={busy}
+          />
+          <View style={{ gap: 6 }}>
+            <Text
+              style={{
+                color: colors.muted,
+                fontFamily: fonts.uiSemi,
+                fontSize: 12,
+                letterSpacing: 0.4,
+                textTransform: 'uppercase',
+              }}
+            >
+              Or paste CSV
+            </Text>
+            <TextInput
+              value={importCsv}
+              onChangeText={(v) => {
+                setImportCsv(v);
+                setImportFileName('');
+                setImportResult(null);
+              }}
+              multiline
+              numberOfLines={6}
+              textAlignVertical="top"
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholder={'Date,Amount,Description\n2026-01-05,-12.50,Coffee'}
+              placeholderTextColor={colors.muted}
+              style={{
+                backgroundColor: colors.surfaceMuted,
+                color: colors.text,
+                fontFamily: fonts.ui,
+                fontSize: 14,
+                borderRadius: radii.md,
+                paddingHorizontal: 12,
+                paddingVertical: 10,
+                minHeight: 120,
+                borderWidth: 1,
+                borderColor: colors.border,
+              }}
+            />
+          </View>
+          <Field
+            label="Ending balance (optional)"
+            value={importEndingBalance}
+            onChange={setImportEndingBalance}
+            money
+            placeholder="Set stated balance after import"
+          />
+          {importResult ? (
+            <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 13 }}>{importResult}</Text>
+          ) : null}
+          <PrimaryButton
+            label={busy ? 'Importing…' : 'Import'}
+            onPress={() => void onImportStatement()}
+            disabled={busy}
+          />
+          <SecondaryButton label="Done" onPress={resetImport} />
+        </Card>
       ) : null}
 
       {reconcileOpen ? (
@@ -596,6 +733,19 @@ export function AccountsScreen({ user, token, formatMoney, onError, reloadToken 
                     setCreating(false);
                     setBalanceId(a.id);
                     setNewBalance(a.balance);
+                  }}
+                />
+                <Chip
+                  label="Import"
+                  onPress={() => {
+                    resetForm();
+                    setTransferOpen(false);
+                    setReconcileOpen(false);
+                    setImportId(a.id);
+                    setImportCsv('');
+                    setImportFileName('');
+                    setImportEndingBalance('');
+                    setImportResult(null);
                   }}
                 />
                 <Chip label="Edit" onPress={() => startEdit(a)} />

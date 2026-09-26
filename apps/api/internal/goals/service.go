@@ -112,6 +112,7 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, in CreateInput) 
 		LinkedAccountID: in.LinkedAccountID,
 		LinkedLoanID:    in.LinkedLoanID,
 		Note:            cleanOpt(in.Note, 500),
+		TypeLabel:       cleanOpt(in.TypeLabel, 80),
 		Status:          status,
 		CreatedAt:       now,
 		UpdatedAt:       now,
@@ -187,6 +188,9 @@ func (s *Service) Update(ctx context.Context, userID, id uuid.UUID, in UpdateInp
 	if in.Note != nil {
 		rec.Note = cleanOpt(in.Note, 500)
 	}
+	if in.TypeLabel != nil {
+		rec.TypeLabel = cleanOpt(in.TypeLabel, 80)
+	}
 	if in.Status != nil {
 		st, err := normalizeStatus(*in.Status)
 		if err != nil {
@@ -196,6 +200,29 @@ func (s *Service) Update(ctx context.Context, userID, id uuid.UUID, in UpdateInp
 	}
 	if rec.CurrentAmount.GreaterThanOrEqual(rec.TargetAmount) && rec.Status == StatusActive {
 		rec.Status = StatusCompleted
+	}
+	rec.UpdatedAt = s.now().UTC()
+	saved, err := s.store.Update(ctx, rec)
+	if err != nil {
+		return GoalDTO{}, err
+	}
+	rate, _ := s.monthlyRate(ctx, userID, id)
+	return toDTO(saved, rate), nil
+}
+
+func (s *Service) SetCoverImage(ctx context.Context, userID, id uuid.UUID, key string) (GoalDTO, error) {
+	rec, err := s.store.Get(ctx, userID, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return GoalDTO{}, httpx.E(http.StatusNotFound, "NOT_FOUND", "goal not found")
+		}
+		return GoalDTO{}, err
+	}
+	key = strings.TrimSpace(key)
+	if key == "" {
+		rec.CoverImageKey = nil
+	} else {
+		rec.CoverImageKey = &key
 	}
 	rec.UpdatedAt = s.now().UTC()
 	saved, err := s.store.Update(ctx, rec)

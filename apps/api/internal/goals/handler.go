@@ -6,18 +6,23 @@ import (
 
 	"equilend/api/internal/auth"
 	"equilend/api/internal/httpx"
+	"equilend/api/internal/media"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
 
 type Handler struct {
-	svc *Service
+	svc       *Service
+	disk      *media.DiskStore
+	mediaRepo MediaRepo
 }
 
 func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
+
+// MediaRepo is defined in cover.go
 
 type createBody struct {
 	Title           string     `json:"title"`
@@ -29,6 +34,7 @@ type createBody struct {
 	LinkedAccountID *uuid.UUID `json:"linked_account_id"`
 	LinkedLoanID    *uuid.UUID `json:"linked_loan_id"`
 	Note            *string    `json:"note"`
+	TypeLabel       *string    `json:"type_label"`
 }
 
 type updateBody struct {
@@ -43,6 +49,7 @@ type updateBody struct {
 	LinkedLoanID    *uuid.UUID `json:"linked_loan_id"`
 	ClearLoan       bool       `json:"clear_loan"`
 	Note            *string    `json:"note"`
+	TypeLabel       *string    `json:"type_label"`
 	Status          *string    `json:"status"`
 }
 

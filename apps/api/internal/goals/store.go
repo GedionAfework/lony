@@ -34,6 +34,8 @@ type Goal struct {
 	LinkedAccountID *uuid.UUID
 	LinkedLoanID    *uuid.UUID
 	Note            *string
+	CoverImageKey   *string
+	TypeLabel       *string
 	Status          string
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
@@ -64,6 +66,8 @@ type GoalDTO struct {
 	LinkedAccountID *uuid.UUID `json:"linked_account_id,omitempty"`
 	LinkedLoanID    *uuid.UUID `json:"linked_loan_id,omitempty"`
 	Note            *string    `json:"note,omitempty"`
+	CoverImageURL   *string    `json:"cover_image_url,omitempty"`
+	TypeLabel       *string    `json:"type_label,omitempty"`
 	Status          string     `json:"status"`
 	ETAMonths       *int       `json:"eta_months,omitempty"`
 	MonthlyRate     *string    `json:"monthly_rate,omitempty"`
@@ -102,6 +106,7 @@ type CreateInput struct {
 	LinkedAccountID *uuid.UUID
 	LinkedLoanID    *uuid.UUID
 	Note            *string
+	TypeLabel       *string
 }
 
 type UpdateInput struct {
@@ -116,6 +121,7 @@ type UpdateInput struct {
 	LinkedLoanID    *uuid.UUID
 	ClearLoan       bool
 	Note            *string
+	TypeLabel       *string
 	Status          *string
 }
 
@@ -160,9 +166,14 @@ func toDTO(rec Goal, monthlyRate *decimal.Decimal) GoalDTO {
 		LinkedAccountID: rec.LinkedAccountID,
 		LinkedLoanID:    rec.LinkedLoanID,
 		Note:            rec.Note,
+		TypeLabel:       rec.TypeLabel,
 		Status:          rec.Status,
 		CreatedAt:       rec.CreatedAt,
 		UpdatedAt:       rec.UpdatedAt,
+	}
+	if rec.CoverImageKey != nil && *rec.CoverImageKey != "" {
+		url := "/api/v1/media/" + *rec.CoverImageKey
+		dto.CoverImageURL = &url
 	}
 	if rec.TargetDate != nil {
 		s := rec.TargetDate.Format("2006-01-02")

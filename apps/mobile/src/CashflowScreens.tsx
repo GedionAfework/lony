@@ -132,6 +132,7 @@ export function CashflowFormScreen({
   const [payWith, setPayWith] = useState('alone');
   const [splitMode, setSplitMode] = useState<'equal' | 'percent' | 'flat'>('equal');
   const [splitFriends, setSplitFriends] = useState<SplitFriend[]>([]);
+  const [shareDueAt, setShareDueAt] = useState('');
   const [peerQuery, setPeerQuery] = useState('');
   const [peerHits, setPeerHits] = useState<SearchHit[]>([]);
   const [knownPeers, setKnownPeers] = useState<PeerHit[]>([]);
@@ -446,6 +447,10 @@ export function CashflowFormScreen({
       onError('Pick at least one person, or choose Alone');
       return;
     }
+    if (kind === 'expense' && payWith === 'friends' && !shareDueAt.trim()) {
+      onError('Choose a repayment date');
+      return;
+    }
     if (kind === 'expense' && payWith === 'friends' && splitMode === 'percent') {
       const pctSum = selectedSplit.reduce((s, f) => s + (Number(f.value) || 0), 0);
       if (pctSum <= 0 || pctSum > 100) {
@@ -581,6 +586,7 @@ export function CashflowFormScreen({
               const shared = await api.shareCashflow(token, entry.id, {
                 friend_id: friend.id,
                 ...(shareAmount ? { share_amount: shareAmount } : { share_percent: sharePercent }),
+                due_at: new Date(`${shareDueAt}T12:00:00.000Z`).toISOString(),
               });
               entry = shared.entry;
             } catch (e) {
@@ -1068,6 +1074,11 @@ export function CashflowFormScreen({
                         ))}
                       </View>
                     ) : null}
+
+                    <DateField label="Repayment date" value={shareDueAt} onChange={setShareDueAt} />
+                    <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
+                      Each share is a loan request. It only becomes active when they accept.
+                    </Text>
                   </>
                 ) : null}
               </>

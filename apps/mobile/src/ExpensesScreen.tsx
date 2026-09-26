@@ -35,7 +35,7 @@ type Props = {
   reloadToken?: number;
 };
 
-function monthBounds(d = new Date()): { from: string; to: string; label: string; day: string; short: string } {
+function monthBounds(d: Date): { from: string; to: string; label: string; day: string; short: string; y: number; m: number } {
   const from = new Date(Date.UTC(d.getFullYear(), d.getMonth(), 1));
   const to = new Date(Date.UTC(d.getFullYear(), d.getMonth() + 1, 1));
   return {
@@ -44,7 +44,20 @@ function monthBounds(d = new Date()): { from: string; to: string; label: string;
     label: from.toLocaleDateString(undefined, { month: 'long', year: 'numeric', timeZone: 'UTC' }),
     day: String(d.getDate()),
     short: d.toLocaleDateString(undefined, { month: 'short', year: 'numeric' }),
+    y: d.getFullYear(),
+    m: d.getMonth(),
   };
+}
+
+function toIsoLocal(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function daysInMonth(year: number, monthIndex: number): number {
+  return new Date(year, monthIndex + 1, 0).getDate();
 }
 
 function loanRemaining(loan: Loan): number {
@@ -79,9 +92,20 @@ export function ExpensesScreen({
   const [loadError, setLoadError] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<CashflowDraft[]>([]);
   const [draftBusy, setDraftBusy] = useState(false);
+  const [selectedDate, setSelectedDate] = useState(() => new Date());
 
-  const period = useMemo(() => monthBounds(), []);
+  const period = useMemo(() => monthBounds(selectedDate), [selectedDate]);
+  const selectedIso = useMemo(() => toIsoLocal(selectedDate), [selectedDate]);
   const preferred = (user.default_currency_code || 'USD').toUpperCase();
+
+  const dayIncome = useMemo(
+    () => income.filter((e) => e.occurred_at.slice(0, 10) === selectedIso),
+    [income, selectedIso],
+  );
+  const dayExpense = useMemo(
+    () => expenseRows.filter((e) => e.occurred_at.slice(0, 10) === selectedIso),
+    [expenseRows, selectedIso],
+  );
 
   const reload = useCallback(async () => {
     try {
@@ -273,7 +297,10 @@ export function ExpensesScreen({
     <View style={{ gap: space.md }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
         <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>Expenses</Text>
-        <View
+        <Pressable
+          onPress={() => {
+            if (tab !== 'dashboard') onTab('dashboard');
+          }}
           style={{
             paddingHorizontal: 12,
             paddingVertical: 8,
@@ -287,7 +314,7 @@ export function ExpensesScreen({
         >
           <Text style={{ color: colors.primary, fontFamily: fonts.uiBold, fontSize: 16 }}>{period.day}</Text>
           <Text style={{ color: colors.primary, fontFamily: fonts.ui, fontSize: 11, opacity: 0.85 }}>{period.short}</Text>
-        </View>
+        </Pressable>
       </View>
 
       <View style={{ flexDirection: 'row', gap: 8 }}>
@@ -335,6 +362,143 @@ export function ExpensesScreen({
 
       {tab === 'dashboard' ? (
         <>
+          <Card>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <Pressable
+                onPress={() =>
+                  setSelectedDate(new Date(selectedDate.getFullYear(), selectedDate.getMonth() - 1, 1))
+                }
+              >
+                <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 14 }}>‹</Text>
+              </Pressable>
+              <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>{period.label}</Text>
+              <Pressable
+                onPress={() =>
+                  setSelectedDate(new Date(selectedDate.getFullYear(), selectedDate.getMonth() + 1, 1))
+                }
+              >
+                <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 14 }}>›</Text>
+              </Pressable>
+            </View>
+            <View style={{ flexDirection: 'row', marginBottom: 6 }}>
+              {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => (
+                <Text
+                  key={`${d}-${i}`}
+                  style={{
+                    flex: 1,
+                    textAlign: 'center',
+                    color: colors.muted,
+                    fontFamily: fonts.uiSemi,
+                    fontSize: 11,
+                  }}
+                >
+                  {d}
+                </Text>
+              ))}
+            </View>
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+              {Array.from({ length: new Date(period.y, period.m, 1).getDay() }).map((_, i) => (
+                <View key={`pad-${i}`} style={{ width: `${100 / 7}%`, height: 36 }} />
+              ))}
+              {Array.from({ length: daysInMonth(period.y, period.m) }, (_, i) => i + 1).map((dayNum) => {
+                const iso = `${period.y}-${String(period.m + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
+                const active = selectedIso === iso;
+                const has =
+                  income.some((e) => e.occurred_at.slice(0, 10) === iso) ||
+                  expenseRows.some((e) => e.occurred_at.slice(0, 10) === iso);
+                return (
+                  <Pressable
+                    key={iso}
+                    onPress={() => setSelectedDate(new Date(period.y, period.m, dayNum))}
+                    style={{
+                      width: `${100 / 7}%`,
+                      height: 36,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                    }}
+                  >
+                    <View
+                      style={{
+                        width: 32,
+                        height: 32,
+                        borderRadius: 16,
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        backgroundColor: active ? colors.primary : 'transparent',
+                      }}
+                    >
+                      <Text
+                        style={{
+                          color: active ? colors.onPrimary : colors.text,
+                          fontFamily: fonts.uiSemi,
+                          fontSize: 13,
+                        }}
+                      >
+                        {dayNum}
+                      </Text>
+                    </View>
+                    {has && !active ? (
+                      <View
+                        style={{
+                          position: 'absolute',
+                          bottom: 2,
+                          width: 4,
+                          height: 4,
+                          borderRadius: 2,
+                          backgroundColor: colors.primary,
+                        }}
+                      />
+                    ) : null}
+                  </Pressable>
+                );
+              })}
+            </View>
+          </Card>
+
+          <Card>
+            <SectionLabel>
+              {selectedIso === toIsoLocal(new Date()) ? 'Today' : selectedIso}
+            </SectionLabel>
+            {dayIncome.length === 0 && dayExpense.length === 0 ? (
+              <EmptyState title="Nothing this day" body="Income and expenses for the selected day show here." />
+            ) : (
+              [...dayIncome, ...dayExpense]
+                .sort((a, b) => a.occurred_at.localeCompare(b.occurred_at))
+                .map((e) => (
+                  <Pressable
+                    key={e.id}
+                    onPress={() => onOpenEntry(e)}
+                    style={{
+                      flexDirection: 'row',
+                      justifyContent: 'space-between',
+                      gap: 8,
+                      paddingVertical: 10,
+                      borderBottomWidth: 1,
+                      borderBottomColor: colors.border,
+                    }}
+                  >
+                    <View style={{ flex: 1, gap: 2 }}>
+                      <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }}>{e.title}</Text>
+                      <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
+                        {e.kind === 'income' ? 'Income' : 'Expense'}
+                        {e.category ? ` · ${e.category}` : ''}
+                      </Text>
+                    </View>
+                    <Text
+                      style={{
+                        color: e.kind === 'income' ? colors.success : colors.text,
+                        fontFamily: fonts.uiSemi,
+                        fontSize: 14,
+                      }}
+                    >
+                      {e.kind === 'income' ? '+' : '−'}
+                      {formatMoney(e.amount, e.currency_code, user.locale)}
+                    </Text>
+                  </Pressable>
+                ))
+            )}
+          </Card>
+
           {drafts.length > 0 ? (
             <Card>
               <SectionLabel>Offline drafts ({drafts.length})</SectionLabel>

@@ -313,6 +313,23 @@ export const api = {
       headers: { 'Idempotency-Key': idemKey('account-transfer') },
       body: JSON.stringify(body),
     }, token),
+  importAccountStatement: (
+    token: string,
+    id: string,
+    body: { csv: string; set_balance?: string; balance_note?: string },
+  ) =>
+    request<{
+      import: {
+        imported: number;
+        skipped: number;
+        errors: string[];
+        account: MoneyAccount;
+      };
+    }>(`/accounts/${id}/import`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('account-import') },
+      body: JSON.stringify(body),
+    }, token),
   listGoals: (token: string, includeArchived = false) => {
     const suffix = includeArchived ? '?include_archived=true' : '';
     return request<{ goals: Goal[] }>(`/goals${suffix}`, { method: 'GET' }, token);
@@ -326,6 +343,16 @@ export const api = {
   updateGoal: (token: string, id: string, body: UpdateGoalBody) =>
     request<{ goal: Goal }>(`/goals/${id}`, {
       method: 'PATCH',
+      body: JSON.stringify(body),
+    }, token),
+  uploadGoalCover: (
+    token: string,
+    id: string,
+    body: { filename: string; mime: string; attachment_base64: string } | { clear: true },
+  ) =>
+    request<{ goal: Goal }>(`/goals/${id}/cover`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('goal-cover') },
       body: JSON.stringify(body),
     }, token),
   contributeGoal: (
@@ -862,6 +889,8 @@ export type Goal = {
   linked_account_id?: string | null;
   linked_loan_id?: string | null;
   note?: string | null;
+  cover_image_url?: string | null;
+  type_label?: string | null;
   status: 'active' | 'completed' | 'archived';
   eta_months?: number | null;
   monthly_rate?: string | null;
@@ -900,6 +929,7 @@ export type CreateGoalBody = {
   linked_account_id?: string;
   linked_loan_id?: string;
   note?: string;
+  type_label?: string;
 };
 
 export type UpdateGoalBody = {

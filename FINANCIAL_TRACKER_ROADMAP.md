@@ -507,7 +507,9 @@ Admin can list users, open one user, see KPI dashboard, suspend a user; action a
 
 **Shipped 2026-09-26 (v1):** `GET /me/export` (json/zip); `POST /me/delete` (soft-delete + redact + revoke sessions); `POST /ai/insights/clear`; `platform_settings.ai_disabled` + admin toggle; Insights/Coach disclaimer always shown; OpenAPI paths for accounts/goals/insights/score/AI/admin/export; README updated. Deferred: offline drafts, full locale pack, reconcile UI, LLM personas.
 
-**Shipped 2026-09-26 (v2 polish):** Ledger CSV (`format=csv|ledger|csvtext`); `account_id` required on cashflow create/update; offline expense drafts + sync; Expenses “Coming up” bill calendar (expected cashflow + loan dues); locale + timezone SearchSelect; OpenAPI cashflow/peers/catalogs/budgets. Deferred: LLM personas only.
+**Shipped 2026-09-26 (v2 polish):** Ledger CSV (`format=csv|ledger|csvtext`); `account_id` required on cashflow create/update; offline expense drafts + sync; Expenses “Coming up” bill calendar (expected cashflow + loan dues); locale + timezone SearchSelect; OpenAPI cashflow/peers/catalogs/budgets.
+
+**Shipped 2026-09-26 (open banking v1):** `POST /accounts/{id}/import` statement CSV → cashflow; Accounts Import UI; live OAuth connectors still deferred. Remaining: LLM personas.
 
 ---
 
@@ -636,6 +638,7 @@ Do not wait for M5 to ship M1–M4; each milestone should be usable alone.
 1. Is Lony Trust shown to **peers**, or private only? (**Decision: friends-only** via `/users/{id}/trust`.)  
 2. Can Coach suggest borrowing more? (Recommend **no** — focus on repayment & savings.)  
 3. Manual balances forever vs open banking in a later Phase 8?  
+   **Decision (2026-09-26):** Manual balances + **statement CSV import** for v1; live bank OAuth deferred.  
 4. Admin: internal staff only, or org owners for family accounts later?  
 5. Multi-user households / shared budgets — in or out of next 12 months?
 
@@ -656,25 +659,28 @@ Do not wait for M5 to ship M1–M4; each milestone should be usable alone.
 
 ## 21. Summary — what’s left in one page
 
-**Already have:** social lending, chat, payment-profile sharing, cashflow income/expenses with recurrence and confirmation, accounts/net worth, budgets, goals, insights, A–E Trust, admin + catalogs, export/delete (JSON/zip/CSV), offline drafts, bill calendar, locale/timezone pickers, **bonds via loan/split accept** (no friend-request product surface).
+**Already have:** social lending, chat, payment-profile sharing, cashflow income/expenses with recurrence and confirmation, accounts/net worth, budgets, goals (**Plan** = multi-plan hub with optional cover images), insights, A–E Trust, admin + catalogs, export/delete (JSON/zip/CSV), offline drafts, bill calendar, locale/timezone pickers, statement CSV import (open banking v1), modular Settings (Profile / Themes / Payments / Notifications / Privacy / Legal), custom themes, **bonds via loan/split accept**.
 
 **Still open / deferred:**
 - LLM-backed Analyst / Visualizer / Coach personas (rule-based AI exists)
-- Optional open banking (Phase 8)
+- Live bank OAuth connectors (Plaid / TrueLayer) — statement import covers v1 without provider keys
 
 **Operate:** Admin catalogs for institutions/types — shipped; expand KPIs/charts as needed.
 
 **Reconcile (2026-09-26):** `GET /accounts/reconcile` (+ per-account); Accounts screen compare stated vs ledger since last manual set; “Set balance to ledger”.
 
+**Statement import (2026-09-26):** `POST /accounts/{id}/import` — CSV → confirmed cashflow on that account; duplicate skip; optional ending balance; Accounts → Import.
+
+**Plan + Settings polish (2026-09-26):** Goal cover images (`POST /goals/{id}/cover`); Plan filters; Settings hub modules; Themes presets + custom color creator.
+
 ---
 
-## 22. Immediate next actions (this week)
+## 22. Immediate next actions
 
-1. Review and approve Phase 0 decisions in this file (especially accounts vs payment profiles).  
-2. Sketch Home with Net worth + Score placeholder.  
-3. Start **Epic A** migration + API for `accounts` (Phase 1).  
-4. Keep polishing cashflow UX without blocking Phase 1.  
-5. Schedule AI provider + legal disclaimer draft before any Phase 5 coding.
+1. **LLM personas** — pick provider, wire tool APIs over insights/score, Coach streaming when keys exist.  
+2. Optional later: Plaid/TrueLayer (or regional connector) for live balance sync.  
+3. Soft polish as needed: richer Insights charts, fuller i18n packs, admin KPI charts.  
+4. Keep manual balances + statement import as the default money-in path until live open banking is deliberate.
 
 ---
 

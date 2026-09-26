@@ -13,19 +13,19 @@ import (
 
 const goalSelect = `
 	id, user_id, title, goal_type, currency_code, target_amount::text, current_amount::text,
-	target_date, linked_account_id, linked_loan_id, note, status, created_at, updated_at
+	target_date, linked_account_id, linked_loan_id, note, cover_image_key, type_label, status, created_at, updated_at
 `
 
 func (s *SQLStore) InsertGoal(ctx context.Context, rec goals.Goal) (goals.Goal, error) {
 	row := s.pool.QueryRow(ctx, `
 		INSERT INTO goals (
 			user_id, title, goal_type, currency_code, target_amount, current_amount,
-			target_date, linked_account_id, linked_loan_id, note, status, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+			target_date, linked_account_id, linked_loan_id, note, cover_image_key, type_label, status, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 		RETURNING `+goalSelect+`
 	`, rec.UserID, rec.Title, rec.GoalType, rec.CurrencyCode,
 		rec.TargetAmount.StringFixed(goals.Scale), rec.CurrentAmount.StringFixed(goals.Scale),
-		rec.TargetDate, rec.LinkedAccountID, rec.LinkedLoanID, rec.Note, rec.Status, rec.CreatedAt, rec.UpdatedAt)
+		rec.TargetDate, rec.LinkedAccountID, rec.LinkedLoanID, rec.Note, rec.CoverImageKey, rec.TypeLabel, rec.Status, rec.CreatedAt, rec.UpdatedAt)
 	return scanGoal(row)
 }
 
@@ -63,12 +63,13 @@ func (s *SQLStore) UpdateGoal(ctx context.Context, rec goals.Goal) (goals.Goal, 
 	row := s.pool.QueryRow(ctx, `
 		UPDATE goals SET
 			title = $3, goal_type = $4, currency_code = $5, target_amount = $6, current_amount = $7,
-			target_date = $8, linked_account_id = $9, linked_loan_id = $10, note = $11, status = $12, updated_at = $13
+			target_date = $8, linked_account_id = $9, linked_loan_id = $10, note = $11, cover_image_key = $12,
+			type_label = $13, status = $14, updated_at = $15
 		WHERE id = $1 AND user_id = $2
 		RETURNING `+goalSelect+`
 	`, rec.ID, rec.UserID, rec.Title, rec.GoalType, rec.CurrencyCode,
 		rec.TargetAmount.StringFixed(goals.Scale), rec.CurrentAmount.StringFixed(goals.Scale),
-		rec.TargetDate, rec.LinkedAccountID, rec.LinkedLoanID, rec.Note, rec.Status, rec.UpdatedAt)
+		rec.TargetDate, rec.LinkedAccountID, rec.LinkedLoanID, rec.Note, rec.CoverImageKey, rec.TypeLabel, rec.Status, rec.UpdatedAt)
 	return scanGoal(row)
 }
 
@@ -161,7 +162,7 @@ func scanGoal(row goalScannable) (goals.Goal, error) {
 	var target, current string
 	if err := row.Scan(
 		&rec.ID, &rec.UserID, &rec.Title, &rec.GoalType, &rec.CurrencyCode, &target, &current,
-		&rec.TargetDate, &rec.LinkedAccountID, &rec.LinkedLoanID, &rec.Note, &rec.Status, &rec.CreatedAt, &rec.UpdatedAt,
+		&rec.TargetDate, &rec.LinkedAccountID, &rec.LinkedLoanID, &rec.Note, &rec.CoverImageKey, &rec.TypeLabel, &rec.Status, &rec.CreatedAt, &rec.UpdatedAt,
 	); err != nil {
 		return goals.Goal{}, err
 	}

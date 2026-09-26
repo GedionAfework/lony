@@ -2,7 +2,7 @@ openapi: 3.0.3
 info:
   title: Lony API
   version: 0.1.0
-  description: Shared peer loan ledger. Phase 8 adds rate limits, idempotency, balance reconcile reporting, and legal disclaimer acceptance.
+  description: Shared peer loan ledger and personal money tracker. Statement CSV import (open banking v1); live bank OAuth deferred.
 servers:
   - url: http://localhost:8080/api/v1
 paths:
@@ -1312,6 +1312,61 @@ paths:
           description: Stated vs expected balance
         "404":
           description: Not found
+  /accounts/{id}/import:
+    post:
+      summary: Import bank statement CSV into an account (open banking v1)
+      description: |
+        Parses CSV with Date + Amount (signed) or Debit/Credit columns.
+        Creates confirmed cashflow entries; duplicate rows (same date/amount/title) are skipped.
+        Optional set_balance sets the stated ending balance after import.
+        Accepts JSON `{ csv, set_balance? }` or multipart `file` + optional `set_balance`.
+      operationId: importAccountStatement
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [csv]
+              properties:
+                csv: { type: string }
+                set_balance: { type: string, description: Optional ending balance after import }
+                balance_note: { type: string }
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file: { type: string, format: binary }
+                set_balance: { type: string }
+                balance_note: { type: string }
+      responses:
+        "200":
+          description: Import summary
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  import:
+                    type: object
+                    properties:
+                      imported: { type: integer }
+                      skipped: { type: integer }
+                      errors:
+                        type: array
+                        items: { type: string }
+                      account: { type: object }
+        "404":
+          description: Account not found
+        "422":
+          description: Invalid CSV
   /wealth:
     get:
       summary: Net worth summary by currency
@@ -1335,6 +1390,30 @@ paths:
       responses:
         "201":
           description: Created
+  /goals/{id}/cover:
+    post:
+      summary: Upload or clear a goal cover image
+      operationId: uploadGoalCover
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                filename: { type: string }
+                mime: { type: string }
+                attachment_base64: { type: string }
+                clear: { type: boolean, description: When true, removes the cover }
+      responses:
+        "200":
+          description: Goal with cover_image_url
   /insights/overview:
     get:
       summary: Cashflow / debt overview metrics
