@@ -1,5 +1,5 @@
 import { Alert, Share, Text, View } from 'react-native';
-import { COUNTRIES, CURRENCIES } from './catalogs';
+import { COUNTRIES, CURRENCIES, LOCALES, TIMEZONES } from './catalogs';
 import { PhoneField } from './PhoneField';
 import { SearchSelect } from './SearchSelect';
 import { fonts, space, useTheme } from './theme';
@@ -45,6 +45,7 @@ type Props = {
   onTos: () => void;
   onBanks: () => void;
   onExportData: () => void;
+  onExportLedger?: () => void;
   onDeleteAccount: () => void;
   onClearAI: () => void;
   onLogout: () => void;
@@ -99,6 +100,8 @@ export function SettingsScreen(props: Props) {
         />
         <SearchSelect label="Country" value={props.country} onChange={props.onCountry} options={COUNTRIES} />
         <SearchSelect label="Currency" value={props.currency} onChange={props.onCurrency} options={CURRENCIES} />
+        <SearchSelect label="Locale" value={props.locale} onChange={props.onLocale} options={LOCALES} />
+        <SearchSelect label="Timezone" value={props.timezone} onChange={props.onTimezone} options={TIMEZONES} />
         <SectionLabel>Sign-in preference</SectionLabel>
         <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
           {(['email', 'google', 'telegram'] as const).map((p) => {
@@ -108,8 +111,6 @@ export function SettingsScreen(props: Props) {
             );
           })}
         </View>
-        <Field label="Locale" value={props.locale} onChange={props.onLocale} />
-        <Field label="Timezone" value={props.timezone} onChange={props.onTimezone} />
         <PrimaryButton
           label={props.busy ? 'Saving…' : 'Save'}
           onPress={props.onSave}
@@ -142,6 +143,13 @@ export function SettingsScreen(props: Props) {
           onPress={props.onExportData}
           disabled={props.busy}
         />
+        {props.onExportLedger ? (
+          <SecondaryButton
+            label={props.busy ? 'Working…' : 'Export ledger CSV'}
+            onPress={props.onExportLedger}
+            disabled={props.busy}
+          />
+        ) : null}
         <SecondaryButton
           label={props.busy ? 'Working…' : 'Clear AI insights'}
           onPress={props.onClearAI}
@@ -186,4 +194,8 @@ export async function shareExportJSON(payload: unknown) {
     message: body.length > 50000 ? body.slice(0, 50000) + '\n…(truncated)' : body,
     title: 'Lony data export',
   });
+}
+
+export async function shareExportNote(title: string, message: string) {
+  await Share.share({ title, message });
 }

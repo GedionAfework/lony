@@ -36,7 +36,13 @@ export function SearchSelect({
   const [query, setQuery] = useState('');
   const filtered = useMemo(() => filterCatalog(options, query), [options, query]);
   const selected = options.find((o) => o.id === value);
-  const display = selected ? (showId ? `${selected.id} · ${selected.label}` : selected.label) : placeholder;
+  const display = selected
+    ? showId
+      ? `${selected.id} · ${selected.label}`
+      : selected.label
+    : value.trim()
+      ? value
+      : placeholder;
 
   return (
     <View style={{ gap: 6 }}>

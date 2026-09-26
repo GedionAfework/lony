@@ -491,13 +491,18 @@ export function CashflowFormScreen({
         }
       }
 
-      if (!payAmount) {
-        onError('Enter an amount');
-        setBusy(false);
-        return;
-      }
+    if (!payAmount) {
+      onError('Enter an amount');
+      setBusy(false);
+      return;
+    }
+    if (!accountId) {
+      onError('Choose which account this belongs to');
+      setBusy(false);
+      return;
+    }
 
-      const periodic = isPeriodicForm;
+    const periodic = isPeriodicForm;
       if (periodicNeedsCustomCategory && !customPeriodCategory.trim()) {
         onError('Name your custom category for this schedule');
         setBusy(false);
@@ -514,7 +519,7 @@ export function CashflowFormScreen({
         amount: payAmount,
         currency_code: currency.trim().toUpperCase(),
         category_id: catId,
-        account_id: accountId || undefined,
+        account_id: accountId,
         note: note.trim() || undefined,
         occurred_at: new Date(`${date}T12:00:00.000Z`).toISOString(),
         recurrence: periodValue as 'weekly' | 'monthly' | 'yearly' | 'none',
@@ -525,12 +530,39 @@ export function CashflowFormScreen({
         const res = await api.updateCashflow(token, editing.id, payload);
         entry = res.entry;
       } else {
-        const res = await api.createCashflow(token, {
-          kind,
-          ...payload,
-          is_template: periodic,
-        });
-        entry = res.entry;
+        try {
+          const res = await api.createCashflow(token, {
+            kind,
+            ...payload,
+            is_template: periodic,
+          });
+          entry = res.entry;
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : 'Could not save';
+          const offline =
+            msg.toLowerCase().includes('network') ||
+            msg.toLowerCase().includes('failed to fetch') ||
+            msg.toLowerCase().includes('timeout');
+          if (offline && !editing) {
+            const { saveCashflowDraft } = await import('./offlineDrafts');
+            await saveCashflowDraft({
+              kind,
+              title: payload.title,
+              amount: payload.amount,
+              currency_code: payload.currency_code,
+              category_id: payload.category_id,
+              account_id: accountId,
+              note: payload.note,
+              occurred_at: payload.occurred_at,
+              recurrence: payload.recurrence,
+              is_template: periodic,
+            });
+            onError('You’re offline — draft saved on this device. Open Expenses to sync later.');
+            setBusy(false);
+            return;
+          }
+          throw e;
+        }
 
         if (kind === 'expense' && isLoanPayment === 'no' && payWith === 'friends') {
           for (const friend of selectedSplit) {

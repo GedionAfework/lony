@@ -187,7 +187,13 @@ paths:
       parameters:
         - in: query
           name: format
-          schema: { type: string, enum: [json, zip], default: zip }
+          schema:
+            type: string
+            enum: [json, zip, csv, ledger, csvtext]
+            default: zip
+          description: |
+            json = full export object; zip = GDPR zip (default); csv|ledger = ledger-only zip;
+            csvtext = JSON with cashflow_csv, transfers_csv, accounts_csv (mobile share-friendly)
       responses:
         "200":
           description: Zip attachment or JSON export payload
@@ -260,6 +266,15 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/FriendsResponse"
+  /peers:
+    get:
+      summary: List interacted peers ranked for expense circles (bonds)
+      operationId: listPeers
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Peers with bond strength / interaction_count
   /friend-requests:
     get:
       summary: List incoming friend requests
@@ -1080,6 +1095,175 @@ paths:
         "404":
           description: Not found or forbidden
 
+  /cashflow:
+    get:
+      summary: List cashflow entries (income/expense)
+      operationId: listCashflow
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - in: query
+          name: kind
+          schema: { type: string, enum: [income, expense] }
+        - in: query
+          name: status
+          schema: { type: string, enum: [expected, confirmed] }
+        - in: query
+          name: from
+          schema: { type: string, format: date-time }
+        - in: query
+          name: to
+          schema: { type: string, format: date-time }
+      responses:
+        "200":
+          description: Entries
+    post:
+      summary: Create cashflow entry (account_id required)
+      operationId: createCashflow
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateCashflowRequest"
+      responses:
+        "201":
+          description: Created
+        "422":
+          description: Validation (including missing account_id)
+  /cashflow/summary:
+    get:
+      summary: Cashflow totals by currency
+      operationId: cashflowSummary
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Summary slices
+  /cashflow/breakdown:
+    get:
+      summary: Category spend breakdown
+      operationId: cashflowBreakdown
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Category totals
+  /cashflow/categories:
+    get:
+      summary: List cashflow categories
+      operationId: listCashflowCategories
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Categories
+    post:
+      summary: Create custom category
+      operationId: createCashflowCategory
+      security: [{ bearerAuth: [] }]
+      responses:
+        "201":
+          description: Created
+  /cashflow/{id}:
+    patch:
+      summary: Update cashflow entry
+      operationId: updateCashflow
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Updated
+        "404":
+          description: Not found
+    delete:
+      summary: Delete cashflow entry
+      operationId: deleteCashflow
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: Deleted
+  /cashflow/{id}/share:
+    post:
+      summary: Share expense split with a peer (creates pending loan)
+      operationId: shareCashflow
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Shared
+  /cashflow/{id}/receive:
+    post:
+      summary: Confirm expected income/expense against an account
+      operationId: receiveCashflow
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Confirmed
+  /budgets:
+    get:
+      summary: List monthly budgets
+      operationId: listBudgets
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Budgets
+    put:
+      summary: Upsert monthly budget
+      operationId: upsertBudget
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Upserted
+  /budgets/{id}:
+    delete:
+      summary: Delete budget
+      operationId: deleteBudget
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "204":
+          description: Deleted
+  /catalogs/types:
+    get:
+      summary: List account type catalog (public)
+      operationId: listCatalogTypes
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Types
+  /catalogs/institutions:
+    get:
+      summary: List institution catalog (public)
+      operationId: listCatalogInstitutions
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Institutions
+
   /accounts:
     get:
       summary: List money accounts
@@ -1095,6 +1279,16 @@ paths:
       responses:
         "201":
           description: Created
+  /accounts/transfer:
+    post:
+      summary: Transfer between money accounts
+      operationId: transferAccounts
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: Transfer recorded
   /accounts/reconcile:
     get:
       summary: Reconcile all account balances vs ledger
@@ -1259,6 +1453,62 @@ paths:
       responses:
         "200":
           description: Updated settings
+  /admin/catalogs/types:
+    get:
+      summary: List catalog types (admin)
+      operationId: adminListCatalogTypes
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Types including inactive
+    post:
+      summary: Create catalog type
+      operationId: adminCreateCatalogType
+      security: [{ bearerAuth: [] }]
+      responses:
+        "201":
+          description: Created
+  /admin/catalogs/types/{typeID}:
+    patch:
+      summary: Update catalog type
+      operationId: adminUpdateCatalogType
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: typeID
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Updated
+  /admin/catalogs/institutions:
+    get:
+      summary: List catalog institutions (admin)
+      operationId: adminListCatalogInstitutions
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Institutions including inactive
+    post:
+      summary: Create catalog institution
+      operationId: adminCreateCatalogInstitution
+      security: [{ bearerAuth: [] }]
+      responses:
+        "201":
+          description: Created
+  /admin/catalogs/institutions/{institutionID}:
+    patch:
+      summary: Update catalog institution
+      operationId: adminUpdateCatalogInstitution
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: institutionID
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Updated
 
 components:
   parameters:
@@ -1765,3 +2015,18 @@ components:
         attachment_url: { type: string, nullable: true }
         voice_duration_ms: { type: integer, nullable: true }
         created_at: { type: string, format: date-time }
+    CreateCashflowRequest:
+      type: object
+      required: [kind, title, amount, currency_code, account_id]
+      properties:
+        kind: { type: string, enum: [income, expense] }
+        title: { type: string }
+        amount: { type: string, description: Decimal string }
+        currency_code: { type: string }
+        account_id: { type: string, format: uuid }
+        category: { type: string }
+        category_id: { type: string, format: uuid }
+        note: { type: string }
+        occurred_at: { type: string, format: date-time }
+        recurrence: { type: string, enum: [weekly, monthly, yearly, none] }
+        is_template: { type: boolean }

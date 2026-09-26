@@ -14,8 +14,9 @@ import {
 import { stripAmount } from './amountFormat';
 import { SearchSelect } from './SearchSelect';
 import { IconRepeat } from './icons';
+import { listCashflowDrafts, removeCashflowDraft, type CashflowDraft } from './offlineDrafts';
 import { fonts, radii, space, useTheme } from './theme';
-import { Card, EmptyState, Field, Money, PrimaryButton, SectionLabel } from './ui';
+import { Card, EmptyState, Field, Money, PrimaryButton, SecondaryButton, SectionLabel } from './ui';
 
 export type ExpensesTab = 'dashboard' | 'income' | 'expenses';
 
@@ -76,6 +77,8 @@ export function ExpensesScreen({
   const [budgetLimit, setBudgetLimit] = useState('');
   const [budgetBusy, setBudgetBusy] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [drafts, setDrafts] = useState<CashflowDraft[]>([]);
+  const [draftBusy, setDraftBusy] = useState(false);
 
   const period = useMemo(() => monthBounds(), []);
   const preferred = (user.default_currency_code || 'USD').toUpperCase();
@@ -101,12 +104,81 @@ export function ExpensesScreen({
       setWealth(wealthRes?.wealth ?? null);
       setBreakdown(breakRes.breakdown ?? []);
       setBudgets(budgetRes.budgets ?? []);
+      setDrafts(await listCashflowDrafts());
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Could not load expenses';
       setLoadError(message);
       onError(message);
+      setDrafts(await listCashflowDrafts());
     }
   }, [token, period.from, period.to, preferred, onError]);
+
+  const upcomingBills = useMemo(() => {
+    const today = new Date();
+    const start = today.toISOString().slice(0, 10);
+    const horizon = new Date(today.getTime() + 45 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const expected = [...income, ...expenseRows]
+      .filter((e) => e.status === 'expected' && !e.is_template)
+      .map((e) => ({
+        id: e.id,
+        title: e.title || (e.kind === 'income' ? 'Expected income' : 'Expected bill'),
+        amount: e.amount,
+        currency: e.currency_code,
+        at: e.occurred_at.slice(0, 10),
+        type: 'cashflow' as const,
+        entry: e,
+        loanId: null as string | null,
+      }));
+    const dues = loans
+      .filter(
+        (l) =>
+          l.your_role === 'borrower' &&
+          ['active', 'overdue', 'repayment_pending'].includes(l.status) &&
+          Boolean(l.due_at),
+      )
+      .map((l) => ({
+        id: l.id,
+        title: l.title || l.reference_code || 'Loan due',
+        amount: String(loanRemaining(l)),
+        currency: l.currency_code || preferred,
+        at: (l.due_at || '').slice(0, 10),
+        type: 'loan' as const,
+        entry: null as CashflowEntry | null,
+        loanId: l.id,
+      }));
+    return [...expected, ...dues]
+      .filter((b) => b.at >= start && b.at <= horizon)
+      .sort((a, b) => a.at.localeCompare(b.at))
+      .slice(0, 12);
+  }, [income, expenseRows, loans, preferred]);
+
+  async function syncDrafts() {
+    if (!drafts.length) return;
+    setDraftBusy(true);
+    try {
+      for (const d of [...drafts]) {
+        await api.createCashflow(token, {
+          kind: d.kind,
+          title: d.title,
+          amount: d.amount,
+          currency_code: d.currency_code,
+          category_id: d.category_id,
+          account_id: d.account_id,
+          note: d.note,
+          occurred_at: d.occurred_at,
+          recurrence: d.recurrence === 'none' ? undefined : d.recurrence,
+          is_template: d.is_template,
+        });
+        await removeCashflowDraft(d.id);
+      }
+      await reload();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Could not sync drafts');
+      setDrafts(await listCashflowDrafts());
+    } finally {
+      setDraftBusy(false);
+    }
+  }
 
   useEffect(() => {
     void reload();
@@ -263,6 +335,63 @@ export function ExpensesScreen({
 
       {tab === 'dashboard' ? (
         <>
+          {drafts.length > 0 ? (
+            <Card>
+              <SectionLabel>Offline drafts ({drafts.length})</SectionLabel>
+              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
+                Saved on this device while offline. Sync when you’re back online.
+              </Text>
+              {drafts.slice(0, 5).map((d) => (
+                <Text key={d.id} style={{ color: colors.text, fontFamily: fonts.ui, fontSize: 13 }}>
+                  {d.kind}: {d.title} · {d.amount} {d.currency_code}
+                </Text>
+              ))}
+              <PrimaryButton
+                label={draftBusy ? 'Syncing…' : 'Sync drafts'}
+                onPress={() => void syncDrafts()}
+                disabled={draftBusy}
+              />
+            </Card>
+          ) : null}
+
+          <Card>
+            <SectionLabel>Coming up</SectionLabel>
+            {upcomingBills.length === 0 ? (
+              <EmptyState
+                title="No bills in the next 45 days"
+                body="Expected income/expenses and loan dues will show here."
+              />
+            ) : (
+              upcomingBills.map((b) => (
+                <Pressable
+                  key={`${b.type}-${b.id}`}
+                  onPress={() => {
+                    if (b.type === 'loan' && b.loanId) onOpenLoan(b.loanId);
+                    else if (b.entry) onOpenEntry(b.entry);
+                  }}
+                  style={{
+                    flexDirection: 'row',
+                    justifyContent: 'space-between',
+                    gap: 8,
+                    paddingVertical: 10,
+                    borderBottomWidth: 1,
+                    borderBottomColor: colors.border,
+                  }}
+                >
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }}>{b.title}</Text>
+                    <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
+                      {b.at} · {b.type === 'loan' ? 'Loan' : 'Expected'}
+                    </Text>
+                  </View>
+                  <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }}>
+                    {formatMoney(b.amount, b.currency, user.locale)}
+                  </Text>
+                </Pressable>
+              ))
+            )}
+          </Card>
+
           <Card>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
               <Text

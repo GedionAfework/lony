@@ -148,6 +148,12 @@ export const api = {
     }, token),
   exportMyData: (token: string) =>
     request<{ export: DataExport }>('/me/export?format=json', { method: 'GET' }, token),
+  exportLedgerCSV: (token: string) =>
+    request<{ cashflow_csv: string; transfers_csv: string; accounts_csv: string }>(
+      '/me/export?format=csvtext',
+      { method: 'GET' },
+      token,
+    ),
   deleteAccount: (token: string) =>
     request<{ ok: boolean; status: string }>('/me/delete', {
       method: 'POST',
@@ -1069,9 +1075,9 @@ export type CreateCashflowBody = {
   title: string;
   amount: string;
   currency_code: string;
+  account_id: string;
   category?: string;
   category_id?: string;
-  account_id?: string;
   note?: string;
   occurred_at?: string;
   recurrence?: 'weekly' | 'monthly' | 'yearly' | 'none';

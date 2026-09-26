@@ -58,7 +58,7 @@ import { TermsScreen } from './src/TermsScreen';
 import { ThemeProvider, fonts, radii, useTheme } from './src/theme';
 import { registerPushToken } from './src/push';
 import { SearchSelect } from './src/SearchSelect';
-import { SettingsScreen, shareExportJSON } from './src/SettingsScreen';
+import { SettingsScreen, shareExportJSON, shareExportNote } from './src/SettingsScreen';
 import { Card, DueDatePill, EmptyState, Field, Money, PrimaryButton, ScreenHeader, SecondaryButton, SectionLabel, useAppStyles } from './src/ui';
 
 const ACCESS_KEY = 'lony.access_token';
@@ -423,6 +423,28 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
       await shareExportJSON(res.export);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Export failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onExportLedger() {
+    if (!token) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api.exportLedgerCSV(token);
+      const body = [
+        '=== cashflow.csv ===',
+        res.cashflow_csv,
+        '=== transfers.csv ===',
+        res.transfers_csv,
+        '=== accounts.csv ===',
+        res.accounts_csv,
+      ].join('\n');
+      await shareExportNote('Lony ledger CSV', body);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Ledger export failed');
     } finally {
       setBusy(false);
     }
@@ -1607,6 +1629,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                 api.listPaymentRails().then((res) => setPaymentRails(res.rails ?? [])).catch(() => undefined);
               }}
               onExportData={onExportData}
+              onExportLedger={onExportLedger}
               onDeleteAccount={onDeleteAccount}
               onClearAI={onClearAI}
               onLogout={onLogout}

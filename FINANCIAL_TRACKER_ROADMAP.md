@@ -311,8 +311,8 @@ Month view shows income, expenses, transfers, and budget burn; totals reconcile 
 - [x] Starting balance per account (on create)
 - [x] Expenses/income can post to accounts
 - [x] Optional “reconcile” screen: expected balance vs sum of ledger
-- [ ] Export CSV of ledger (feeds Phase 7)
-- [ ] Force account required on every entry
+- [x] Export CSV of ledger (feeds Phase 7)
+- [x] Force account required on every entry
 
 ---
 
@@ -507,6 +507,8 @@ Admin can list users, open one user, see KPI dashboard, suspend a user; action a
 
 **Shipped 2026-09-26 (v1):** `GET /me/export` (json/zip); `POST /me/delete` (soft-delete + redact + revoke sessions); `POST /ai/insights/clear`; `platform_settings.ai_disabled` + admin toggle; Insights/Coach disclaimer always shown; OpenAPI paths for accounts/goals/insights/score/AI/admin/export; README updated. Deferred: offline drafts, full locale pack, reconcile UI, LLM personas.
 
+**Shipped 2026-09-26 (v2 polish):** Ledger CSV (`format=csv|ledger|csvtext`); `account_id` required on cashflow create/update; offline expense drafts + sync; Expenses “Coming up” bill calendar (expected cashflow + loan dues); locale + timezone SearchSelect; OpenAPI cashflow/peers/catalogs/budgets. Deferred: LLM personas only.
+
 ---
 
 ## 14. Suggested mobile information architecture (target)
@@ -654,12 +656,10 @@ Do not wait for M5 to ship M1–M4; each milestone should be usable alone.
 
 ## 21. Summary — what’s left in one page
 
-**Already have:** social lending, chat, payment-profile sharing, cashflow income/expenses with recurrence and confirmation, accounts/net worth, budgets, goals, insights, A–E Trust, admin + catalogs, export/delete, **bonds via loan/split accept** (no friend-request product surface).
+**Already have:** social lending, chat, payment-profile sharing, cashflow income/expenses with recurrence and confirmation, accounts/net worth, budgets, goals, insights, A–E Trust, admin + catalogs, export/delete (JSON/zip/CSV), offline drafts, bill calendar, locale/timezone pickers, **bonds via loan/split accept** (no friend-request product surface).
 
 **Still open / deferred:**
 - LLM-backed Analyst / Visualizer / Coach personas (rule-based AI exists)
-- Offline expense drafts
-- Full locale pack / globalization polish
 - Optional open banking (Phase 8)
 
 **Operate:** Admin catalogs for institutions/types — shipped; expand KPIs/charts as needed.

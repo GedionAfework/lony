@@ -28,6 +28,31 @@ func (h *Handler) Export(w http.ResponseWriter, r *http.Request) {
 		httpx.JSON(w, http.StatusOK, map[string]any{"export": bundle})
 		return
 	}
+	if format == "csv" || format == "ledger" {
+		raw, err := h.svc.ExportLedgerCSVZip(r.Context(), userID)
+		if err != nil {
+			httpx.Error(w, err)
+			return
+		}
+		w.Header().Set("Content-Type", "application/zip")
+		w.Header().Set("Content-Disposition", `attachment; filename="lony-ledger.csv.zip"`)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(raw)
+		return
+	}
+	if format == "csvtext" {
+		bundle, err := h.svc.ExportJSON(r.Context(), userID)
+		if err != nil {
+			httpx.Error(w, err)
+			return
+		}
+		httpx.JSON(w, http.StatusOK, map[string]any{
+			"cashflow_csv":  cashflowCSV(bundle.Cashflow),
+			"transfers_csv": transfersCSV(bundle.Transfers),
+			"accounts_csv":  accountsCSV(bundle.Accounts),
+		})
+		return
+	}
 	raw, err := h.svc.ExportZip(r.Context(), userID)
 	if err != nil {
 		httpx.Error(w, err)

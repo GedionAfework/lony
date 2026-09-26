@@ -94,6 +94,11 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, in CreateInput) 
 			"recurrence": "required for periodic entries",
 		})
 	}
+	if in.AccountID == nil {
+		return EntryDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"account_id": "choose which account this belongs to",
+		})
+	}
 	now := s.now().UTC()
 	rec := Entry{
 		UserID:       userID,
@@ -277,6 +282,11 @@ func (s *Service) Update(ctx context.Context, userID, id uuid.UUID, in UpdateInp
 			rec.IsTemplate = false
 			rec.NextOccurrenceAt = nil
 		}
+	}
+	if rec.AccountID == nil {
+		return EntryDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"account_id": "choose which account this belongs to",
+		})
 	}
 	rec.UpdatedAt = s.now().UTC()
 	saved, err := s.store.Update(ctx, rec)
