@@ -86,6 +86,18 @@ func (m *memoryStore) MarkEmailVerified(_ context.Context, id uuid.UUID) (UserRe
 	return user, nil
 }
 
+func (m *memoryStore) UpdatePasswordHash(_ context.Context, id uuid.UUID, passwordHash string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	user, ok := m.users[id]
+	if !ok {
+		return pgx.ErrNoRows
+	}
+	user.PasswordHash = passwordHash
+	m.users[id] = user
+	return nil
+}
+
 func (m *memoryStore) UpdateUserAccount(_ context.Context, id uuid.UUID, in AccountUpdate) (UserRecord, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -125,6 +137,15 @@ func (m *memoryStore) UpdateUserAccount(_ context.Context, id uuid.UUID, in Acco
 	}
 	if in.Currency != nil {
 		user.DefaultCurrencyCode = in.Currency
+	}
+	if in.CalendarID != nil {
+		user.CalendarID = *in.CalendarID
+	}
+	if in.HourCycle != nil {
+		user.HourCycle = *in.HourCycle
+	}
+	if in.LoanRequireApproval != nil {
+		user.LoanRequireApproval = *in.LoanRequireApproval
 	}
 	if in.TOSVersion != nil {
 		user.TOSVersion = in.TOSVersion
@@ -250,6 +271,19 @@ func (m *memoryStore) RevokeSession(_ context.Context, id uuid.UUID) error {
 	return nil
 }
 
+func (m *memoryStore) RevokeAllSessions(_ context.Context, userID uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	for id, session := range m.sessions {
+		if session.UserID == userID && session.RevokedAt == nil {
+			session.RevokedAt = &now
+			m.sessions[id] = session
+		}
+	}
+	return nil
+}
+
 func (m *memoryStore) InvalidateOpenChallenges(_ context.Context, userID uuid.UUID) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -263,12 +297,13 @@ func (m *memoryStore) InvalidateOpenChallenges(_ context.Context, userID uuid.UU
 	return nil
 }
 
-func (m *memoryStore) CreateChallenge(_ context.Context, userID uuid.UUID, _, _, codeHash string, expiresAt time.Time) (ChallengeRecord, error) {
+func (m *memoryStore) CreateChallenge(_ context.Context, userID uuid.UUID, channel, _, codeHash string, expiresAt time.Time) (ChallengeRecord, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	c := ChallengeRecord{
 		ID:          uuid.New(),
 		UserID:      userID,
+		Channel:     channel,
 		CodeHash:    codeHash,
 		MaxAttempts: 5,
 		ExpiresAt:   expiresAt,

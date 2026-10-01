@@ -305,6 +305,51 @@ func (h *Handler) DeleteBudget(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+type smsIngestBody struct {
+	Text      string     `json:"text"`
+	AccountID *uuid.UUID `json:"account_id"`
+	Create    bool       `json:"create"`
+}
+
+func (h *Handler) IngestSMS(w http.ResponseWriter, r *http.Request) {
+	var body smsIngestBody
+	if err := httpx.Decode(r, &body); err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	out, err := h.svc.IngestSMS(r.Context(), auth.UserIDFrom(r.Context()), SMSIngestInput{
+		Text: body.Text, AccountID: body.AccountID, Create: body.Create,
+	})
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, out)
+}
+
+type receiptScanBody struct {
+	Mime         string     `json:"mime"`
+	ImageBase64  string     `json:"image_base64"`
+	AccountID    *uuid.UUID `json:"account_id"`
+	Create       bool       `json:"create"`
+}
+
+func (h *Handler) ScanReceipt(w http.ResponseWriter, r *http.Request) {
+	var body receiptScanBody
+	if err := httpx.Decode(r, &body); err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	out, err := h.svc.ScanReceipt(r.Context(), auth.UserIDFrom(r.Context()), ReceiptScanInput{
+		Mime: body.Mime, Base64: body.ImageBase64, AccountID: body.AccountID, Create: body.Create,
+	})
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, out)
+}
+
 func parseEntryID(r *http.Request) (uuid.UUID, error) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {

@@ -12,6 +12,15 @@ import {
   type WealthSummary,
 } from './api';
 import { stripAmount } from './amountFormat';
+import {
+  addCalendarMonths,
+  dateFromCalendarParts,
+  daysInCalendarMonth,
+  formatCalendarMonthLabel,
+  getCalendarParts,
+  toIsoLocal,
+} from './calendarMath';
+import { useDatePrefs } from './datePrefs';
 import { SearchSelect } from './SearchSelect';
 import { IconClose, IconRepeat } from './icons';
 import { listCashflowDrafts, removeCashflowDraft, type CashflowDraft } from './offlineDrafts';
@@ -35,29 +44,37 @@ type Props = {
   reloadToken?: number;
 };
 
-function monthBounds(d: Date): { from: string; to: string; label: string; day: string; short: string; y: number; m: number } {
-  const from = new Date(Date.UTC(d.getFullYear(), d.getMonth(), 1));
-  const to = new Date(Date.UTC(d.getFullYear(), d.getMonth() + 1, 1));
+function monthBounds(
+  d: Date,
+  calendarId?: string | null,
+): {
+  from: string;
+  to: string;
+  label: string;
+  day: string;
+  short: string;
+  calYear: number;
+  calMonth: number;
+  dim: number;
+  padStart: number;
+} {
+  const parts = getCalendarParts(d, calendarId);
+  const dim = daysInCalendarMonth(calendarId, parts.year, parts.month);
+  const fromDate = dateFromCalendarParts(calendarId, parts.year, parts.month, 1) ?? d;
+  const nextMonth = addCalendarMonths(fromDate, calendarId, 1);
+  const label = formatCalendarMonthLabel(calendarId, parts.year, parts.month);
+  const shortMonths = formatCalendarMonthLabel(calendarId, parts.year, parts.month).split(' ')[0] || label;
   return {
-    from: from.toISOString().slice(0, 10),
-    to: to.toISOString().slice(0, 10),
-    label: from.toLocaleDateString(undefined, { month: 'long', year: 'numeric', timeZone: 'UTC' }),
-    day: String(d.getDate()),
-    short: d.toLocaleDateString(undefined, { month: 'short', year: 'numeric' }),
-    y: d.getFullYear(),
-    m: d.getMonth(),
+    from: toIsoLocal(fromDate),
+    to: toIsoLocal(nextMonth),
+    label,
+    day: String(parts.day),
+    short: shortMonths,
+    calYear: parts.year,
+    calMonth: parts.month,
+    dim,
+    padStart: fromDate.getDay(),
   };
-}
-
-function toIsoLocal(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-
-function daysInMonth(year: number, monthIndex: number): number {
-  return new Date(year, monthIndex + 1, 0).getDate();
 }
 
 function loanRemaining(loan: Loan): number {
@@ -78,6 +95,8 @@ export function ExpensesScreen({
   reloadToken = 0,
 }: Props) {
   const { colors } = useTheme();
+  const datePrefs = useDatePrefs();
+  const calendarId = datePrefs.calendarId || user.calendar_id || 'gregorian';
   const [summary, setSummary] = useState<CashflowSummary | null>(null);
   const [wealth, setWealth] = useState<WealthSummary | null>(null);
   const [income, setIncome] = useState<CashflowEntry[]>([]);
@@ -95,7 +114,7 @@ export function ExpensesScreen({
   const [selectedDate, setSelectedDate] = useState(() => new Date());
   const [calendarOpen, setCalendarOpen] = useState(false);
 
-  const period = useMemo(() => monthBounds(selectedDate), [selectedDate]);
+  const period = useMemo(() => monthBounds(selectedDate, calendarId), [selectedDate, calendarId]);
   const selectedIso = useMemo(() => toIsoLocal(selectedDate), [selectedDate]);
   const preferred = (user.default_currency_code || 'USD').toUpperCase();
 
@@ -219,10 +238,20 @@ export function ExpensesScreen({
     ...breakdown.filter((b) => b.currency_code === currency).map((b) => Number(b.amount) || 0),
   );
 
-  const openLoans = useMemo(
-    () => loans.filter((l) => ['active', 'overdue', 'repayment_pending', 'pending'].includes(l.status)),
-    [loans],
-  );
+  const openLoans = useMemo(() => {
+    const requireApproval = user.loan_require_approval !== false;
+    return loans.filter((l) => {
+      if (['active', 'overdue', 'repayment_pending'].includes(l.status)) return true;
+      if (l.status !== 'pending') return false;
+      // Pending: count on creator's side only when approval is off.
+      if (requireApproval) return false;
+      const me = user.id;
+      if (l.proposed_by_user_id && l.proposed_by_user_id === me) return true;
+      // Alone loans (no peer wait) — include
+      if (l.borrower?.id === me && l.lender?.id === me) return true;
+      return false;
+    });
+  }, [loans, user.id, user.loan_require_approval]);
   const loanIn = useMemo(
     () => openLoans.filter((l) => l.your_role === 'lender').reduce((s, l) => s + loanRemaining(l), 0),
     [openLoans],
@@ -333,19 +362,11 @@ export function ExpensesScreen({
             }}
           >
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <Pressable
-                onPress={() =>
-                  setSelectedDate(new Date(selectedDate.getFullYear(), selectedDate.getMonth() - 1, 1))
-                }
-              >
+              <Pressable onPress={() => setSelectedDate(addCalendarMonths(selectedDate, calendarId, -1))}>
                 <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 14 }}>‹</Text>
               </Pressable>
               <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>{period.label}</Text>
-              <Pressable
-                onPress={() =>
-                  setSelectedDate(new Date(selectedDate.getFullYear(), selectedDate.getMonth() + 1, 1))
-                }
-              >
+              <Pressable onPress={() => setSelectedDate(addCalendarMonths(selectedDate, calendarId, 1))}>
                 <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 14 }}>›</Text>
               </Pressable>
             </View>
@@ -366,21 +387,25 @@ export function ExpensesScreen({
               ))}
             </View>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
-              {Array.from({ length: new Date(period.y, period.m, 1).getDay() }).map((_, i) => (
+              {Array.from({ length: period.padStart }).map((_, i) => (
                 <View key={`pad-${i}`} style={{ width: `${100 / 7}%`, height: 36 }} />
               ))}
-              {Array.from({ length: daysInMonth(period.y, period.m) }, (_, i) => i + 1).map((dayNum) => {
-                const iso = `${period.y}-${String(period.m + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
+              {Array.from({ length: period.dim }, (_, i) => i + 1).map((dayNum) => {
+                const dayDate = dateFromCalendarParts(calendarId, period.calYear, period.calMonth, dayNum);
+                const iso = dayDate ? toIsoLocal(dayDate) : '';
                 const active = selectedIso === iso;
                 const has =
-                  income.some((e) => e.occurred_at.slice(0, 10) === iso) ||
-                  expenseRows.some((e) => e.occurred_at.slice(0, 10) === iso);
+                  !!iso &&
+                  (income.some((e) => e.occurred_at.slice(0, 10) === iso) ||
+                    expenseRows.some((e) => e.occurred_at.slice(0, 10) === iso));
                 return (
                   <Pressable
-                    key={iso}
+                    key={iso || `d-${dayNum}`}
                     onPress={() => {
-                      setSelectedDate(new Date(period.y, period.m, dayNum));
-                      setCalendarOpen(false);
+                      if (dayDate) {
+                        setSelectedDate(dayDate);
+                        setCalendarOpen(false);
+                      }
                     }}
                     style={{
                       width: `${100 / 7}%`,

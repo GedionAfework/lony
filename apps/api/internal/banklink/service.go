@@ -42,12 +42,50 @@ type Store interface {
 	UpdateConnectionStatus(ctx context.Context, userID, id uuid.UUID, status string) error
 	SetConnectionAccess(ctx context.Context, id uuid.UUID, accessToken, itemID, institution string) error
 	DeleteConnection(ctx context.Context, userID, id uuid.UUID) error
+	GetAccessToken(ctx context.Context, userID, id uuid.UUID) (string, error)
+	GetSyncCursor(ctx context.Context, userID, id uuid.UUID) (string, error)
+	SetSyncState(ctx context.Context, userID, id uuid.UUID, cursor string, accountID *uuid.UUID, syncedAt time.Time) error
+}
+
+type AccountCreator interface {
+	Create(ctx context.Context, userID uuid.UUID, in AccountCreateInput) (AccountRef, error)
+}
+
+type CashflowCreator interface {
+	Create(ctx context.Context, userID uuid.UUID, in CashflowCreateInput) error
+	NoteExists(ctx context.Context, userID uuid.UUID, accountID uuid.UUID, notePrefix string) (bool, error)
+}
+
+type AccountCreateInput struct {
+	Name             string
+	AccountType      string
+	CurrencyCode     string
+	Balance          string
+	InstitutionLabel *string
+}
+
+type AccountRef struct {
+	ID           uuid.UUID
+	CurrencyCode string
+}
+
+type CashflowCreateInput struct {
+	Kind         string
+	Title        string
+	Amount       string
+	CurrencyCode string
+	Category     string
+	AccountID    *uuid.UUID
+	Note         *string
+	OccurredAt   time.Time
 }
 
 type Service struct {
-	store Store
-	cfg   Config
-	http  *http.Client
+	store    Store
+	cfg      Config
+	http     *http.Client
+	accounts AccountCreator
+	cashflow CashflowCreator
 }
 
 func NewService(store Store, cfg Config) *Service {
@@ -61,6 +99,11 @@ func NewService(store Store, cfg Config) *Service {
 		cfg:   cfg,
 		http:  &http.Client{Timeout: 45 * time.Second},
 	}
+}
+
+func (s *Service) SetLedger(accounts AccountCreator, cashflow CashflowCreator) {
+	s.accounts = accounts
+	s.cashflow = cashflow
 }
 
 func (s *Service) Available() bool {

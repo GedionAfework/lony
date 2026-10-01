@@ -18,12 +18,15 @@ import { Card, EmptyState, Field, Money, PrimaryButton } from './ui';
 
 type Tab = 'overview' | 'cashflow' | 'debts' | 'goals' | 'analysis' | 'reports' | 'coach';
 
+type CoachAction = { label: string; deep_link: string };
+
 type Props = {
   user: User;
   token: string;
   dashboard: Dashboard | null;
   formatMoney: (amount: string | null | undefined, currency: string | null | undefined, locale?: string) => string;
   onError?: (message: string) => void;
+  onOpenDeepLink?: (deepLink: string) => void;
 };
 
 function convert(amount: number, from: string, to: string, rates: Record<string, number>): number {
@@ -285,7 +288,7 @@ function CategoryBars({
   );
 }
 
-export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError }: Props) {
+export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError, onOpenDeepLink }: Props) {
   const { colors } = useTheme();
   const preferred = (user.default_currency_code || '').toUpperCase();
   const [tab, setTab] = useState<Tab>('overview');
@@ -298,6 +301,7 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError }
   const [disclaimer, setDisclaimer] = useState('');
   const [coachMsg, setCoachMsg] = useState('');
   const [coachMessages, setCoachMessages] = useState<CoachMessage[]>([]);
+  const [coachActions, setCoachActions] = useState<CoachAction[]>([]);
   const [coachBusy, setCoachBusy] = useState(false);
   const [report, setReport] = useState<AIReport | null>(null);
   const [reportBusy, setReportBusy] = useState(false);
@@ -452,6 +456,7 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError }
     const question = coachMsg.trim();
     setCoachBusy(true);
     setCoachMsg('');
+    setCoachActions([]);
     const userBubble: CoachMessage = {
       id: `local-u-${Date.now()}`,
       role: 'user',
@@ -478,6 +483,7 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError }
         },
         onDone: (coach) => {
           setDisclaimer(coach.disclaimer || disclaimer);
+          setCoachActions(coach.actions ?? []);
           setCoachMessages((prev) =>
             prev.map((m) => (m.id === assistantId ? { ...m, content: coach.reply } : m)),
           );
@@ -956,6 +962,26 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError }
                   ))}
                 </View>
               )}
+              {coachActions.length > 0 && onOpenDeepLink ? (
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+                  {coachActions.map((a) => (
+                    <Pressable
+                      key={`${a.label}-${a.deep_link}`}
+                      onPress={() => onOpenDeepLink(a.deep_link)}
+                      style={{
+                        paddingHorizontal: 12,
+                        paddingVertical: 8,
+                        borderRadius: radii.full,
+                        backgroundColor: colors.primarySoft,
+                        borderWidth: 1,
+                        borderColor: colors.primary,
+                      }}
+                    >
+                      <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 13 }}>{a.label}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              ) : null}
               <Field
                 label="Your question"
                 value={coachMsg}

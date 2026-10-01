@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"time"
@@ -26,6 +27,7 @@ import (
 	"equilend/api/internal/banklink"
 	"equilend/api/internal/score"
 	"equilend/api/internal/legal"
+	"equilend/api/internal/localization"
 	"equilend/api/internal/loans"
 	"equilend/api/internal/notifications"
 	"equilend/api/internal/privacy"
@@ -37,6 +39,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -58,6 +61,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 	expensesSvc.SetLoans(loansSvc)
 	accountsSvc := accounts.NewService(store.MoneyAccountsAdapter(sqlStore))
 	accountsSvc.SetLoans(loansSvc)
+	accountsSvc.SetPrefs(sqlStore)
 	expensesSvc.SetAccounts(accountsSvc)
 	expensesH := expenses.NewHandler(expensesSvc)
 	accountsH := accounts.NewHandler(accountsSvc)
@@ -78,7 +82,9 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 	scoreSvc.SetCash(store.ScoreCashAdapter(sqlStore))
 	scoreSvc.SetGate(friendsSvc)
 	scoreH := score.NewHandler(scoreSvc)
+	fxClient := fx.New()
 	adminSvc := admin.NewService(store.AdminAdapter(sqlStore))
+	adminSvc.SetFX(fxClient)
 	if n, err := adminSvc.BootstrapAdmins(context.Background(), cfg.AdminEmails); err != nil {
 		panic(err)
 	} else if n > 0 {
@@ -86,6 +92,18 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 		_ = n
 	}
 	adminH := admin.NewHandler(adminSvc)
+	authH = authH.WithAdminEnrich(adminSvc.PermissionsFor)
+	locSvc := localization.NewService(store.LocalizationAdapter(sqlStore))
+	_ = locSvc.SeedEnglishIfEmpty(context.Background())
+	locSvc.SetAudit(func(ctx context.Context, actorID string, action string, meta map[string]any) {
+		uid, err := uuid.Parse(actorID)
+		if err != nil {
+			return
+		}
+		raw, _ := json.Marshal(meta)
+		adminSvc.RecordAudit(ctx, uid, action, nil, raw)
+	})
+	locH := localization.NewHandler(locSvc)
 	privacySvc := privacy.NewService(store.PrivacyAdapter(sqlStore))
 	privacyH := privacy.NewHandler(privacySvc)
 	aiSvc := ai.NewService(store.AIAdapter(sqlStore))
@@ -105,6 +123,10 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 		RedirectURI: cfg.PlaidRedirectURI,
 		PublicBase:  cfg.PublicBaseURL,
 	})
+	bankLinkSvc.SetLedger(
+		banklink.AccountsBridge{Svc: accountsSvc},
+		banklink.CashflowBridge{Svc: expensesSvc, Notes: sqlStore},
+	)
 	bankLinkH := banklink.NewHandler(bankLinkSvc)
 	banksSvc := banks.NewService(sqlStore, loansSvc, friendsSvc, cfg.BankKey)
 	banksH := banks.NewHandler(banksSvc)
@@ -112,11 +134,14 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 	repayH := repayments.NewHandler(repaySvc).WithMedia(mediaStore, sqlStore)
 	notifySvc := notifications.NewService(sqlStore, notifications.NewPusher(cfg.ExpoAccessToken))
 	notifyH := notifications.NewHandler(notifySvc)
+	goalsSvc.SetMilestoneNotifier(notifications.GoalHooks{Svc: notifySvc})
 	loansSvc.SetHooks(notifications.LoanHooks{Svc: notifySvc})
 	loansSvc.SetBond(friendsSvc)
 	friendsSvc.SetNotifier(notifications.FriendHooks{Svc: notifySvc})
 	repaySvc.SetNotifier(notifications.RepayHooks{Svc: notifySvc})
 	repaySvc.SetBond(friendsSvc)
+	expensesSvc.SetNotifier(notifications.CashflowHooks{Svc: notifySvc})
+	expensesSvc.SetReceipts(aiSvc)
 
 	chatSvc := chat.NewService(sqlStore, mediaStore, friendsSvc)
 	chatSvc.SetLoans(loansSvc)
@@ -136,7 +161,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 		fast := middleware.Timeout(30 * time.Second)(next)
 		slow := middleware.Timeout(120 * time.Second)(next)
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			if strings.HasSuffix(req.URL.Path, "/ai/coach/messages/stream") {
+			if strings.HasSuffix(req.URL.Path, "/ai/coach/messages/stream") || strings.HasSuffix(req.URL.Path, "/cashflow/receipt-scan") {
 				slow.ServeHTTP(w, req)
 				return
 			}
@@ -169,25 +194,31 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 
 	legalH := legal.NewHandler()
 	railsH := rails.NewHandler()
-	fxH := fx.NewHandler(fx.New())
+	fxH := fx.NewHandler(fxClient)
 
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Group(func(r chi.Router) {
 			r.Use(authLimit.Middleware)
 			r.With(idem.Handler("auth.register")).Post("/auth/register", authH.Register)
 			r.With(idem.Handler("auth.verify")).Post("/auth/verify", authH.Verify)
+			r.With(idem.Handler("auth.resend")).Post("/auth/resend-verification", authH.ResendVerification)
+			r.With(idem.Handler("auth.forgot")).Post("/auth/forgot-password", authH.ForgotPassword)
+			r.With(idem.Handler("auth.reset")).Post("/auth/reset-password", authH.ResetPassword)
 			r.With(idem.Handler("auth.login")).Post("/auth/login", authH.Login)
 			r.With(idem.Handler("auth.refresh")).Post("/auth/refresh", authH.Refresh)
 			r.With(idem.Handler("auth.oauth")).Post("/auth/oauth", authH.OAuth)
 			r.Get("/legal/tos", legalH.GetTOS)
 			r.Get("/payment-rails", railsH.List)
 			r.Get("/fx/rates", fxH.Rates)
+			r.Get("/locales", locH.ListLocalesPublic)
+			r.Get("/calendars", locH.ListCalendarsPublic)
 		})
 
 		r.Group(func(r chi.Router) {
 			r.Use(apiLimit.Middleware)
-			r.Use(auth.Middleware(cfg.JWTSecret))
+			r.Use(auth.Middleware(cfg.JWTSecret, sqlStore))
 			r.Post("/auth/logout", authH.Logout)
+			r.With(idem.Handler("auth.password")).Post("/me/password", authH.ChangePassword)
 			r.Get("/me", authH.Me)
 			r.Patch("/me", authH.PatchMe)
 			r.Get("/me/export", privacyH.Export)
@@ -229,12 +260,15 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 			r.With(idem.Handler("budgets.delete")).Delete("/budgets/{id}", expensesH.DeleteBudget)
 			r.Get("/cashflow", expensesH.List)
 			r.With(idem.Handler("cashflow.create")).Post("/cashflow", expensesH.Create)
+			r.With(idem.Handler("cashflow.sms")).Post("/cashflow/sms-ingest", expensesH.IngestSMS)
+			r.With(idem.Handler("cashflow.receipt")).Post("/cashflow/receipt-scan", expensesH.ScanReceipt)
 			r.Patch("/cashflow/{id}", expensesH.Update)
 			r.With(idem.Handler("cashflow.delete")).Delete("/cashflow/{id}", expensesH.Delete)
 			r.With(idem.Handler("cashflow.share")).Post("/cashflow/{id}/share", expensesH.Share)
 			r.With(idem.Handler("cashflow.receive")).Post("/cashflow/{id}/receive", expensesH.Receive)
 			r.Get("/goals", goalsH.List)
 			r.With(idem.Handler("goals.create")).Post("/goals", goalsH.Create)
+			r.Post("/goals/preview-url", goalsH.PreviewURL)
 			r.Get("/goals/{id}", goalsH.Get)
 			r.Patch("/goals/{id}", goalsH.Update)
 			r.With(idem.Handler("goals.cover")).Post("/goals/{id}/cover", goalsH.UploadCover)
@@ -252,27 +286,43 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 
 			r.Get("/catalogs/types", adminH.ListCatalogTypes)
 			r.Get("/catalogs/institutions", adminH.ListCatalogInstitutions)
+			r.Get("/themes/system", adminH.ListThemes)
 
 			r.Route("/admin", func(r chi.Router) {
 				r.Use(admin.RequireAdmin(adminSvc))
-				r.Get("/overview", adminH.Overview)
-				r.Get("/users", adminH.ListUsers)
-				r.Get("/users/{userID}", adminH.GetUser)
-				r.With(idem.Handler("admin.suspend")).Post("/users/{userID}/suspend", adminH.Suspend)
-				r.With(idem.Handler("admin.unsuspend")).Post("/users/{userID}/unsuspend", adminH.Unsuspend)
-				r.With(idem.Handler("admin.plan")).Patch("/users/{userID}/plan", adminH.SetPlanTier)
-				r.Get("/audit", adminH.ListAudit)
-				r.Get("/settings", adminH.GetSettings)
-				r.With(idem.Handler("admin.ai")).Post("/settings/ai", adminH.SetAIDisabled)
-				r.Get("/catalogs/types", adminH.ListCatalogTypesAdmin)
-				r.With(idem.Handler("admin.catalog.type")).Post("/catalogs/types", adminH.CreateCatalogType)
-				r.Patch("/catalogs/types/{typeID}", adminH.UpdateCatalogType)
-				r.Get("/catalogs/institutions", adminH.ListCatalogInstitutionsAdmin)
-				r.With(idem.Handler("admin.catalog.inst")).Post("/catalogs/institutions", adminH.CreateCatalogInstitution)
-				r.Patch("/catalogs/institutions/{institutionID}", adminH.UpdateCatalogInstitution)
-				r.Get("/categories", adminH.ListSystemCategories)
-				r.With(idem.Handler("admin.category")).Post("/categories", adminH.CreateSystemCategory)
-				r.Patch("/categories/{categoryID}", adminH.UpdateSystemCategory)
+				r.With(admin.RequirePerm(adminSvc, admin.PermOverviewRead)).Get("/overview", adminH.Overview)
+				r.With(admin.RequirePerm(adminSvc, admin.PermUsersRead)).Get("/users", adminH.ListUsers)
+				r.With(admin.RequirePerm(adminSvc, admin.PermUsersRead)).Get("/users/{userID}", adminH.GetUser)
+				r.With(admin.RequirePerm(adminSvc, admin.PermUsersWrite), idem.Handler("admin.suspend")).Post("/users/{userID}/suspend", adminH.Suspend)
+				r.With(admin.RequirePerm(adminSvc, admin.PermUsersWrite), idem.Handler("admin.unsuspend")).Post("/users/{userID}/unsuspend", adminH.Unsuspend)
+				r.With(admin.RequirePerm(adminSvc, admin.PermUsersWrite), idem.Handler("admin.plan")).Patch("/users/{userID}/plan", adminH.SetPlanTier)
+				r.With(admin.RequirePerm(adminSvc, admin.PermRolesManage)).Patch("/users/{userID}/role", adminH.SetUserRole)
+				r.With(admin.RequirePerm(adminSvc, admin.PermAuditRead)).Get("/audit", adminH.ListAudit)
+				r.With(admin.RequirePerm(adminSvc, admin.PermSettingsAI)).Get("/settings", adminH.GetSettings)
+				r.With(admin.RequirePerm(adminSvc, admin.PermSettingsAI), idem.Handler("admin.ai")).Post("/settings/ai", adminH.SetAIDisabled)
+				r.With(admin.RequirePerm(adminSvc, admin.PermCategoriesRead)).Get("/catalogs/types", adminH.ListCatalogTypesAdmin)
+				r.With(admin.RequirePerm(adminSvc, admin.PermCategoriesWrite), idem.Handler("admin.catalog.type")).Post("/catalogs/types", adminH.CreateCatalogType)
+				r.With(admin.RequirePerm(adminSvc, admin.PermCategoriesWrite)).Patch("/catalogs/types/{typeID}", adminH.UpdateCatalogType)
+				r.With(admin.RequirePerm(adminSvc, admin.PermCategoriesRead)).Get("/catalogs/institutions", adminH.ListCatalogInstitutionsAdmin)
+				r.With(admin.RequirePerm(adminSvc, admin.PermCategoriesWrite), idem.Handler("admin.catalog.inst")).Post("/catalogs/institutions", adminH.CreateCatalogInstitution)
+				r.With(admin.RequirePerm(adminSvc, admin.PermCategoriesWrite)).Patch("/catalogs/institutions/{institutionID}", adminH.UpdateCatalogInstitution)
+				r.With(admin.RequirePerm(adminSvc, admin.PermCategoriesRead)).Get("/categories", adminH.ListSystemCategories)
+				r.With(admin.RequirePerm(adminSvc, admin.PermCategoriesWrite), idem.Handler("admin.category")).Post("/categories", adminH.CreateSystemCategory)
+				r.With(admin.RequirePerm(adminSvc, admin.PermCategoriesWrite)).Patch("/categories/{categoryID}", adminH.UpdateSystemCategory)
+				r.With(admin.RequirePerm(adminSvc, admin.PermThemesRead)).Get("/themes", adminH.ListThemesAdmin)
+				r.With(admin.RequirePerm(adminSvc, admin.PermThemesWrite), idem.Handler("admin.theme")).Post("/themes", adminH.CreateTheme)
+				r.With(admin.RequirePerm(adminSvc, admin.PermThemesWrite)).Patch("/themes/{themeID}", adminH.UpdateTheme)
+				r.With(admin.RequirePerm(adminSvc, admin.PermLocalization)).Get("/locales", locH.ListLocalesAdmin)
+				r.With(admin.RequirePerm(adminSvc, admin.PermLocalization)).Get("/locales/catalog", locH.Catalog)
+				r.With(admin.RequirePerm(adminSvc, admin.PermLocalization), idem.Handler("admin.locale")).Post("/locales", locH.UploadLocale)
+				r.With(admin.RequirePerm(adminSvc, admin.PermLocalization)).Patch("/locales/{code}", locH.PatchLocale)
+				r.With(admin.RequirePerm(adminSvc, admin.PermLocalization)).Delete("/locales/{code}", locH.DeleteLocale)
+				r.With(admin.RequirePerm(adminSvc, admin.PermLocalization)).Get("/calendars", locH.ListCalendarsAdmin)
+				r.With(admin.RequirePerm(adminSvc, admin.PermLocalization)).Patch("/calendars/{id}", locH.PatchCalendar)
+				r.With(admin.RequirePerm(adminSvc, admin.PermRolesManage)).Get("/permissions", adminH.ListPermissions)
+				r.With(admin.RequirePerm(adminSvc, admin.PermRolesManage)).Get("/roles", adminH.ListRoles)
+				r.With(admin.RequirePerm(adminSvc, admin.PermRolesManage), idem.Handler("admin.role")).Post("/roles", adminH.CreateRole)
+				r.With(admin.RequirePerm(adminSvc, admin.PermRolesManage)).Patch("/roles/{roleID}", adminH.UpdateRole)
 			})
 
 			r.Get("/ai/insights", aiH.ListInsights)
@@ -288,6 +338,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 			r.With(idem.Handler("banklink.session")).Post("/bank-links/session", bankLinkH.CreateSession)
 			r.With(idem.Handler("banklink.exchange")).Post("/bank-links/exchange", bankLinkH.Exchange)
 			r.With(idem.Handler("banklink.disconnect")).Post("/bank-links/{id}/disconnect", bankLinkH.Disconnect)
+			r.With(idem.Handler("banklink.sync")).Post("/bank-links/{id}/sync", bankLinkH.Sync)
 			r.With(idem.Handler("loans.create")).Post("/loans", loansH.Create)
 			r.Get("/loans", loansH.List)
 			r.Get("/loans/{id}", loansH.Get)

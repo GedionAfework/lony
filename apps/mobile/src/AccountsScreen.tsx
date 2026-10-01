@@ -140,7 +140,12 @@ export function AccountsScreen({ user, token, formatMoney, onError, reloadToken 
         if (params.get('cancelled')) return;
         const publicToken = params.get('public_token');
         if (publicToken) {
-          await api.exchangeBankLink(token, publicToken);
+          const linked = await api.exchangeBankLink(token, publicToken);
+          try {
+            await api.syncBankLink(token, linked.connection.id);
+          } catch {
+            /* sync can be retried manually */
+          }
           await reload();
         }
       }
@@ -533,8 +538,41 @@ export function AccountsScreen({ user, token, formatMoney, onError, reloadToken 
               <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }}>
                 {c.institution_label || c.provider}
               </Text>
-              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>{c.status}</Text>
+              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
+                {c.status}
+                {c.last_synced_at ? ` · synced ${new Date(c.last_synced_at).toLocaleDateString()}` : ''}
+              </Text>
             </View>
+            <Pressable
+              onPress={async () => {
+                setBusy(true);
+                try {
+                  const res = await api.syncBankLink(token, c.id);
+                  onError(`Synced ${res.imported} new · skipped ${res.skipped}`);
+                  await reload();
+                } catch (e) {
+                  onError(e instanceof Error ? e.message : 'Sync failed');
+                } finally {
+                  setBusy(false);
+                }
+              }}
+              hitSlop={8}
+              accessibilityLabel="Sync bank"
+              disabled={busy || c.status !== 'active'}
+              style={{
+                paddingHorizontal: 10,
+                height: 40,
+                borderRadius: radii.full,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: colors.primarySoft,
+                borderWidth: 1,
+                borderColor: colors.primary,
+                opacity: busy || c.status !== 'active' ? 0.45 : 1,
+              }}
+            >
+              <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 12 }}>Sync</Text>
+            </Pressable>
             <Pressable
               onPress={async () => {
                 try {

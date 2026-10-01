@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Image, Pressable, Text, View } from 'react-native';
+import { EncodingType, cacheDirectory, documentDirectory, downloadAsync, readAsStringAsync } from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import { api, type Goal, type MoneyAccount, type User } from './api';
 import { stripAmount } from './amountFormat';
@@ -75,6 +76,8 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
   const [targetDate, setTargetDate] = useState('');
   const [accountId, setAccountId] = useState('');
   const [note, setNote] = useState('');
+  const [productUrl, setProductUrl] = useState('');
+  const [urlBusy, setUrlBusy] = useState(false);
   const [pendingCover, setPendingCover] = useState<{
     filename: string;
     mime: string;
@@ -140,6 +143,7 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
     setTargetDate('');
     setAccountId('');
     setNote('');
+    setProductUrl('');
     setPendingCover(null);
   }
 
@@ -183,6 +187,49 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
       return;
     }
     setPendingCover(payload);
+  }
+
+  async function fetchCoverFromUrl(imageUrl: string) {
+    try {
+      const base = cacheDirectory || documentDirectory || '';
+      const dest = `${base}goal-cover-${Date.now()}.jpg`;
+      const downloaded = await downloadAsync(imageUrl, dest);
+      const base64 = await readAsStringAsync(downloaded.uri, {
+        encoding: EncodingType.Base64,
+      });
+      if (!base64) return;
+      setPendingCover({
+        filename: 'product.jpg',
+        mime: 'image/jpeg',
+        attachment_base64: base64,
+        preview: downloaded.uri,
+      });
+    } catch {
+      // Cover is best-effort; title/price still apply.
+    }
+  }
+
+  async function onFetchProductUrl() {
+    const url = productUrl.trim();
+    if (!url) {
+      onError('Paste a product link first');
+      return;
+    }
+    setUrlBusy(true);
+    try {
+      const res = await api.previewGoalUrl(token, url);
+      const p = res.preview;
+      if (p.title) setTitle(p.title.slice(0, 120));
+      if (p.price) setTarget(p.price);
+      if (p.currency && p.currency.length === 3) setCurrency(p.currency.toUpperCase());
+      if (!goalType || goalType === 'savings') setGoalType('purchase');
+      if (p.description && !note.trim()) setNote(p.description.slice(0, 400));
+      if (p.image_url) await fetchCoverFromUrl(p.image_url);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Could not read that link');
+    } finally {
+      setUrlBusy(false);
+    }
   }
 
   async function onCreate() {
@@ -301,6 +348,12 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
       <View style={{ gap: space.md }}>
         <ScreenHeader title="New plan" onBack={goIndex} />
         <Card>
+          <Field label="Product link" value={productUrl} onChange={setProductUrl} placeholder="https://…" />
+          <SecondaryButton
+            label={urlBusy ? 'Reading link…' : 'Fetch from link'}
+            onPress={() => void onFetchProductUrl()}
+            disabled={urlBusy || busy}
+          />
           <Field label="Title" value={title} onChange={setTitle} />
           <SearchSelect label="Type" value={goalType} onChange={setGoalType} options={goalTypes} />
           {goalType === 'other' ? <Field label="Type name" value={otherType} onChange={setOtherType} /> : null}

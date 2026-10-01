@@ -22,6 +22,9 @@ type PublicUser struct {
 	AvatarURL             *string    `json:"avatar_url,omitempty"`
 	Timezone              string     `json:"timezone"`
 	Locale                string     `json:"locale"`
+	CalendarID            string     `json:"calendar_id"`
+	HourCycle             string     `json:"hour_cycle"`
+	LoanRequireApproval   bool       `json:"loan_require_approval"`
 	DefaultCurrencyCode   *string    `json:"default_currency_code"`
 	EmailVerified         bool       `json:"email_verified"`
 	Status                string     `json:"status"`

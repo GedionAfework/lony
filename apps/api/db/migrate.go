@@ -150,7 +150,25 @@ func applyLaterMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	if err := applyMigration(ctx, pool, "00032", "migrations/00032_plan_tier.sql"); err != nil {
 		return err
 	}
-	return applyMigration(ctx, pool, "00033", "migrations/00033_category_active_goal_catalog.sql")
+	if err := applyMigration(ctx, pool, "00033", "migrations/00033_category_active_goal_catalog.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00034", "migrations/00034_bank_link_sync_goals.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00035", "migrations/00035_admin_rbac_themes.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00036", "migrations/00036_localization.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00037", "migrations/00037_calendars_sms_receipts.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00038", "migrations/00038_loan_require_approval.sql"); err != nil {
+		return err
+	}
+	return applyMigration(ctx, pool, "00039", "migrations/00039_calendar_hourcycle_fix.sql")
 }
 
 func applyMigration(ctx context.Context, pool *pgxpool.Pool, version, path string) error {

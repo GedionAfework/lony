@@ -8,6 +8,7 @@ import (
 	"equilend/api/internal/store/sqlc"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -112,6 +113,24 @@ func (s *SQLStore) RevokeSession(ctx context.Context, id uuid.UUID) error {
 	return s.q.RevokeSession(ctx, id)
 }
 
+func (s *SQLStore) RevokeAllSessions(ctx context.Context, userID uuid.UUID) error {
+	_, err := s.pool.Exec(ctx, `UPDATE user_sessions SET revoked_at = now() WHERE user_id = $1 AND revoked_at IS NULL`, userID)
+	return err
+}
+
+func (s *SQLStore) UpdatePasswordHash(ctx context.Context, id uuid.UUID, passwordHash string) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE users SET password_hash = $2, updated_at = now()
+		WHERE id = $1 AND deleted_at IS NULL`, id, passwordHash)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
 func (s *SQLStore) InvalidateOpenChallenges(ctx context.Context, userID uuid.UUID) error {
 	return s.q.InvalidateOpenChallenges(ctx, userID)
 }
@@ -182,6 +201,7 @@ func mapChallenge(row sqlc.VerificationChallenge) auth.ChallengeRecord {
 	return auth.ChallengeRecord{
 		ID:          row.ID,
 		UserID:      row.UserID,
+		Channel:     row.Channel,
 		CodeHash:    row.CodeHash,
 		Attempts:    row.Attempts,
 		MaxAttempts: row.MaxAttempts,

@@ -31,21 +31,38 @@ export function DrawerMenu({ open, active, locale, onClose, onSelect }: Props) {
             width: '78%',
             maxWidth: 320,
             backgroundColor: colors.surface,
-            paddingTop: space.xl,
+            paddingTop: space.xl + 8,
             paddingHorizontal: space.md,
             paddingBottom: space.lg,
-            gap: 4,
+            gap: 6,
             borderRightWidth: 1,
             borderRightColor: colors.border,
+            shadowColor: '#0F172A',
+            shadowOpacity: 0.12,
+            shadowRadius: 24,
+            shadowOffset: { width: 4, height: 0 },
+            elevation: 8,
           }}
         >
           <Text
             style={{
+              color: colors.text,
+              fontFamily: fonts.uiBold,
+              fontSize: 22,
+              marginBottom: 4,
+              letterSpacing: -0.3,
+            }}
+          >
+            Lony
+          </Text>
+          <Text
+            style={{
               color: colors.muted,
               fontFamily: fonts.uiSemi,
-              fontSize: 12,
-              letterSpacing: 1,
-              marginBottom: 12,
+              fontSize: 11,
+              letterSpacing: 1.2,
+              textTransform: 'uppercase',
+              marginBottom: 16,
             }}
           >
             {t(locale, 'menu')}
@@ -64,13 +81,15 @@ export function DrawerMenu({ open, active, locale, onClose, onSelect }: Props) {
                   paddingHorizontal: 14,
                   borderRadius: radii.md,
                   backgroundColor: selected ? colors.primarySoft : 'transparent',
+                  borderWidth: selected ? 1 : 0,
+                  borderColor: selected ? colors.primary : 'transparent',
                 }}
               >
                 <Text
                   style={{
                     color: selected ? colors.primary : colors.text,
                     fontFamily: fonts.uiSemi,
-                    fontSize: 17,
+                    fontSize: 16,
                   }}
                 >
                   {t(locale, item.key)}

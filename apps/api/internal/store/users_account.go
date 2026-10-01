@@ -11,10 +11,12 @@ import (
 func (s *SQLStore) hydrateUser(ctx context.Context, u auth.UserRecord) (auth.UserRecord, error) {
 	err := s.pool.QueryRow(ctx, `
 SELECT first_name, middle_name, last_name, country_code, preferred_auth_provider, tos_version, tos_accepted_at,
-       COALESCE(role, 'user'), COALESCE(plan_tier, 'free')
+       COALESCE(role, 'user'), COALESCE(plan_tier, 'free'),
+       COALESCE(calendar_id, 'gregorian'), COALESCE(hour_cycle, '24h'),
+       COALESCE(loan_require_approval, true)
 FROM users WHERE id=$1`, u.ID).Scan(
 		&u.FirstName, &u.MiddleName, &u.LastName, &u.CountryCode, &u.PreferredAuthProvider, &u.TOSVersion, &u.TOSAcceptedAt,
-		&u.Role, &u.PlanTier,
+		&u.Role, &u.PlanTier, &u.CalendarID, &u.HourCycle, &u.LoanRequireApproval,
 	)
 	if err != nil {
 		return u, err
@@ -24,6 +26,12 @@ FROM users WHERE id=$1`, u.ID).Scan(
 	}
 	if u.PlanTier == "" {
 		u.PlanTier = "free"
+	}
+	if u.CalendarID == "" {
+		u.CalendarID = "gregorian"
+	}
+	if u.HourCycle == "" {
+		u.HourCycle = "24h"
 	}
 	return u, nil
 }
@@ -44,6 +52,9 @@ UPDATE users SET
   default_currency_code = COALESCE($12, default_currency_code),
   tos_version = COALESCE($13, tos_version),
   tos_accepted_at = COALESCE($14, tos_accepted_at),
+  calendar_id = COALESCE($15, calendar_id),
+  hour_cycle = COALESCE($16, hour_cycle),
+  loan_require_approval = COALESCE($17, loan_require_approval),
   updated_at = now()
 WHERE id=$1 AND deleted_at IS NULL`,
 		id,
@@ -51,11 +62,18 @@ WHERE id=$1 AND deleted_at IS NULL`,
 		in.PhoneE164, in.CountryCode, in.PreferredAuthProvider,
 		in.Timezone, in.Locale, in.Currency,
 		in.TOSVersion, in.TOSAcceptedAt,
+		in.CalendarID, in.HourCycle, in.LoanRequireApproval,
 	)
 	if err != nil {
 		return auth.UserRecord{}, err
 	}
 	return s.GetUserByID(ctx, id)
+}
+
+func (s *SQLStore) LoanRequireApproval(ctx context.Context, userID uuid.UUID) (bool, error) {
+	var v bool
+	err := s.pool.QueryRow(ctx, `SELECT COALESCE(loan_require_approval, true) FROM users WHERE id=$1`, userID).Scan(&v)
+	return v, err
 }
 
 func (s *SQLStore) AcceptTOS(ctx context.Context, id uuid.UUID, version string) (auth.UserRecord, error) {

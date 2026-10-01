@@ -17,6 +17,8 @@ import {
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  AppState,
+  type AppStateStatus,
   KeyboardAvoidingView,
   Linking,
   Platform,
@@ -26,11 +28,17 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import { api, DISCLAIMER, type AppNotification, type BankProfile, type BankProfileShare, type CashflowEntry, type Dashboard, type Friendship, type Loan, type LoanInstallment, type Repayment, type SearchHit, type User } from './src/api';
+import { api, DISCLAIMER, setTokenRefresher, type AppNotification, type BankProfile, type BankProfileShare, type CashflowEntry, type Dashboard, type Friendship, type Loan, type LoanInstallment, type Repayment, type SearchHit, type User } from './src/api';
 import { formatMoney as formatMoneyLocale, stripAmount } from './src/amountFormat';
 import { AnalyticsScreen } from './src/AnalyticsScreen';
 import { AppHeader } from './src/AppHeader';
 import { AuthScreens } from './src/AuthScreens';
+import {
+  authenticateWithBiometrics,
+  getBiometricsAvailability,
+  getBiometricsLockEnabled,
+} from './src/biometricsLock';
+import { BiometricsLockScreen } from './src/BiometricsLockScreen';
 import { BottomNav, type TabId } from './src/BottomNav';
 import { COUNTRIES, CURRENCIES } from './src/catalogs';
 import { ChatScreen } from './src/ChatScreen';
@@ -39,10 +47,13 @@ import { DateField } from './src/DateField';
 import { DrawerMenu, type DrawerItem } from './src/DrawerMenu';
 import { AccountsScreen } from './src/AccountsScreen';
 import { CashflowFormScreen, CashflowShowScreen } from './src/CashflowScreens';
+import { DatePrefsProvider } from './src/datePrefs';
 import { ExpensesScreen, type ExpensesTab } from './src/ExpensesScreen';
 import { PlanScreen } from './src/PlanScreen';
-import { IconBank, IconPlus, IconSearch } from './src/icons';
+import { IconBank, IconCamera, IconPlus, IconSearch } from './src/icons';
 import { resolveInstitutionLabel } from './src/institutions';
+import { scanReceiptWithCamera } from './src/receiptScan';
+import { syncBankSms } from './src/smsAutoIngest';
 import { LoansScreen } from './src/LoansScreen';
 import { NewLoanScreen } from './src/NewLoanScreen';
 import { PeerProfileScreen } from './src/PeerProfileScreen';
@@ -58,6 +69,7 @@ import { ThemeProvider, fonts, radii, useTheme } from './src/theme';
 import { registerPushToken } from './src/push';
 import { storageDelete, storageGet, storageSet } from './src/secureStorage';
 import { SearchSelect } from './src/SearchSelect';
+import { applyNativeDirection, parseLocaleMessages, setActivePack } from './src/i18n';
 import { SettingsScreen, shareExportJSON, shareExportNote } from './src/SettingsScreen';
 import { Card, DueDatePill, EmptyState, Field, Money, PrimaryButton, ScreenHeader, SecondaryButton, SectionLabel, useAppStyles } from './src/ui';
 
@@ -105,6 +117,8 @@ type Screen =
   | 'login'
   | 'register'
   | 'verify'
+  | 'forgot'
+  | 'reset'
   | 'onboarding'
   | 'home'
   | 'loans'
@@ -172,6 +186,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   const [planDetailOpen, setPlanDetailOpen] = useState(false);
   const [accountsPanelOpen, setAccountsPanelOpen] = useState(false);
   const [settingsDetailOpen, setSettingsDetailOpen] = useState(false);
+  const [avatarLocalUri, setAvatarLocalUri] = useState<string | null>(null);
   const [loanRole, setLoanRole] = useState<'borrower' | 'lender'>('borrower');
   const [loanKind, setLoanKind] = useState<'one_time' | 'long_term'>('one_time');
   const [partyMode, setPartyMode] = useState<'alone' | 'shared'>('alone');
@@ -220,6 +235,9 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   const [profileCountry, setProfileCountry] = useState('');
   const [profileAuthPref, setProfileAuthPref] = useState<'email' | 'google' | 'telegram'>('email');
   const [profileLocale, setProfileLocale] = useState('en');
+  const [profileCalendarId, setProfileCalendarId] = useState('gregorian');
+  const [profileHourCycle, setProfileHourCycle] = useState('24h');
+  const [loanRequireApproval, setLoanRequireApproval] = useState(true);
   const [paymentRails, setPaymentRails] = useState<import('./src/api').PaymentRail[]>([]);
   const [selectedRail, setSelectedRail] = useState('');
   const [bankCountry, setBankCountry] = useState('');
@@ -236,8 +254,32 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
   const [code, setCode] = useState('');
+  const [newPassword, setNewPassword] = useState('');
   const [devCode, setDevCode] = useState<string | undefined>();
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [changePasswordNew, setChangePasswordNew] = useState('');
   const [acceptedDisclaimer, setAcceptedDisclaimer] = useState(false);
+
+  async function loadLocalePack(code: string) {
+    const localeCode = code || 'en';
+    try {
+      const res = await api.listLocales(localeCode);
+      if ('locale' in res && res.locale) {
+        setActivePack({
+          locale: res.locale.code,
+          name: res.locale.name,
+          dir: res.locale.dir,
+          messages: parseLocaleMessages(res.locale.messages),
+        });
+        applyNativeDirection(res.locale.code);
+        return;
+      }
+    } catch {
+      // fall through to bundled English
+    }
+    setActivePack({ locale: localeCode });
+    applyNativeDirection(localeCode);
+  }
 
   function applyUserProfile(next: User) {
     setUser(next);
@@ -250,11 +292,15 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     setProfileCountry(next.country_code ?? '');
     setProfileAuthPref((next.preferred_auth_provider as 'email' | 'google' | 'telegram') || 'email');
     setProfileLocale(next.locale || 'en');
+    setProfileCalendarId(next.calendar_id || 'gregorian');
+    setProfileHourCycle(next.hour_cycle === 'ethiopian_6' ? '24h' : next.hour_cycle || '24h');
+    setLoanRequireApproval(next.loan_require_approval !== false);
     setProfileCurrency(next.default_currency_code ?? '');
     setProfileTimezone(next.timezone || 'UTC');
     setCurrency((c) => c || next.default_currency_code || '');
     setDashCurrency((c) => c || next.default_currency_code || '');
     setOnboardingTos(Boolean(next.tos_accepted_at));
+    void loadLocalePack(next.locale || 'en');
   }
 
   function enterAuthed(next: User, access: string) {
@@ -263,6 +309,79 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     registerPushToken(access).catch(() => undefined);
     setScreen(next.profile_complete ? 'home' : 'onboarding');
   }
+
+  const [appLocked, setAppLocked] = useState(false);
+  const [bioLabel, setBioLabel] = useState('Biometrics');
+  const [unlockError, setUnlockError] = useState<string | null>(null);
+  const [unlocking, setUnlocking] = useState(false);
+  const appStateRef = useRef<AppStateStatus>(AppState.currentState);
+  const unlockingRef = useRef(false);
+
+  async function promptUnlock() {
+    if (unlockingRef.current) return;
+    unlockingRef.current = true;
+    setUnlocking(true);
+    setUnlockError(null);
+    try {
+      const ok = await authenticateWithBiometrics('Unlock Lony');
+      if (ok) {
+        setAppLocked(false);
+        setUnlockError(null);
+      } else {
+        setUnlockError('Authentication failed. Try again.');
+      }
+    } finally {
+      setUnlocking(false);
+      unlockingRef.current = false;
+    }
+  }
+
+  useEffect(() => {
+    if (!token) {
+      setAppLocked(false);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      const on = await getBiometricsLockEnabled();
+      if (cancelled) return;
+      if (!on) {
+        setAppLocked(false);
+        return;
+      }
+      const avail = await getBiometricsAvailability();
+      if (cancelled) return;
+      setBioLabel(avail.label);
+      setAppLocked(true);
+      void promptUnlock();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      const prev = appStateRef.current;
+      appStateRef.current = next;
+      if (!token) return;
+      // Lock only when fully backgrounded (not inactive — Face ID UI would re-trigger).
+      if (next === 'background') {
+        void getBiometricsLockEnabled().then((on) => {
+          if (on) setAppLocked(true);
+        });
+      }
+      if (prev === 'background' && next === 'active') {
+        void getBiometricsLockEnabled().then((on) => {
+          if (on) {
+            setAppLocked(true);
+            void promptUnlock();
+          }
+        });
+      }
+    });
+    return () => sub.remove();
+  }, [token]);
 
   function syncDashCurrency(dash: Dashboard | null, preferred?: string | null) {
     const codes = dash?.by_currency?.map((c) => c.currency_code).filter(Boolean) ?? [];
@@ -280,6 +399,29 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
       return codes[0];
     });
   }
+
+  useEffect(() => {
+    setTokenRefresher(async () => {
+      const refresh = await storageGet(REFRESH_KEY);
+      if (!refresh) return null;
+      try {
+        const tokens = await api.refresh(refresh);
+        await storageSet(ACCESS_KEY, tokens.access_token);
+        await storageSet(REFRESH_KEY, tokens.refresh_token);
+        setToken(tokens.access_token);
+        applyUserProfile(tokens.user);
+        return tokens.access_token;
+      } catch {
+        await storageDelete(ACCESS_KEY);
+        await storageDelete(REFRESH_KEY);
+        setToken(null);
+        setUser(null);
+        setScreen('login');
+        return null;
+      }
+    });
+    return () => setTokenRefresher(null);
+  }, []);
 
   useEffect(() => {
     (async () => {
@@ -339,6 +481,12 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     return () => sub.remove();
   }, [acceptedDisclaimer]);
 
+  useEffect(() => {
+    if (screen !== 'settings') {
+      setSettingsDetailOpen(false);
+    }
+  }, [screen]);
+
   async function persistTokens(access: string, refresh: string, nextUser: User) {
     await storageSet(ACCESS_KEY, access);
     await storageSet(REFRESH_KEY, refresh);
@@ -373,6 +521,71 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     }
   }
 
+  async function onResendVerification() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api.resendVerification(email.trim());
+      setDevCode(res.verification_code);
+      setError(res.verification_hint);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not resend code');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onSendResetCode() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api.forgotPassword(email.trim());
+      setDevCode(res.verification_code);
+      setCode('');
+      setNewPassword('');
+      setScreen('reset');
+      setError(res.verification_hint);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not send reset code');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onResetPassword() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.resetPassword(email.trim(), code.trim(), newPassword);
+      setPassword(newPassword);
+      setNewPassword('');
+      setCode('');
+      setDevCode(undefined);
+      setScreen('login');
+      setError('Password updated. Sign in with your new password.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not reset password');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onChangePassword() {
+    if (!token) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.changePassword(token, currentPassword, changePasswordNew);
+      setCurrentPassword('');
+      setChangePasswordNew('');
+      setError('Password updated.');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not change password');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function onLogin() {
     setBusy(true);
     setError(null);
@@ -381,7 +594,13 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
       await persistTokens(tokens.access_token, tokens.refresh_token, tokens.user);
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Sign in failed';
-      setError(message);
+      const networkish =
+        /network request failed|failed to fetch|timeout|ECONNREFUSED|unreachable/i.test(message);
+      setError(
+        networkish
+          ? `Cannot reach API (${process.env.EXPO_PUBLIC_API_URL || 'not set'}). Check Wi‑Fi and that the API is running.`
+          : message,
+      );
       if (message.toLowerCase().includes('verify')) {
         setScreen('verify');
       }
@@ -414,6 +633,8 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     setNotifications([]);
     setUnreadCount(0);
     setPassword('');
+    setAvatarLocalUri(null);
+    setSettingsDetailOpen(false);
     setScreen('login');
   }
 
@@ -530,6 +751,27 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         setError(e instanceof Error ? e.message : 'Could not load friends');
       });
     }
+  }, [screen, token]);
+
+  useEffect(() => {
+    if (screen !== 'home' || !token) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const acc = await api.listAccounts(token);
+        if (cancelled) return;
+        const accountId = acc.accounts?.[0]?.id;
+        const res = await syncBankSms(token, accountId);
+        if (!cancelled && res.imported > 0) {
+          setCashflowReload((n) => n + 1);
+        }
+      } catch {
+        /* silent — SMS sync is best-effort */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [screen, token]);
 
   useEffect(() => {
@@ -660,15 +902,45 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         country_code: profileCountry.trim().toUpperCase(),
         preferred_auth_provider: profileAuthPref,
         locale: profileLocale.trim() || 'en',
+        calendar_id: profileCalendarId.trim() || 'gregorian',
+        hour_cycle: profileHourCycle.trim() || '24h',
         timezone: profileTimezone.trim() || 'UTC',
         default_currency_code: profileCurrency.trim().toUpperCase(),
       });
       applyUserProfile(res.user);
       setCurrency(res.user.default_currency_code ?? '');
       setDashCurrency(res.user.default_currency_code ?? '');
+      setSettingsDetailOpen(false);
       setScreen(res.user.profile_complete ? 'home' : 'onboarding');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not update profile');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onSaveRegion() {
+    if (!token) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api.patchMe(token, {
+        locale: profileLocale.trim() || 'en',
+        calendar_id: profileCalendarId.trim() || 'gregorian',
+        hour_cycle: profileHourCycle.trim() === 'ethiopian_6' ? '24h' : profileHourCycle.trim() || '24h',
+        timezone: profileTimezone.trim() || 'UTC',
+        ...(profileCurrency.trim().length === 3
+          ? { default_currency_code: profileCurrency.trim().toUpperCase() }
+          : {}),
+        loan_require_approval: loanRequireApproval,
+      });
+      applyUserProfile(res.user);
+      setCurrency(res.user.default_currency_code ?? '');
+      setDashCurrency(res.user.default_currency_code ?? '');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not update preferences');
     } finally {
       setBusy(false);
     }
@@ -683,20 +955,40 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
       quality: 0.8,
       base64: true,
     });
-    if (picked.canceled || !picked.assets?.[0]?.base64) {
+    if (picked.canceled || !picked.assets?.[0]) {
       return;
     }
     const asset = picked.assets[0];
+    let b64 = asset.base64 ?? null;
+    if (!b64 && asset.uri) {
+      try {
+        const legacy = await import('expo-file-system/legacy');
+        b64 = await legacy.readAsStringAsync(asset.uri, { encoding: 'base64' });
+      } catch {
+        setError('Could not read the selected photo');
+        return;
+      }
+    }
+    if (!b64) {
+      setError('Could not read the selected photo');
+      return;
+    }
+    if (asset.uri) {
+      setAvatarLocalUri(asset.uri);
+    }
     setBusy(true);
     setError(null);
     try {
+      const mime = asset.mimeType || (asset.uri?.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg');
       const res = await api.uploadAvatar(token, {
-        filename: asset.fileName ?? 'avatar.jpg',
-        mime: asset.mimeType ?? 'image/jpeg',
-        attachment_base64: asset.base64!,
+        filename: asset.fileName ?? (mime === 'image/png' ? 'avatar.png' : 'avatar.jpg'),
+        mime,
+        attachment_base64: b64,
       });
-      setUser(res.user);
+      applyUserProfile(res.user);
+      // Keep localUri so preview stays visible while AuthenticatedAvatar caches remote.
     } catch (e) {
+      setAvatarLocalUri(null);
       setError(e instanceof Error ? e.message : 'Could not upload photo');
     } finally {
       setBusy(false);
@@ -704,10 +996,6 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   }
 
   async function onGoogleSignIn() {
-    if (!acceptedDisclaimer) {
-      setError('Accept the disclaimer to continue');
-      return;
-    }
     setBusy(true);
     setError(null);
     try {
@@ -745,10 +1033,6 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   }
 
   async function onTelegramSignIn() {
-    if (!acceptedDisclaimer) {
-      setError('Accept the disclaimer to continue');
-      return;
-    }
     setBusy(true);
     setError(null);
     try {
@@ -827,6 +1111,16 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         loanKind === 'long_term'
           ? Boolean(principalRaw && currency.trim() && months >= 2)
           : Boolean(principalRaw && dueDate.trim() && currency.trim());
+      if (loanKind === 'one_time' && dueDate.trim() && dueDate.trim() < new Date().toISOString().slice(0, 10)) {
+        setError('Due date cannot be before today');
+        setBusy(false);
+        return;
+      }
+      if (loanKind === 'one_time' && startDate.trim() && dueDate.trim() && dueDate.trim() < startDate.trim()) {
+        setError('Due date cannot be before the start date');
+        setBusy(false);
+        return;
+      }
       if (principalRaw && !currency.trim()) {
         setError('Select a currency');
         setBusy(false);
@@ -1349,9 +1643,65 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
       </Pressable>
     ) : undefined;
 
+  const headerCamera =
+    showChrome && screen === 'home' && token ? (
+      <Pressable
+        onPress={async () => {
+          try {
+            setBusy(true);
+            let accountId: string | undefined;
+            try {
+              const acc = await api.listAccounts(token);
+              accountId = acc.accounts?.[0]?.id;
+            } catch {
+              /* optional */
+            }
+            const entry = await scanReceiptWithCamera(token, accountId);
+            if (entry) setCashflowReload((n) => n + 1);
+          } catch (e) {
+            setError(e instanceof Error ? e.message : 'Receipt scan failed');
+          } finally {
+            setBusy(false);
+          }
+        }}
+        accessibilityRole="button"
+        accessibilityLabel="Scan receipt"
+        style={{
+          width: 40,
+          height: 40,
+          borderRadius: radii.md,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: colors.surfaceMuted,
+          borderWidth: 1,
+          borderColor: colors.border,
+        }}
+      >
+        <IconCamera size={18} color={colors.text} />
+      </Pressable>
+    ) : undefined;
+
+  const headerRight = headerSearch ?? headerCamera;
+
   return (
+    <DatePrefsProvider
+      value={{
+        calendarId: profileCalendarId || user?.calendar_id || 'gregorian',
+        hourCycle: profileHourCycle || user?.hour_cycle || '24h',
+        timeZone: profileTimezone || user?.timezone || 'UTC',
+        locale: profileLocale || user?.locale || 'en',
+      }}
+    >
     <SafeAreaView style={styles.safe}>
       <StatusBar style={resolved === 'dark' ? 'light' : 'dark'} />
+      {token && appLocked ? (
+        <BiometricsLockScreen
+          busy={unlocking}
+          label={bioLabel}
+          error={unlockError}
+          onUnlock={() => void promptUnlock()}
+        />
+      ) : null}
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={styles.flex}
@@ -1418,15 +1768,16 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
           automaticallyAdjustKeyboardInsets
         >
           {error ? <Text style={styles.error}>{error}</Text> : null}
-          {showChrome ? <AppHeader onMenu={() => setDrawerOpen(true)} right={headerSearch} /> : null}
+          {showChrome ? <AppHeader onMenu={() => setDrawerOpen(true)} right={headerRight} /> : null}
 
-          {!authed && (screen === 'login' || screen === 'register' || screen === 'verify') ? (
+          {!authed && (screen === 'login' || screen === 'register' || screen === 'verify' || screen === 'forgot' || screen === 'reset') ? (
             <AuthScreens
               mode={screen}
               email={email}
               password={password}
               displayName={displayName}
               code={code}
+              newPassword={newPassword}
               devCode={devCode}
               busy={busy}
               acceptedDisclaimer={acceptedDisclaimer}
@@ -1434,14 +1785,23 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               onPassword={setPassword}
               onDisplayName={setDisplayName}
               onCode={setCode}
+              onNewPassword={setNewPassword}
               onToggleDisclaimer={() => setAcceptedDisclaimer((v) => !v)}
               onLogin={onLogin}
               onRegister={onRegister}
               onVerify={onVerify}
+              onResend={onResendVerification}
+              onSendReset={onSendResetCode}
+              onResetPassword={onResetPassword}
               onGoogle={onGoogleSignIn}
               onTelegram={onTelegramSignIn}
               onGoLogin={() => setScreen('login')}
               onGoRegister={() => setScreen('register')}
+              onGoForgot={() => {
+                setError(null);
+                setDevCode(undefined);
+                setScreen('forgot');
+              }}
             />
           ) : null}
 
@@ -1588,6 +1948,31 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               dashboard={dashboard}
               formatMoney={formatMoney}
               onError={(message) => setError(message)}
+              onOpenDeepLink={(link) => {
+                const path = link.replace(/^lony:\/\//i, '').replace(/^\//, '').toLowerCase();
+                if (path === 'expenses' || path === 'expenses/') {
+                  setExpensesTab('dashboard');
+                  setScreen('home');
+                  return;
+                }
+                if (path === 'expenses/new' || path.startsWith('expenses/new')) {
+                  setCashflowKind('expense');
+                  setExpensesTab('expenses');
+                  setScreen('cashflow-new');
+                  return;
+                }
+                if (path === 'plan' || path.startsWith('plan')) {
+                  setScreen('plan');
+                  return;
+                }
+                if (path === 'loans' || path.startsWith('loans')) {
+                  setScreen('loans');
+                  return;
+                }
+                if (path === 'insights' || path.startsWith('insights') || path === 'analytics') {
+                  setScreen('analytics');
+                }
+              }}
             />
           ) : null}
 
@@ -1632,6 +2017,8 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               currency={profileCurrency}
               locale={profileLocale}
               timezone={profileTimezone}
+              calendarId={profileCalendarId}
+              hourCycle={profileHourCycle}
               authPref={profileAuthPref}
               profileComplete={Boolean(user.profile_complete)}
               tosAccepted={Boolean(user.tos_accepted_at)}
@@ -1640,6 +2027,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               planTier={user.plan_tier}
               token={token ?? undefined}
               avatarUrl={user.avatar_url}
+              avatarLocalUri={avatarLocalUri}
               busy={busy}
               onSettingsPageChange={setSettingsDetailOpen}
               onUsername={setProfileUsername}
@@ -1652,8 +2040,13 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               onCurrency={setProfileCurrency}
               onLocale={setProfileLocale}
               onTimezone={setProfileTimezone}
+              onCalendarId={setProfileCalendarId}
+              onHourCycle={setProfileHourCycle}
+              loanRequireApproval={loanRequireApproval}
+              onLoanRequireApproval={setLoanRequireApproval}
               onAuthPref={setProfileAuthPref}
               onSave={onSaveProfile}
+              onSaveRegion={onSaveRegion}
               onAvatar={onPickAvatar}
               onTos={() => setScreen('tos')}
               onBanks={() => {
@@ -1665,6 +2058,11 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               onDeleteAccount={onDeleteAccount}
               onClearAI={onClearAI}
               onLogout={onLogout}
+              currentPassword={currentPassword}
+              changePasswordNew={changePasswordNew}
+              onCurrentPassword={setCurrentPassword}
+              onChangePasswordNew={setChangePasswordNew}
+              onChangePassword={onChangePassword}
             />
           ) : null}
 
@@ -1932,7 +2330,12 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                   <Field label="Principal" value={principal} onChange={setPrincipal} money />
                   <Field label="Flat interest %" value={interest} onChange={setInterest} keyboardType="decimal-pad" />
                   <SearchSelect label="Currency" value={currency} onChange={setCurrency} options={CURRENCIES} />
-                  <DateField label="Due date" value={dueDate} onChange={setDueDate} />
+                  <DateField
+                    label="Due date"
+                    value={dueDate}
+                    onChange={setDueDate}
+                    minDate={new Date().toISOString().slice(0, 10)}
+                  />
                   <Field label="Note" value={note} onChange={setNote} />
                   <PrimaryButton label={busy ? 'Workingâ€¦' : 'Send terms'} onPress={onProposeTerms} disabled={busy} />
                 </Card>
@@ -2403,5 +2806,6 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         ) : null}
       </KeyboardAvoidingView>
     </SafeAreaView>
+    </DatePrefsProvider>
   );
 }

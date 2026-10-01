@@ -18,17 +18,17 @@ const TABS: { id: TabId; label: string }[] = [
 
 export function BottomNav({ active, unread = 0, onChange }: Props) {
   const { colors, resolved } = useTheme();
-  const glassBg = resolved === 'dark' ? 'rgba(18, 26, 43, 0.72)' : 'rgba(255, 255, 255, 0.72)';
-  const glassBorder = resolved === 'dark' ? 'rgba(255, 255, 255, 0.14)' : 'rgba(15, 23, 42, 0.08)';
+  const glassBg = resolved === 'dark' ? 'rgba(18, 26, 43, 0.88)' : 'rgba(255, 255, 255, 0.92)';
+  const glassBorder = resolved === 'dark' ? 'rgba(255, 255, 255, 0.12)' : 'rgba(15, 23, 42, 0.06)';
 
   return (
     <View
       pointerEvents="box-none"
       style={{
         position: 'absolute',
-        left: 16,
-        right: 16,
-        bottom: 12,
+        left: 20,
+        right: 20,
+        bottom: 16,
         alignItems: 'center',
       }}
     >
@@ -36,20 +36,21 @@ export function BottomNav({ active, unread = 0, onChange }: Props) {
         style={{
           flexDirection: 'row',
           alignItems: 'center',
-          justifyContent: 'space-between',
-          paddingHorizontal: 18,
-          paddingVertical: 10,
+          justifyContent: 'space-around',
+          paddingHorizontal: 12,
+          paddingVertical: 8,
           borderRadius: radii.full,
           backgroundColor: glassBg,
           borderWidth: 1,
           borderColor: glassBorder,
           shadowColor: '#0F172A',
-          shadowOpacity: resolved === 'dark' ? 0.35 : 0.12,
-          shadowRadius: 24,
-          shadowOffset: { width: 0, height: 8 },
-          elevation: 10,
-          gap: 20,
-          minWidth: 280,
+          shadowOpacity: resolved === 'dark' ? 0.4 : 0.1,
+          shadowRadius: 20,
+          shadowOffset: { width: 0, height: 10 },
+          elevation: 12,
+          minWidth: 260,
+          maxWidth: 340,
+          width: '100%',
         }}
       >
         {TABS.map((tab) => {
@@ -63,25 +64,35 @@ export function BottomNav({ active, unread = 0, onChange }: Props) {
               accessibilityLabel={tab.label}
               accessibilityState={{ selected: isActive }}
               style={{
-                width: 52,
-                height: 48,
+                flex: 1,
+                maxWidth: 88,
+                height: 52,
                 borderRadius: radii.full,
                 alignItems: 'center',
                 justifyContent: 'center',
+                gap: 2,
                 backgroundColor: isActive ? colors.primarySoft : 'transparent',
                 position: 'relative',
-                marginHorizontal: 4,
               }}
             >
               {tab.id === 'home' ? <IconHome size={20} color={tint} /> : null}
               {tab.id === 'loans' ? <IconLoans size={20} color={tint} /> : null}
               {tab.id === 'chats' ? <IconChat size={20} color={tint} /> : null}
+              <Text
+                style={{
+                  color: tint,
+                  fontSize: 10,
+                  fontFamily: isActive ? fonts.uiSemi : fonts.ui,
+                }}
+              >
+                {tab.label}
+              </Text>
               {tab.id === 'chats' && unread > 0 ? (
                 <View
                   style={{
                     position: 'absolute',
                     top: 6,
-                    right: 8,
+                    right: 18,
                     backgroundColor: colors.secondary,
                     borderRadius: radii.full,
                     minWidth: 14,

@@ -6,7 +6,9 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
+	"equilend/api/internal/fx"
 	"equilend/api/internal/httpx"
 
 	"github.com/google/uuid"
@@ -15,10 +17,15 @@ import (
 
 type Service struct {
 	store Store
+	fx    *fx.Client
 }
 
 func NewService(store Store) *Service {
 	return &Service{store: store}
+}
+
+func (s *Service) SetFX(c *fx.Client) {
+	s.fx = c
 }
 
 func (s *Service) BootstrapAdmins(ctx context.Context, emails []string) (int, error) {
@@ -37,7 +44,24 @@ func (s *Service) IsAdmin(ctx context.Context, userID uuid.UUID) (bool, error) {
 }
 
 func (s *Service) Overview(ctx context.Context) (Overview, error) {
-	return s.store.Overview(ctx)
+	out, err := s.store.Overview(ctx)
+	if err != nil {
+		return out, err
+	}
+	if s.fx != nil {
+		rates, asOf, ferr := s.fx.Rates(ctx, "USD")
+		if ferr != nil {
+			out.FXOK = false
+			out.FXError = ferr.Error()
+		} else {
+			out.FXOK = len(rates) > 0
+			out.FXBase = "USD"
+			if !asOf.IsZero() {
+				out.FXAsOf = asOf.UTC().Format(time.RFC3339)
+			}
+		}
+	}
+	return out, nil
 }
 
 func (s *Service) ListUsers(ctx context.Context, q, status string, limit, offset int) ([]UserListItem, int, error) {
@@ -83,7 +107,7 @@ func (s *Service) Suspend(ctx context.Context, actor, target uuid.UUID) (UserDet
 	}
 	_ = s.store.RevokeUserSessions(ctx, target)
 	meta, _ := json.Marshal(map[string]any{"previous_status": detail.Status})
-	_ = s.store.InsertAudit(ctx, actor, ActionSuspend, &target, meta)
+	s.audit(ctx, actor, ActionSuspend, &target, meta)
 	return s.store.GetUser(ctx, target)
 }
 
@@ -99,7 +123,7 @@ func (s *Service) Unsuspend(ctx context.Context, actor, target uuid.UUID) (UserD
 		return UserDetail{}, err
 	}
 	meta, _ := json.Marshal(map[string]any{"previous_status": detail.Status})
-	_ = s.store.InsertAudit(ctx, actor, ActionUnsuspend, &target, meta)
+	s.audit(ctx, actor, ActionUnsuspend, &target, meta)
 	return s.store.GetUser(ctx, target)
 }
 
@@ -121,7 +145,7 @@ func (s *Service) SetPlanTier(ctx context.Context, actor, target uuid.UUID, plan
 		return UserDetail{}, err
 	}
 	meta, _ := json.Marshal(map[string]any{"previous": detail.PlanTier, "plan_tier": planTier})
-	_ = s.store.InsertAudit(ctx, actor, ActionSetPlanTier, &target, meta)
+	s.audit(ctx, actor, ActionSetPlanTier, &target, meta)
 	return s.store.GetUser(ctx, target)
 }
 
@@ -154,7 +178,7 @@ func (s *Service) SetAIDisabled(ctx context.Context, actor uuid.UUID, disabled b
 		return false, err
 	}
 	meta, _ := json.Marshal(map[string]any{"ai_disabled": disabled})
-	_ = s.store.InsertAudit(ctx, actor, action, nil, meta)
+	s.audit(ctx, actor, action, nil, meta)
 	return disabled, nil
 }
 
@@ -220,7 +244,7 @@ func (s *Service) CreateCatalogType(ctx context.Context, actor uuid.UUID, kind, 
 		return CatalogType{}, err
 	}
 	meta, _ := json.Marshal(map[string]any{"entity": "type", "id": out.ID, "kind": kind, "code": code})
-	_ = s.store.InsertAudit(ctx, actor, ActionCatalogCreate, nil, meta)
+	s.audit(ctx, actor, ActionCatalogCreate, nil, meta)
 	return out, nil
 }
 
@@ -242,14 +266,19 @@ func (s *Service) UpdateCatalogType(ctx context.Context, actor, id uuid.UUID, la
 		return CatalogType{}, err
 	}
 	meta, _ := json.Marshal(map[string]any{"entity": "type", "id": id})
-	_ = s.store.InsertAudit(ctx, actor, ActionCatalogUpdate, nil, meta)
+	s.audit(ctx, actor, ActionCatalogUpdate, nil, meta)
 	return out, nil
 }
 
 func (s *Service) ListCatalogInstitutions(ctx context.Context, typeKind, typeCode string, activeOnly bool) ([]CatalogInstitution, error) {
 	typeKind = strings.TrimSpace(typeKind)
 	typeCode = strings.TrimSpace(typeCode)
-	if typeKind != "" && !validCatalogKind(typeKind) {
+	// goal_type must never filter institutions (legacy Catalogs quirk)
+	if typeKind == KindGoalType {
+		typeKind = ""
+		typeCode = ""
+	}
+	if typeKind != "" && typeKind != KindAccountType && typeKind != KindInstitutionType {
 		return nil, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
 			"type_kind": "must be account_type or institution_type",
 		})
@@ -265,7 +294,7 @@ func (s *Service) CreateCatalogInstitution(ctx context.Context, actor uuid.UUID,
 	if code == "" {
 		code = slugCode(label)
 	}
-	if !validCatalogKind(typeKind) {
+	if typeKind != KindAccountType && typeKind != KindInstitutionType {
 		return CatalogInstitution{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
 			"type_kind": "must be account_type or institution_type",
 		})
@@ -297,7 +326,7 @@ func (s *Service) CreateCatalogInstitution(ctx context.Context, actor uuid.UUID,
 		return CatalogInstitution{}, err
 	}
 	meta, _ := json.Marshal(map[string]any{"entity": "institution", "id": out.ID, "code": code})
-	_ = s.store.InsertAudit(ctx, actor, ActionCatalogCreate, nil, meta)
+	s.audit(ctx, actor, ActionCatalogCreate, nil, meta)
 	return out, nil
 }
 
@@ -314,7 +343,7 @@ func (s *Service) UpdateCatalogInstitution(ctx context.Context, actor, id uuid.U
 	if typeKind != nil {
 		v := strings.TrimSpace(*typeKind)
 		typeKind = &v
-		if !validCatalogKind(v) {
+		if v != KindAccountType && v != KindInstitutionType {
 			return CatalogInstitution{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
 				"type_kind": "must be account_type or institution_type",
 			})
@@ -350,7 +379,7 @@ func (s *Service) UpdateCatalogInstitution(ctx context.Context, actor, id uuid.U
 		return CatalogInstitution{}, err
 	}
 	meta, _ := json.Marshal(map[string]any{"entity": "institution", "id": id})
-	_ = s.store.InsertAudit(ctx, actor, ActionCatalogUpdate, nil, meta)
+	s.audit(ctx, actor, ActionCatalogUpdate, nil, meta)
 	return out, nil
 }
 
@@ -397,7 +426,7 @@ func (s *Service) CreateSystemCategory(ctx context.Context, actor uuid.UUID, kin
 		return SystemCategory{}, err
 	}
 	meta, _ := json.Marshal(map[string]any{"entity": "category", "id": out.ID, "kind": kind})
-	_ = s.store.InsertAudit(ctx, actor, ActionCategoryCreate, nil, meta)
+	s.audit(ctx, actor, ActionCategoryCreate, nil, meta)
 	return out, nil
 }
 
@@ -419,6 +448,6 @@ func (s *Service) UpdateSystemCategory(ctx context.Context, actor, id uuid.UUID,
 		return SystemCategory{}, err
 	}
 	meta, _ := json.Marshal(map[string]any{"entity": "category", "id": id})
-	_ = s.store.InsertAudit(ctx, actor, ActionCategoryUpdate, nil, meta)
+	s.audit(ctx, actor, ActionCategoryUpdate, nil, meta)
 	return out, nil
 }

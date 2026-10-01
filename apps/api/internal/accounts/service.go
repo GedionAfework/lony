@@ -20,9 +20,14 @@ type LoanNets interface {
 	AllForUser(ctx context.Context, actor uuid.UUID) ([]loans.Record, error)
 }
 
+type PrefsReader interface {
+	LoanRequireApproval(ctx context.Context, userID uuid.UUID) (bool, error)
+}
+
 type Service struct {
 	store Store
 	loans LoanNets
+	prefs PrefsReader
 	now   func() time.Time
 }
 
@@ -32,6 +37,10 @@ func NewService(store Store) *Service {
 
 func (s *Service) SetLoans(l LoanNets) {
 	s.loans = l
+}
+
+func (s *Service) SetPrefs(p PrefsReader) {
+	s.prefs = p
 }
 
 func (s *Service) List(ctx context.Context, userID uuid.UUID, includeArchived bool) ([]AccountDTO, error) {
@@ -419,8 +428,14 @@ func (s *Service) Wealth(ctx context.Context, userID uuid.UUID, preferred string
 		if err != nil {
 			return WealthSummary{}, err
 		}
+		requireApproval := true
+		if s.prefs != nil {
+			if v, err := s.prefs.LoanRequireApproval(ctx, userID); err == nil {
+				requireApproval = v
+			}
+		}
 		for _, row := range rows {
-			if !isOpenLoan(row) || row.CurrencyCode == nil || row.ExpectedTotal == nil {
+			if !isOpenLoan(row, userID, requireApproval) || row.CurrencyCode == nil || row.ExpectedTotal == nil {
 				continue
 			}
 			code := strings.ToUpper(*row.CurrencyCode)
@@ -483,10 +498,19 @@ func (s *Service) Wealth(ctx context.Context, userID uuid.UUID, preferred string
 	}, nil
 }
 
-func isOpenLoan(row loans.Record) bool {
+func isOpenLoan(row loans.Record, viewer uuid.UUID, requireApproval bool) bool {
 	switch row.Status {
-	case loans.StatusActive, loans.StatusOverdue, loans.StatusRepaymentPending, loans.StatusPending:
+	case loans.StatusActive, loans.StatusOverdue, loans.StatusRepaymentPending:
 		return true
+	case loans.StatusPending:
+		// Counterparty never counts pending. Creator counts only when approval is not required.
+		if requireApproval {
+			return false
+		}
+		if row.ProposedByUserID != nil && *row.ProposedByUserID == viewer {
+			return true
+		}
+		return false
 	default:
 		return false
 	}

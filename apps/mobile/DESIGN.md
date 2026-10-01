@@ -1,25 +1,23 @@
 ---
 name: Lony
 colors:
-  # Light (default) — white canvas, teal primary
-  background: '#FFFFFF'
+  background: '#F7F9FB'
   surface: '#FFFFFF'
-  surface-muted: '#F4F6F8'
+  surface-muted: '#EEF2F6'
   on-surface: '#0F172A'
   on-surface-variant: '#64748B'
-  outline: '#E8ECF0'
-  primary: '#0D9488'
+  outline: '#E2E8F0'
+  primary: '#1FA8A8'
   on-primary: '#FFFFFF'
-  primary-soft: '#E6F7F5'
+  primary-soft: '#E6F7F6'
   secondary: '#D97706'
   tertiary: '#0284C7'
   error: '#DC2626'
   success: '#0F766E'
-  # Dark
   dark-background: '#0B1220'
   dark-surface: '#121A2B'
   dark-on-surface: '#F1F5F9'
-  dark-primary: '#2DD4BF'
+  dark-primary: '#2EC4C4'
 typography:
   brand:
     fontFamily: Manrope
@@ -39,34 +37,38 @@ typography:
     fontWeight: '500'
 spacing: 4px
 rounding:
-  sm: 8px
+  sm: 10px
   md: 14px
-  lg: 18px
+  lg: 20px
   full: 9999px
 ---
 
 # Lony Design System
 
-Simple white-first ledger UI with optional dark mode. Teal primary, amber secondary, sky tertiary. Manrope for UI, JetBrains Mono for amounts.
+Soft slate canvas with white surfaces, teal primary, amber secondary, sky tertiary. Manrope for UI, JetBrains Mono for amounts. Shared language with the Vite user website (`apps/web`).
 
 ## Theme
 
-- Default: light (`#FFFFFF` background). Toggle persists in SecureStore.
+- Default: light (`#F7F9FB` background). Toggle persists in SecureStore.
 - Dark: deep navy surfaces, teal accents.
 - Status bar follows resolved theme.
+- Admin-published system themes merge with built-ins on the Themes screen.
 
-## Navigation
+## Navigation (mobile)
 
-Bottom bar: Home · Loans · **+** · Chats · Banks · Inbox. FAB creates a loan. Keep one job per screen; avoid nested dashboards.
+- **Bottom bar:** Home · Loans · Chat (floating glass pill).
+- **Drawer:** Expenses/Home, Accounts, Loans, Insights, Plan, Settings.
+- **FAB:** new income/expense on Home; new loan on Loans.
+- One job per screen; avoid nested dashboards.
 
 ## Screens
 
-1. **Auth** — Brand, short disclaimer, form, theme toggle.
-2. **Home** — Net position, quick actions, loan list, friends strip.
-3. **Loan detail** — Status, terms, repayments, payment profile.
-4. **Chats** — Friend DMs (text, emoji, reply, react, file, voice).
-5. **Banks / Inbox** — Payment profiles and notifications.
+1. **Auth** — Brand mark, short product line, calm form card, OAuth, disclaimer.
+2. **Home** — Wealth / cashflow dashboard (Dashboard · Income · Expenses).
+3. **Loans** — Peer loan list and detail / repayments.
+4. **Chats** — Friend DMs (text, emoji, reply, react, file; voice native-only).
+5. **Accounts / Plan / Insights / Banks** — via drawer.
 
 ## Components
 
-Cards with hairline borders (no heavy shadows). Money in mono. Status pills. Segmented currency switch. Theme toggle moon/sun.
+Cards with hairline borders and soft elevation. Money in mono. Status pills. Segmented controls. Primary buttons with light teal glow.

@@ -16,6 +16,9 @@ export type User = {
   avatar_url?: string | null;
   timezone: string;
   locale: string;
+  calendar_id?: string;
+  hour_cycle?: '24h' | '12h' | 'ethiopian_6' | string;
+  loan_require_approval?: boolean;
   default_currency_code: string | null;
   email_verified: boolean;
   status: string;
@@ -23,6 +26,27 @@ export type User = {
   plan_tier?: string;
   created_at: string;
   profile_complete?: boolean;
+};
+
+export type AppLocale = {
+  code: string;
+  name: string;
+  dir: string;
+  enabled: boolean;
+  sort_order: number;
+  messages?: Record<string, string> | string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+export type AppCalendar = {
+  id: string;
+  name: string;
+  enabled: boolean;
+  sort_order: number;
+  config?: Record<string, unknown> | string;
+  created_at?: string;
+  updated_at?: string;
 };
 
 export type TokenResponse = {
@@ -41,7 +65,12 @@ export type ApiError = {
   };
 };
 
-async function request<T>(path: string, init: RequestInit = {}, token?: string): Promise<T> {
+async function request<T>(
+  path: string,
+  init: RequestInit = {},
+  token?: string,
+  opts?: { skipRefresh?: boolean },
+): Promise<T> {
   const headers: Record<string, string> = {
     Accept: 'application/json',
     ...(init.body ? { 'Content-Type': 'application/json' } : {}),
@@ -70,10 +99,42 @@ async function request<T>(path: string, init: RequestInit = {}, token?: string):
     }
   }
   if (!res.ok) {
+    if (res.status === 401 && token && !opts?.skipRefresh && path !== '/auth/refresh' && path !== '/auth/login') {
+      const next = await tryRefreshAccessToken();
+      if (next) {
+        return request<T>(path, init, next, { skipRefresh: true });
+      }
+    }
     const err = data as ApiError | null;
+    const fields = err?.error?.fields;
+    if (fields && typeof fields === 'object') {
+      const detail = Object.entries(fields)
+        .map(([k, v]) => `${k}: ${v}`)
+        .join('; ');
+      if (detail) {
+        throw new Error(detail);
+      }
+    }
     throw new Error(err?.error?.message ?? `Request failed (${res.status})`);
   }
   return data as T;
+}
+
+type TokenRefresher = () => Promise<string | null>;
+let tokenRefresher: TokenRefresher | null = null;
+
+/** Wire from App so 401 responses can rotate the access token mid-session. */
+export function setTokenRefresher(fn: TokenRefresher | null) {
+  tokenRefresher = fn;
+}
+
+async function tryRefreshAccessToken(): Promise<string | null> {
+  if (!tokenRefresher) return null;
+  try {
+    return await tokenRefresher();
+  } catch {
+    return null;
+  }
 }
 
 function idemKey(prefix: string): string {
@@ -100,6 +161,34 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ email, code }),
     }),
+  resendVerification: (email: string) =>
+    request<{ verification_code?: string; verification_hint: string }>('/auth/resend-verification', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('resend') },
+      body: JSON.stringify({ email }),
+    }),
+  forgotPassword: (email: string) =>
+    request<{ verification_code?: string; verification_hint: string }>('/auth/forgot-password', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('forgot') },
+      body: JSON.stringify({ email }),
+    }),
+  resetPassword: (email: string, code: string, newPassword: string) =>
+    request<void>('/auth/reset-password', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('reset') },
+      body: JSON.stringify({ email, code, new_password: newPassword }),
+    }),
+  changePassword: (token: string, currentPassword: string, newPassword: string) =>
+    request<void>(
+      '/me/password',
+      {
+        method: 'POST',
+        headers: { 'Idempotency-Key': idemKey('password') },
+        body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+      },
+      token,
+    ),
   login: (email: string, password: string) =>
     request<TokenResponse>('/auth/login', {
       method: 'POST',
@@ -135,6 +224,9 @@ export const api = {
       preferred_auth_provider?: 'email' | 'google' | 'telegram';
       timezone?: string;
       locale?: string;
+      calendar_id?: string;
+      hour_cycle?: string;
+      loan_require_approval?: boolean;
       default_currency_code?: string;
     },
   ) =>
@@ -142,6 +234,11 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(body),
     }, token),
+  listLocales: (code?: string) =>
+    code
+      ? request<{ locale: AppLocale }>(`/locales?code=${encodeURIComponent(code)}`, { method: 'GET' })
+      : request<{ locales: AppLocale[] }>('/locales', { method: 'GET' }),
+  listCalendars: () => request<{ calendars: AppCalendar[] }>('/calendars', { method: 'GET' }),
   acceptTOS: (token: string) =>
     request<{ user: User; tos_version: string }>('/me/tos', {
       method: 'POST',
@@ -342,6 +439,11 @@ export const api = {
       headers: { 'Idempotency-Key': idemKey('goal-create') },
       body: JSON.stringify(body),
     }, token),
+  previewGoalUrl: (token: string, url: string) =>
+    request<{ preview: GoalUrlPreview }>('/goals/preview-url', {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    }, token),
   updateGoal: (token: string, id: string, body: UpdateGoalBody) =>
     request<{ goal: Goal }>(`/goals/${id}`, {
       method: 'PATCH',
@@ -533,6 +635,17 @@ export const api = {
       headers: { 'Idempotency-Key': idemKey('bank-link-disconnect') },
       body: '{}',
     }, token),
+  syncBankLink: (token: string, id: string) =>
+    request<{
+      imported: number;
+      skipped: number;
+      has_more: boolean;
+      connection: BankLinkConnection;
+    }>(`/bank-links/${id}/sync`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('bank-link-sync') },
+      body: '{}',
+    }, token),
   cashflowSummary: (token: string, query: { from?: string; to?: string } = {}) => {
     const params = new URLSearchParams();
     if (query.from) params.set('from', query.from);
@@ -632,6 +745,50 @@ export const api = {
     request<{ entry: CashflowEntry; loan: Loan }>(`/cashflow/${id}/share`, {
       method: 'POST',
       headers: { 'Idempotency-Key': idemKey('cashflow-share') },
+      body: JSON.stringify(body),
+    }, token),
+  ingestCashflowSms: (
+    token: string,
+    body: { text: string; account_id?: string; create?: boolean },
+  ) =>
+    request<{
+      parsed: {
+        kind?: string;
+        amount?: string;
+        currency_code?: string;
+        account_last4?: string;
+        account_number?: string;
+        counterparty?: string;
+        confidence: number;
+      };
+      entry?: CashflowEntry;
+      duplicate?: boolean;
+    }>('/cashflow/sms-ingest', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('cashflow-sms') },
+      body: JSON.stringify(body),
+    }, token),
+  scanCashflowReceipt: (
+    token: string,
+    body: { mime?: string; image_base64: string; account_id?: string; create?: boolean },
+  ) =>
+    request<{
+      extract: {
+        kind?: string;
+        title?: string;
+        amount?: string;
+        currency_code?: string;
+        merchant?: string;
+        occurred_at?: string;
+        note?: string;
+        account_hint?: string;
+        confidence?: number;
+        matched_entry_id?: string;
+      };
+      entry?: CashflowEntry;
+    }>('/cashflow/receipt-scan', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('cashflow-receipt') },
       body: JSON.stringify(body),
     }, token),
   fxRates: (base: string) =>
@@ -843,6 +1000,7 @@ export type Loan = {
   borrower: LoanParty;
   lender: LoanParty;
   your_role: 'borrower' | 'lender';
+  proposed_by_user_id?: string | null;
   interest_basis: string;
   loan_kind?: 'one_time' | 'long_term';
   principal: string | null;
@@ -1013,6 +1171,16 @@ export type GoalProjection = {
   on_track?: boolean | null;
   target_date?: string | null;
   contribution_count: number;
+};
+
+export type GoalUrlPreview = {
+  url: string;
+  title?: string;
+  description?: string;
+  image_url?: string;
+  price?: string;
+  currency?: string;
+  site_name?: string;
 };
 
 export type CreateGoalBody = {
@@ -1213,6 +1381,12 @@ export type AdminOverview = {
   ai_users_7d: number;
   ai_tokens_7d: number;
   ai_requests_today: number;
+  jobs_failed?: number;
+  jobs_pending?: number;
+  fx_ok?: boolean;
+  fx_base?: string;
+  fx_as_of?: string;
+  fx_error?: string;
 };
 
 export type BankLinkStatus = {

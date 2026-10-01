@@ -23,6 +23,7 @@ type Config struct {
 	BankKey             []byte
 	MediaDir            string
 	GoogleClientID      string
+	GoogleClientIDs     []string
 	TelegramBotToken    string
 	TelegramBotUsername string
 	ExpoAccessToken     string
@@ -59,6 +60,7 @@ func Load() (Config, error) {
 		VerificationCodeTTL: durationEnv("VERIFICATION_CODE_TTL", 10*time.Minute),
 		MediaDir:            getenv("MEDIA_DIR", ""),
 		GoogleClientID:      os.Getenv("GOOGLE_CLIENT_ID"),
+		GoogleClientIDs:     googleAudiences(),
 		TelegramBotToken:    os.Getenv("TELEGRAM_BOT_TOKEN"),
 		TelegramBotUsername: strings.TrimPrefix(os.Getenv("TELEGRAM_BOT_USERNAME"), "@"),
 		ExpoAccessToken:     os.Getenv("EXPO_ACCESS_TOKEN"),
@@ -154,5 +156,29 @@ func splitCSV(raw string) []string {
 			out = append(out, p)
 		}
 	}
+	return out
+}
+
+// googleAudiences collects allowed Google OAuth client IDs (web / iOS / Android).
+func googleAudiences() []string {
+	seen := map[string]struct{}{}
+	var out []string
+	add := func(v string) {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			return
+		}
+		if _, ok := seen[v]; ok {
+			return
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+	add(os.Getenv("GOOGLE_CLIENT_ID"))
+	for _, p := range strings.Split(os.Getenv("GOOGLE_CLIENT_IDS"), ",") {
+		add(p)
+	}
+	add(os.Getenv("GOOGLE_IOS_CLIENT_ID"))
+	add(os.Getenv("GOOGLE_ANDROID_CLIENT_ID"))
 	return out
 }

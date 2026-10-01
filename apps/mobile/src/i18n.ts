@@ -1,167 +1,108 @@
-// Lightweight UI i18n packs. Locale from profile (BCP-47); falls back to English.
-export type MessageKey =
-  | 'menu'
-  | 'expenses'
-  | 'accounts'
-  | 'loans'
-  | 'insights'
-  | 'plan'
-  | 'settings'
-  | 'admin'
-  | 'profile'
-  | 'themes'
-  | 'payments'
-  | 'notifications'
-  | 'privacy'
-  | 'legal'
-  | 'signOut'
-  | 'save'
-  | 'cancel'
-  | 'connectBank'
-  | 'importStatement'
-  | 'bankLinkUnavailable'
-  | 'bankLinkReady'
-  | 'linkedBanks'
-  | 'disconnect'
-  | 'adminOverview'
-  | 'users'
-  | 'aiUsage'
-  | 'refresh'
-  | 'buildReport'
-  | 'coach'
-  | 'ask'
-  | 'thinking';
+import { I18nManager, Platform } from 'react-native';
+import enCatalog from './i18n/en.json';
 
-type Pack = Record<MessageKey, string>;
+export type MessageMap = Record<string, string>;
 
-const en: Pack = {
-  menu: 'MENU',
-  expenses: 'Expenses',
-  accounts: 'Accounts',
-  loans: 'Loans',
-  insights: 'Insights',
-  plan: 'Plan',
-  settings: 'Settings',
-  admin: 'Admin',
-  profile: 'Profile',
-  themes: 'Themes',
-  payments: 'Payments',
-  notifications: 'Notifications',
-  privacy: 'Data & privacy',
-  legal: 'Legal',
-  signOut: 'Sign out',
-  save: 'Save',
-  cancel: 'Cancel',
-  connectBank: 'Connect bank',
-  importStatement: 'Import statement',
-  bankLinkUnavailable: 'Live bank linking needs Plaid keys. Use Import for CSV statements.',
-  bankLinkReady: 'Connect via Plaid to sync balances.',
-  linkedBanks: 'Linked banks',
-  disconnect: 'Disconnect',
-  adminOverview: 'Platform overview',
-  users: 'Users',
-  aiUsage: 'AI usage',
-  refresh: 'Refresh',
-  buildReport: 'Build report',
-  coach: 'Coach',
-  ask: 'Ask',
-  thinking: 'Thinking…',
+type PackMeta = {
+  locale: string;
+  name: string;
+  dir: 'ltr' | 'rtl' | string;
+  messages: MessageMap;
 };
 
-const am: Pack = {
-  menu: 'ምናሌ',
-  expenses: 'ወጪዎች',
-  accounts: 'መለያዎች',
-  loans: 'ብድሮች',
-  insights: 'ግንዛቤዎች',
-  plan: 'እቅድ',
-  settings: 'ቅንብሮች',
-  admin: 'አስተዳዳሪ',
-  profile: 'መገለጫ',
-  themes: 'ገጽታዎች',
-  payments: 'ክፍያዎች',
-  notifications: 'ማሳወቂያዎች',
-  privacy: 'ውሂብ እና ግላዊነት',
-  legal: 'ህጋዊ',
-  signOut: 'ውጣ',
-  save: 'አስቀምጥ',
-  cancel: 'ሰርዝ',
-  connectBank: 'ባንክ አገናኝ',
-  importStatement: 'መግለጫ አስመጣ',
-  bankLinkUnavailable: 'ቀጥተኛ ባንክ ማገናኘት Plaid ቁልፎች ይፈልጋል። CSV ለማስመጣት Import ይጠቀሙ።',
-  bankLinkReady: 'በ Plaid በኩል መለያዎችን ያገናኙ።',
-  linkedBanks: 'የተገናኙ ባንኮች',
-  disconnect: 'አቋርጥ',
-  adminOverview: 'የመድረክ አጠቃላይ እይታ',
-  users: 'ተጠቃሚዎች',
-  aiUsage: 'የ AI አጠቃቀም',
-  refresh: 'አድስ',
-  buildReport: 'ሪፖርት ገንባ',
-  coach: 'አማካሪ',
-  ask: 'ጠይቅ',
-  thinking: 'በማሰብ ላይ…',
-};
+const fallbackMessages: MessageMap = { ...((enCatalog as { messages?: MessageMap }).messages || {}) };
 
-const fr: Pack = {
-  ...en,
-  menu: 'MENU',
-  expenses: 'Dépenses',
-  accounts: 'Comptes',
-  loans: 'Prêts',
-  insights: 'Aperçus',
-  plan: 'Plan',
-  settings: 'Réglages',
-  admin: 'Admin',
-  profile: 'Profil',
-  themes: 'Thèmes',
-  payments: 'Paiements',
-  notifications: 'Notifications',
-  privacy: 'Données et confidentialité',
-  legal: 'Mentions légales',
-  signOut: 'Se déconnecter',
-  save: 'Enregistrer',
-  cancel: 'Annuler',
-  connectBank: 'Connecter une banque',
-  importStatement: 'Importer un relevé',
-  bankLinkUnavailable: 'La liaison bancaire nécessite des clés Plaid. Utilisez Import pour les CSV.',
-  bankLinkReady: 'Connectez-vous via Plaid pour synchroniser.',
-  linkedBanks: 'Banques liées',
-  disconnect: 'Déconnecter',
-  adminOverview: 'Vue d’ensemble',
-  users: 'Utilisateurs',
-  aiUsage: 'Usage IA',
-  refresh: 'Actualiser',
-  buildReport: 'Générer le rapport',
-  coach: 'Coach',
-  ask: 'Demander',
-  thinking: 'Réflexion…',
-};
+const cache = new Map<string, PackMeta>();
+cache.set('en', {
+  locale: 'en',
+  name: (enCatalog as { name?: string }).name || 'English',
+  dir: (enCatalog as { dir?: string }).dir || 'ltr',
+  messages: { ...fallbackMessages },
+});
 
-const packs: Record<string, Pack> = {
-  en,
-  'en-US': en,
-  'en-GB': en,
-  am,
-  'am-ET': am,
-  fr,
-  'fr-FR': fr,
-  'fr-CA': fr,
-};
+let activeCode = 'en';
+
+export type MessageKey = string;
 
 export function resolveLocale(locale?: string | null): string {
   const raw = (locale || 'en').trim();
-  if (packs[raw]) return raw;
+  if (cache.has(raw)) return raw;
   const base = raw.split('-')[0];
-  if (packs[base]) return base;
+  if (cache.has(base)) return base;
+  if (raw === 'en' || raw.startsWith('en')) return 'en';
   return 'en';
 }
 
-export function t(locale: string | null | undefined, key: MessageKey): string {
-  const id = resolveLocale(locale);
-  return packs[id]?.[key] ?? en[key] ?? key;
+export function parseLocaleMessages(raw: unknown): MessageMap {
+  if (!raw) return {};
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      return typeof parsed === 'object' && parsed && !Array.isArray(parsed) ? (parsed as MessageMap) : {};
+    } catch {
+      return {};
+    }
+  }
+  if (typeof raw === 'object' && !Array.isArray(raw)) {
+    return raw as MessageMap;
+  }
+  return {};
+}
+
+export function setActivePack(pack: {
+  locale: string;
+  name?: string;
+  dir?: string;
+  messages?: MessageMap;
+}) {
+  const code = pack.locale || 'en';
+  const prev = cache.get(code);
+  const messages: MessageMap = { ...fallbackMessages, ...(prev?.messages || {}), ...(pack.messages || {}) };
+  // Force renamed keys so stale API/DB packs cannot keep old labels.
+  if (!messages['settings.region'] || /region/i.test(messages['settings.region'])) {
+    messages['settings.region'] = fallbackMessages['settings.region'] || 'Preferences';
+  }
+  if (messages['settings.regionSubtitle'] && /region/i.test(messages['settings.regionSubtitle'])) {
+    messages['settings.regionSubtitle'] = fallbackMessages['settings.regionSubtitle'] || messages['settings.regionSubtitle'];
+  }
+  cache.set(code, {
+    locale: code,
+    name: pack.name || prev?.name || code,
+    dir: pack.dir || prev?.dir || 'ltr',
+    messages,
+  });
+  activeCode = code;
+}
+
+export function getTextDirection(locale?: string | null): string {
+  const code = resolveLocale(locale || activeCode);
+  return cache.get(code)?.dir === 'rtl' ? 'rtl' : 'ltr';
+}
+
+/** Apply RTL layout when the active pack is rtl. May require app reload on native. */
+export function applyNativeDirection(locale?: string | null) {
+  const rtl = getTextDirection(locale) === 'rtl';
+  try {
+    I18nManager.allowRTL(true);
+    if (I18nManager.isRTL !== rtl) {
+      I18nManager.forceRTL(rtl);
+    }
+  } catch {
+    // ignore on web / unsupported
+  }
+  if (Platform.OS === 'web' && typeof document !== 'undefined') {
+    document.documentElement.dir = rtl ? 'rtl' : 'ltr';
+  }
+}
+
+/** Translate UI string. Signature: t(locale, key) for back-compat. */
+export function t(locale: string | null | undefined, key: string): string {
+  const code = resolveLocale(locale || activeCode);
+  const pack = cache.get(code);
+  return pack?.messages[key] ?? fallbackMessages[key] ?? key;
 }
 
 export function hasPack(locale: string | null | undefined): boolean {
   const id = resolveLocale(locale);
-  return id !== 'en' || (locale || '').startsWith('en');
+  return cache.has(id);
 }

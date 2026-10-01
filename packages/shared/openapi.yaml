@@ -46,6 +46,53 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/UserResponse"
+  /auth/resend-verification:
+    post:
+      summary: Resend email verification code
+      operationId: resendVerification
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmailOnlyRequest"
+      responses:
+        "200":
+          description: Hint (and optional dev code)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodeHintResponse"
+  /auth/forgot-password:
+    post:
+      summary: Request a password reset code
+      operationId: forgotPassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmailOnlyRequest"
+      responses:
+        "200":
+          description: Always OK (does not reveal whether the email exists)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CodeHintResponse"
+  /auth/reset-password:
+    post:
+      summary: Reset password with email code
+      operationId: resetPassword
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResetPasswordRequest"
+      responses:
+        "204":
+          description: Password updated; sessions revoked
   /auth/login:
     post:
       summary: Sign in
@@ -121,6 +168,21 @@ paths:
       responses:
         "204":
           description: Signed out
+  /me/password:
+    post:
+      summary: Change password while signed in
+      operationId: changePassword
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangePasswordRequest"
+      responses:
+        "204":
+          description: Password updated
   /me:
     get:
       summary: Current profile
@@ -1572,18 +1634,174 @@ paths:
       security: [{ bearerAuth: [] }]
       responses:
         "200":
+          description: Disconnected
+  /bank-links/{id}/sync:
+    post:
+      summary: Sync Plaid transactions into cashflow
+      operationId: syncBankLink
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
           description: Ok
   /admin/overview:
     get:
       summary: Platform KPIs (admin)
-      description: Includes AI usage counters (ai_runs_7d, ai_users_7d, ai_tokens_7d, ai_requests_today).
+      description: Includes AI usage counters and signups_by_day series.
       operationId: adminOverview
       security: [{ bearerAuth: [] }]
       responses:
         "200":
-          description: Overview with AI usage fields
+          description: Overview with AI usage fields and signups_by_day
         "403":
-          description: Not admin
+          description: Not admin or missing overview.read
+  /admin/audit:
+    get:
+      summary: Admin audit log
+      description: Returns audit entries with meta, actor email; supports q, action, limit, offset.
+      operationId: adminListAudit
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: q
+          in: query
+          schema: { type: string }
+        - name: action
+          in: query
+          schema: { type: string }
+        - name: limit
+          in: query
+          schema: { type: integer }
+        - name: offset
+          in: query
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Paginated audit entries with meta
+        "403":
+          description: Missing audit.read
+  /admin/themes:
+    get:
+      summary: List system themes (admin)
+      operationId: adminListThemes
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: All system themes
+    post:
+      summary: Create system theme
+      operationId: adminCreateTheme
+      security: [{ bearerAuth: [] }]
+      responses:
+        "201":
+          description: Created
+  /admin/roles:
+    get:
+      summary: List admin roles
+      operationId: adminListRoles
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Roles with permissions
+  /themes/system:
+    get:
+      summary: Active system themes for mobile
+      operationId: listSystemThemes
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Active themes
+  /locales:
+    get:
+      summary: Enabled language packs (public)
+      operationId: listLocales
+      parameters:
+        - name: code
+          in: query
+          schema: { type: string }
+          description: When set, return a single enabled locale with messages
+      responses:
+        "200":
+          description: Locales or single locale
+  /calendars:
+    get:
+      summary: Enabled calendars (public)
+      operationId: listCalendars
+      responses:
+        "200":
+          description: Calendars with display metadata
+  /admin/locales:
+    get:
+      summary: List all language packs (admin)
+      operationId: adminListLocales
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: All locales
+    post:
+      summary: Upload or replace a language pack JSON
+      operationId: adminUploadLocale
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Upserted locale
+  /admin/locales/catalog:
+    get:
+      summary: Download English master catalog JSON
+      operationId: adminLocaleCatalog
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: English master pack
+  /admin/locales/{code}:
+    patch:
+      summary: Enable or hide a locale
+      operationId: adminPatchLocale
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Updated locale
+    delete:
+      summary: Delete a non-English locale
+      operationId: adminDeleteLocale
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "204":
+          description: Deleted
+  /admin/calendars:
+    get:
+      summary: List calendars (admin)
+      operationId: adminListCalendars
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Calendars
+  /admin/calendars/{id}:
+    patch:
+      summary: Enable or hide a calendar
+      operationId: adminPatchCalendar
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Updated calendar
   /admin/users:
     get:
       summary: Search users (admin)
@@ -1697,6 +1915,8 @@ components:
         avatar_url: { type: string, nullable: true }
         timezone: { type: string }
         locale: { type: string }
+        calendar_id: { type: string, description: "gregorian | ethiopic | hijri" }
+        hour_cycle: { type: string, description: "24h | 12h | ethiopian_6" }
         default_currency_code: { type: string, nullable: true }
         email_verified: { type: boolean }
         status: { type: string }
@@ -1737,6 +1957,32 @@ components:
       properties:
         email: { type: string, format: email }
         password: { type: string }
+    EmailOnlyRequest:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, format: email }
+    CodeHintResponse:
+      type: object
+      required: [verification_hint]
+      properties:
+        verification_hint: { type: string }
+        verification_code:
+          type: string
+          description: Present only when APP_ENV=development and no mailer is configured
+    ResetPasswordRequest:
+      type: object
+      required: [email, code, new_password]
+      properties:
+        email: { type: string, format: email }
+        code: { type: string, minLength: 6, maxLength: 6 }
+        new_password: { type: string, minLength: 8 }
+    ChangePasswordRequest:
+      type: object
+      required: [current_password, new_password]
+      properties:
+        current_password: { type: string }
+        new_password: { type: string, minLength: 8 }
     RefreshRequest:
       type: object
       required: [refresh_token]
@@ -1757,6 +2003,8 @@ components:
         display_name: { type: string }
         timezone: { type: string }
         locale: { type: string }
+        calendar_id: { type: string }
+        hour_cycle: { type: string, enum: [24h, 12h, ethiopian_6] }
         default_currency_code: { type: string }
     UserSearchHit:
       type: object

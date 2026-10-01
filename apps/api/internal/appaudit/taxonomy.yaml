@@ -1,0 +1,14 @@
+version: 1
+categories:
+  admin:
+    severity: 3
+    events:
+      - admin_action
+events:
+  admin_action:
+    description: "Administrative action on the Lony control plane"
+    fields:
+      actor_id: { required: true }
+      outcome: { required: true }
+      action: { required: true }
+      meta: { required: false }

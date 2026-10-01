@@ -272,39 +272,136 @@ export const LOCALES: CatalogOption[] = [
   { id: 'uk-UA', label: 'Українська' },
 ].map((o) => ({ ...o, keywords: `${o.id} ${o.label}`.toLowerCase() }));
 
-/** Common IANA timezones for profile settings. */
-export const TIMEZONES: CatalogOption[] = [
-  { id: 'UTC', label: 'UTC' },
-  { id: 'Africa/Addis_Ababa', label: 'Addis Ababa' },
-  { id: 'Africa/Cairo', label: 'Cairo' },
-  { id: 'Africa/Johannesburg', label: 'Johannesburg' },
-  { id: 'Africa/Lagos', label: 'Lagos' },
-  { id: 'Africa/Nairobi', label: 'Nairobi' },
-  { id: 'America/Chicago', label: 'Chicago' },
-  { id: 'America/Denver', label: 'Denver' },
-  { id: 'America/Los_Angeles', label: 'Los Angeles' },
-  { id: 'America/Mexico_City', label: 'Mexico City' },
-  { id: 'America/New_York', label: 'New York' },
-  { id: 'America/Sao_Paulo', label: 'São Paulo' },
-  { id: 'America/Toronto', label: 'Toronto' },
-  { id: 'Asia/Dubai', label: 'Dubai' },
-  { id: 'Asia/Hong_Kong', label: 'Hong Kong' },
-  { id: 'Asia/Kolkata', label: 'Kolkata' },
-  { id: 'Asia/Seoul', label: 'Seoul' },
-  { id: 'Asia/Shanghai', label: 'Shanghai' },
-  { id: 'Asia/Singapore', label: 'Singapore' },
-  { id: 'Asia/Tokyo', label: 'Tokyo' },
-  { id: 'Australia/Melbourne', label: 'Melbourne' },
-  { id: 'Australia/Sydney', label: 'Sydney' },
-  { id: 'Europe/Amsterdam', label: 'Amsterdam' },
-  { id: 'Europe/Berlin', label: 'Berlin' },
-  { id: 'Europe/Istanbul', label: 'Istanbul' },
-  { id: 'Europe/London', label: 'London' },
-  { id: 'Europe/Madrid', label: 'Madrid' },
-  { id: 'Europe/Moscow', label: 'Moscow' },
-  { id: 'Europe/Paris', label: 'Paris' },
-  { id: 'Pacific/Auckland', label: 'Auckland' },
+/** Major world calendars (product ids → API `calendar_id`). */
+export const CALENDARS: CatalogOption[] = [
+  { id: 'gregorian', label: 'Gregorian' },
+  { id: 'islamic', label: 'Islamic (Hijri)' },
+  { id: 'hebrew', label: 'Hebrew' },
+  { id: 'chinese', label: 'Chinese' },
+  { id: 'ethiopic', label: 'Ethiopian' },
+  { id: 'persian', label: 'Solar Hijri (Persian)' },
 ].map((o) => ({ ...o, keywords: `${o.id} ${o.label}`.toLowerCase() }));
+
+function timezoneLabel(id: string): string {
+  return id.replace(/_/g, ' ');
+}
+
+function offsetPair(id: string): string {
+  try {
+    const fmt = (d: Date) => {
+      const parts = new Intl.DateTimeFormat('en-US', {
+        timeZone: id,
+        timeZoneName: 'shortOffset',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).formatToParts(d);
+      const name = parts.find((p) => p.type === 'timeZoneName')?.value || '';
+      return name;
+    };
+    // Winter + summer sample so DST-equivalent zones stay distinct when needed.
+    return `${fmt(new Date(Date.UTC(2024, 0, 15)))}|${fmt(new Date(Date.UTC(2024, 6, 15)))}`;
+  } catch {
+    return id;
+  }
+}
+
+/** Prefer a single canonical city per identical UTC offset pair. */
+function pickCanonical(ids: string[]): string {
+  const preferred = [
+    'UTC',
+    'Africa/Nairobi',
+    'Africa/Lagos',
+    'Africa/Johannesburg',
+    'Africa/Cairo',
+    'Europe/London',
+    'Europe/Paris',
+    'Europe/Berlin',
+    'Europe/Moscow',
+    'America/New_York',
+    'America/Chicago',
+    'America/Denver',
+    'America/Los_Angeles',
+    'America/Sao_Paulo',
+    'Asia/Dubai',
+    'Asia/Kolkata',
+    'Asia/Shanghai',
+    'Asia/Tokyo',
+    'Australia/Sydney',
+    'Pacific/Auckland',
+  ];
+  for (const p of preferred) {
+    if (ids.includes(p)) return p;
+  }
+  return [...ids].sort((a, b) => a.length - b.length || a.localeCompare(b))[0];
+}
+
+/**
+ * IANA timezones, one entry per distinct offset (winter+summer).
+ * Same clock (e.g. Nairobi / Addis Ababa) → keep a single representative.
+ */
+function buildTimezones(): CatalogOption[] {
+  let ids: string[] = [];
+  try {
+    const intlAny = Intl as unknown as { supportedValuesOf?: (key: string) => string[] };
+    if (typeof intlAny.supportedValuesOf === 'function') {
+      ids = intlAny.supportedValuesOf('timeZone');
+    }
+  } catch {
+    ids = [];
+  }
+  if (!ids.length) {
+    ids = [
+      'UTC',
+      'Africa/Cairo',
+      'Africa/Johannesburg',
+      'Africa/Lagos',
+      'Africa/Nairobi',
+      'America/Chicago',
+      'America/Denver',
+      'America/Los_Angeles',
+      'America/Mexico_City',
+      'America/New_York',
+      'America/Sao_Paulo',
+      'America/Toronto',
+      'Asia/Dubai',
+      'Asia/Hong_Kong',
+      'Asia/Jakarta',
+      'Asia/Kolkata',
+      'Asia/Riyadh',
+      'Asia/Seoul',
+      'Asia/Shanghai',
+      'Asia/Singapore',
+      'Asia/Tokyo',
+      'Australia/Sydney',
+      'Europe/Berlin',
+      'Europe/Istanbul',
+      'Europe/London',
+      'Europe/Moscow',
+      'Europe/Paris',
+      'Pacific/Auckland',
+      'Pacific/Honolulu',
+    ];
+  }
+  if (!ids.includes('UTC')) ids = ['UTC', ...ids];
+
+  const byOffset = new Map<string, string[]>();
+  for (const id of ids) {
+    const key = offsetPair(id);
+    const list = byOffset.get(key) || [];
+    list.push(id);
+    byOffset.set(key, list);
+  }
+
+  const unique = [...byOffset.values()].map(pickCanonical).sort((a, b) => a.localeCompare(b));
+  return unique.map((id) => ({
+    id,
+    label: timezoneLabel(id),
+    keywords: `${id} ${timezoneLabel(id)}`.toLowerCase(),
+  }));
+}
+
+export const TIMEZONES: CatalogOption[] = buildTimezones();
 
 export function filterCatalog(options: CatalogOption[], query: string): CatalogOption[] {
   const q = query.trim().toLowerCase();
@@ -319,5 +416,23 @@ export function catalogLabel(options: CatalogOption[], id: string | null | undef
     return '';
   }
   const hit = options.find((o) => o.id === id);
-  return hit ? `${hit.id} · ${hit.label}` : id;
+  return hit ? hit.label : id.replace(/_/g, ' ');
+}
+
+/** If the stored IANA id was collapsed as a duplicate, map to the list entry we keep. */
+export function resolveTimezoneId(id: string | null | undefined): string {
+  if (!id) return 'UTC';
+  if (TIMEZONES.some((t) => t.id === id)) return id;
+  // Same-offset aliases (e.g. Addis Ababa → Nairobi for EAT).
+  const aliases: Record<string, string> = {
+    'Africa/Addis_Ababa': 'Africa/Nairobi',
+    'Africa/Asmara': 'Africa/Nairobi',
+    'Africa/Dar_es_Salaam': 'Africa/Nairobi',
+    'Africa/Djibouti': 'Africa/Nairobi',
+    'Africa/Kampala': 'Africa/Nairobi',
+    'Africa/Mogadishu': 'Africa/Nairobi',
+    'Indian/Antananarivo': 'Africa/Nairobi',
+  };
+  if (aliases[id] && TIMEZONES.some((t) => t.id === aliases[id])) return aliases[id];
+  return id;
 }

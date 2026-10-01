@@ -108,6 +108,19 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (RegisterResul
 		if existing.EmailVerifiedAt != nil {
 			return RegisterResult{}, httpx.E(http.StatusConflict, "EMAIL_TAKEN", "an account with this email already exists")
 		}
+		hash, hashErr := HashPassword(in.Password)
+		if hashErr != nil {
+			return RegisterResult{}, hashErr
+		}
+		if updErr := s.store.UpdatePasswordHash(ctx, existing.ID, hash); updErr != nil {
+			return RegisterResult{}, updErr
+		}
+		existing.PasswordHash = hash
+		if dn := strings.TrimSpace(displayName); dn != "" {
+			if updated, updErr := s.store.UpdateUserAccount(ctx, existing.ID, AccountUpdate{DisplayName: &dn}); updErr == nil {
+				existing = updated
+			}
+		}
 		code, issueErr := s.issueChallenge(ctx, existing)
 		if issueErr != nil {
 			return RegisterResult{}, issueErr
@@ -163,6 +176,9 @@ func (s *Service) VerifyEmail(ctx context.Context, email, code string) (users.Pu
 		}
 		return users.PublicUser{}, err
 	}
+	if challenge.Channel != "" && challenge.Channel != "email" {
+		return users.PublicUser{}, httpx.E(http.StatusConflict, "CODE_EXPIRED", "request a new verification code")
+	}
 	if s.now().After(challenge.ExpiresAt) {
 		return users.PublicUser{}, httpx.E(http.StatusConflict, "CODE_EXPIRED", "verification code expired")
 	}
@@ -182,6 +198,143 @@ func (s *Service) VerifyEmail(ctx context.Context, email, code string) (users.Pu
 		return users.PublicUser{}, err
 	}
 	return ToPublic(verified), nil
+}
+
+type CodeResult struct {
+	VerificationCode string `json:"verification_code,omitempty"`
+	VerificationHint string `json:"verification_hint"`
+}
+
+func (s *Service) ResendVerification(ctx context.Context, email string) (CodeResult, error) {
+	normalized, err := normalizeEmail(email)
+	if err != nil {
+		return CodeResult{}, err
+	}
+	user, err := s.store.GetUserByEmail(ctx, normalized)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Don't leak account existence.
+			return CodeResult{VerificationHint: "If an unverified account exists for that email, we sent a code."}, nil
+		}
+		return CodeResult{}, err
+	}
+	if user.EmailVerifiedAt != nil {
+		return CodeResult{VerificationHint: "That email is already verified. You can sign in."}, nil
+	}
+	code, err := s.issueChallenge(ctx, user)
+	if err != nil {
+		return CodeResult{}, err
+	}
+	out := CodeResult{VerificationHint: "We sent a 6-digit code to your email."}
+	if s.cfg.Dev() && (s.mail == nil || !s.mail.Configured()) {
+		out.VerificationCode = code
+		out.VerificationHint = "Development mode: use the verification_code in this response."
+	}
+	return out, nil
+}
+
+func (s *Service) ForgotPassword(ctx context.Context, email string) (CodeResult, error) {
+	normalized, err := normalizeEmail(email)
+	if err != nil {
+		return CodeResult{}, err
+	}
+	hint := CodeResult{VerificationHint: "If an account exists for that email, we sent a reset code."}
+	user, err := s.store.GetUserByEmail(ctx, normalized)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return hint, nil
+		}
+		return CodeResult{}, err
+	}
+	if user.EmailVerifiedAt == nil || user.Status != "active" {
+		return hint, nil
+	}
+	code, err := s.issuePasswordResetChallenge(ctx, user)
+	if err != nil {
+		return CodeResult{}, err
+	}
+	if s.cfg.Dev() && (s.mail == nil || !s.mail.Configured()) {
+		hint.VerificationCode = code
+		hint.VerificationHint = "Development mode: use the verification_code in this response."
+	}
+	return hint, nil
+}
+
+func (s *Service) ResetPassword(ctx context.Context, email, code, newPassword string) error {
+	normalized, err := normalizeEmail(email)
+	if err != nil {
+		return err
+	}
+	if err := validatePassword(newPassword); err != nil {
+		return err
+	}
+	code = strings.TrimSpace(code)
+	if len(code) != 6 {
+		return httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"code": "must be a 6-digit code",
+		})
+	}
+	user, err := s.store.GetUserByEmail(ctx, normalized)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return httpx.E(http.StatusUnauthorized, "INVALID_CODE", "reset code is incorrect")
+		}
+		return err
+	}
+	challenge, err := s.store.GetLatestOpenChallenge(ctx, user.ID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return httpx.E(http.StatusConflict, "CODE_EXPIRED", "request a new reset code")
+		}
+		return err
+	}
+	if challenge.Channel != "password_reset" {
+		return httpx.E(http.StatusConflict, "CODE_EXPIRED", "request a new reset code")
+	}
+	if s.now().After(challenge.ExpiresAt) {
+		return httpx.E(http.StatusConflict, "CODE_EXPIRED", "reset code expired")
+	}
+	if challenge.Attempts >= challenge.MaxAttempts {
+		return httpx.E(http.StatusTooManyRequests, "RATE_LIMITED", "too many reset attempts")
+	}
+	if HashToken(code) != challenge.CodeHash {
+		_, _ = s.store.IncrementChallengeAttempts(ctx, challenge.ID)
+		return httpx.E(http.StatusUnauthorized, "INVALID_CODE", "reset code is incorrect")
+	}
+	if err := s.store.ConsumeChallenge(ctx, challenge.ID); err != nil {
+		return err
+	}
+	hash, err := HashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+	if err := s.store.UpdatePasswordHash(ctx, user.ID, hash); err != nil {
+		return err
+	}
+	_ = s.store.RevokeAllSessions(ctx, user.ID)
+	return nil
+}
+
+func (s *Service) ChangePassword(ctx context.Context, userID uuid.UUID, currentPassword, newPassword string) error {
+	if err := validatePassword(newPassword); err != nil {
+		return err
+	}
+	user, err := s.store.GetUserByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	ok, err := VerifyPassword(user.PasswordHash, currentPassword)
+	if err != nil || !ok {
+		return httpx.E(http.StatusUnauthorized, "INVALID_CREDENTIALS", "current password is incorrect")
+	}
+	hash, err := HashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+	if err := s.store.UpdatePasswordHash(ctx, user.ID, hash); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *Service) Login(ctx context.Context, in LoginInput, deviceLabel *string) (TokenPair, error) {
@@ -375,6 +528,51 @@ func (s *Service) UpdateAccount(ctx context.Context, userID uuid.UUID, in Accoun
 		}
 		in.Currency = &c
 	}
+	if in.HourCycle != nil {
+		h := strings.TrimSpace(*in.HourCycle)
+		// Legacy ethiopian_6 maps to 24h (removed from product).
+		if h == "ethiopian_6" {
+			h = "24h"
+		}
+		if h != "24h" && h != "12h" {
+			return users.PublicUser{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+				"hour_cycle": "must be 24h or 12h",
+			})
+		}
+		in.HourCycle = &h
+	}
+	if in.CalendarID != nil {
+		c := strings.ToLower(strings.TrimSpace(*in.CalendarID))
+		switch c {
+		case "gregorian", "gregory":
+			c = "gregorian"
+		case "islamic", "hijri":
+			c = "islamic"
+		case "hebrew":
+			c = "hebrew"
+		case "chinese":
+			c = "chinese"
+		case "ethiopic", "ethiopian":
+			c = "ethiopic"
+		case "persian", "solar_hijri", "jalali":
+			c = "persian"
+		default:
+			// Accept unknown ids that look like catalog keys so admin-added calendars work.
+			if c == "" || len(c) > 32 {
+				return users.PublicUser{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+					"calendar_id": "must be gregorian, islamic, hebrew, chinese, ethiopic, or persian",
+				})
+			}
+			for _, r := range c {
+				if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' && r != '-' {
+					return users.PublicUser{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+						"calendar_id": "must be gregorian, islamic, hebrew, chinese, ethiopic, or persian",
+					})
+				}
+			}
+		}
+		in.CalendarID = &c
+	}
 	// Keep display_name aligned with structured names when provided.
 	if in.DisplayName == nil && (in.FirstName != nil || in.LastName != nil) {
 		parts := []string{}
@@ -399,6 +597,17 @@ func (s *Service) UpdateAccount(ctx context.Context, userID uuid.UUID, in Accoun
 				"username": "already taken",
 			})
 		}
+		msg := err.Error()
+		if strings.Contains(msg, "calendar_id") || strings.Contains(msg, "users_calendar") {
+			return users.PublicUser{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+				"calendar_id": "calendar is not supported by the database yet — run migrations",
+			})
+		}
+		if strings.Contains(msg, "hour_cycle") {
+			return users.PublicUser{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+				"hour_cycle": "must be 24h or 12h",
+			})
+		}
 		return users.PublicUser{}, err
 	}
 	if s.onPhoneSet != nil && in.PhoneE164 != nil && *in.PhoneE164 != "" {
@@ -416,6 +625,22 @@ func (s *Service) AcceptTOS(ctx context.Context, userID uuid.UUID) (users.Public
 }
 
 func (s *Service) issueChallenge(ctx context.Context, user UserRecord) (string, error) {
+	return s.issueCodedChallenge(ctx, user, "email",
+		"Your Lony verification code",
+		"Your Lony verification code is %s.\n\nIt expires in %s.\n\nIf you did not request this, ignore this email.\n",
+		"could not send verification email; try again shortly",
+	)
+}
+
+func (s *Service) issuePasswordResetChallenge(ctx context.Context, user UserRecord) (string, error) {
+	return s.issueCodedChallenge(ctx, user, "password_reset",
+		"Your Lony password reset code",
+		"Your Lony password reset code is %s.\n\nIt expires in %s.\n\nIf you did not request this, ignore this email.\n",
+		"could not send password reset email; try again shortly",
+	)
+}
+
+func (s *Service) issueCodedChallenge(ctx context.Context, user UserRecord, channel, subject, bodyFmt, sendFailMsg string) (string, error) {
 	if err := s.store.InvalidateOpenChallenges(ctx, user.ID); err != nil {
 		return "", err
 	}
@@ -423,24 +648,22 @@ func (s *Service) issueChallenge(ctx context.Context, user UserRecord) (string, 
 	if err != nil {
 		return "", err
 	}
-	_, err = s.store.CreateChallenge(ctx, user.ID, "email", user.Email, HashToken(code), s.now().Add(s.cfg.VerificationCodeTTL))
+	_, err = s.store.CreateChallenge(ctx, user.ID, channel, user.Email, HashToken(code), s.now().Add(s.cfg.VerificationCodeTTL))
 	if err != nil {
 		return "", err
 	}
-	subject := "Your Lony verification code"
-	body := fmt.Sprintf("Your Lony verification code is %s.\n\nIt expires in %s.\n\nIf you did not request this, ignore this email.\n",
-		code, s.cfg.VerificationCodeTTL.Round(time.Minute))
+	body := fmt.Sprintf(bodyFmt, code, s.cfg.VerificationCodeTTL.Round(time.Minute))
 	if s.mail != nil && s.mail.Configured() {
 		if sendErr := s.mail.Send(ctx, user.Email, subject, body); sendErr != nil {
-			log.Printf("auth: send verification email to %s: %v", user.Email, sendErr)
+			log.Printf("auth: send %s email to %s: %v", channel, user.Email, sendErr)
 			if !s.cfg.Dev() {
-				return "", httpx.E(http.StatusBadGateway, "EMAIL_SEND_FAILED", "could not send verification email; try again shortly")
+				return "", httpx.E(http.StatusBadGateway, "EMAIL_SEND_FAILED", sendFailMsg)
 			}
 		}
 	} else if !s.cfg.Dev() {
 		return "", httpx.E(http.StatusServiceUnavailable, "EMAIL_NOT_CONFIGURED", "email delivery is not configured")
 	} else {
-		log.Printf("auth: verification code for %s (dev, no mailer): %s", user.Email, code)
+		log.Printf("auth: %s code for %s (dev, no mailer): %s", channel, user.Email, code)
 	}
 	return code, nil
 }
@@ -495,6 +718,9 @@ func ToPublic(user UserRecord) users.PublicUser {
 		TOSAcceptedAt:         user.TOSAcceptedAt,
 		Timezone:              user.Timezone,
 		Locale:                user.Locale,
+		CalendarID:            user.CalendarID,
+		HourCycle:             user.HourCycle,
+		LoanRequireApproval:   user.LoanRequireApproval,
 		DefaultCurrencyCode:   user.DefaultCurrencyCode,
 		EmailVerified:         user.EmailVerifiedAt != nil,
 		Status:                user.Status,
@@ -507,6 +733,12 @@ func ToPublic(user UserRecord) users.PublicUser {
 	}
 	if out.PlanTier == "" {
 		out.PlanTier = "free"
+	}
+	if out.CalendarID == "" {
+		out.CalendarID = "gregorian"
+	}
+	if out.HourCycle == "" {
+		out.HourCycle = "24h"
 	}
 	if user.AvatarObjectKey != nil && *user.AvatarObjectKey != "" {
 		url := "/api/v1/media/" + *user.AvatarObjectKey

@@ -1,90 +1,170 @@
-import { useMemo, useRef, useState } from 'react';
-import { FlatList, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { FlatList, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { IconClose } from './icons';
 import { fonts, radii, space, useTheme } from './theme';
-
-const MONTHS = [
-  'January',
-  'February',
-  'March',
-  'April',
-  'May',
-  'June',
-  'July',
-  'August',
-  'September',
-  'October',
-  'November',
-  'December',
-];
-
-const CHIP_W = 56;
+import { useDatePrefs, useFormatDate } from './datePrefs';
+import {
+  daysInCalendarMonth,
+  dateFromCalendarParts,
+  getCalendarParts,
+  monthLabelsForYear,
+  parseIsoLocal,
+  toIsoLocal,
+  yearOptions,
+} from './calendarMath';
 
 type Props = {
   label: string;
   value: string;
   onChange: (iso: string) => void;
   placeholder?: string;
+  minDate?: string;
+  maxDate?: string;
 };
 
-function parseIso(value: string): { y: number; m: number; d: number } | null {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
-  if (!m) {
-    return null;
-  }
-  return { y: Number(m[1]), m: Number(m[2]), d: Number(m[3]) };
+const CHIP_H = 44;
+const LIST_H = 220;
+const PAD = Math.floor((LIST_H - CHIP_H) / 2);
+
+function clampIso(iso: string, minDate?: string, maxDate?: string): string {
+  let out = iso;
+  if (minDate && out < minDate) out = minDate;
+  if (maxDate && out > maxDate) out = maxDate;
+  return out;
 }
 
-function daysInMonth(year: number, month: number): number {
-  return new Date(year, month, 0).getDate();
+export function isoToday(): string {
+  return toIsoLocal(new Date());
 }
 
-function toIso(y: number, m: number, d: number): string {
-  return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-}
-
-export function DateField({ label, value, onChange, placeholder = 'Select…' }: Props) {
+/**
+ * Date picker that shows year / month / day in the user's calendar system.
+ * Stored value remains Gregorian YYYY-MM-DD for the API.
+ */
+export function DateField({
+  label,
+  value,
+  onChange,
+  placeholder = 'Select…',
+  minDate,
+  maxDate,
+}: Props) {
   const { colors } = useTheme();
-  const now = new Date();
-  const parsed = parseIso(value);
+  const formatDate = useFormatDate();
+  const prefs = useDatePrefs();
   const [open, setOpen] = useState(false);
-  const [manual, setManual] = useState(false);
-  const [year, setYear] = useState(parsed?.y ?? now.getFullYear());
-  const [month, setMonth] = useState(parsed?.m ?? now.getMonth() + 1);
-  const [day, setDay] = useState(parsed?.d ?? now.getDate());
+
+  const selectedGregorian = useMemo(() => parseIsoLocal(value) ?? new Date(), [value]);
+  const initialParts = useMemo(
+    () => getCalendarParts(selectedGregorian, prefs.calendarId, prefs.locale),
+    [selectedGregorian, prefs.calendarId, prefs.locale],
+  );
+
+  const [year, setYear] = useState(initialParts.year);
+  const [month, setMonth] = useState(initialParts.month);
+  const [day, setDay] = useState(initialParts.day);
+
   const yearListRef = useRef<FlatList<number>>(null);
-  const monthListRef = useRef<FlatList<number>>(null);
+  const monthListRef = useRef<FlatList<{ month: number; label: string }>>(null);
+  const dayListRef = useRef<FlatList<number>>(null);
 
-  const years = useMemo(() => {
-    const start = now.getFullYear() - 1;
-    return Array.from({ length: 12 }, (_, i) => start + i);
-  }, []);
-
-  const monthIndexes = useMemo(() => Array.from({ length: 12 }, (_, i) => i + 1), []);
-  const maxDay = daysInMonth(year, month);
+  const years = useMemo(() => yearOptions(prefs.calendarId, initialParts.year, 14), [prefs.calendarId, initialParts.year]);
+  const months = useMemo(
+    () => monthLabelsForYear(prefs.calendarId, year, prefs.locale),
+    [prefs.calendarId, year, prefs.locale],
+  );
+  const maxDay = daysInCalendarMonth(prefs.calendarId, year, month, prefs.locale);
   const days = useMemo(() => Array.from({ length: maxDay }, (_, i) => i + 1), [maxDay]);
 
-  function openPicker() {
-    const p = parseIso(value);
-    const y = p?.y ?? now.getFullYear();
-    const m = p?.m ?? now.getMonth() + 1;
-    const d = Math.min(p?.d ?? now.getDate(), daysInMonth(y, m));
-    setYear(y);
-    setMonth(m);
-    setDay(d);
-    setManual(false);
-    setOpen(true);
+  useEffect(() => {
+    if (day > maxDay) setDay(maxDay);
+  }, [day, maxDay]);
+
+  // When the user switches calendar preference, re-derive parts from the stored Gregorian value.
+  useEffect(() => {
+    const base = parseIsoLocal(value) ?? new Date();
+    const p = getCalendarParts(base, prefs.calendarId, prefs.locale);
+    setYear(p.year);
+    setMonth(p.month);
+    setDay(p.day);
+  }, [prefs.calendarId, value, prefs.locale]);
+
+  const display = value
+    ? formatDate(parseIsoLocal(value) ?? value)
+    : '';
+
+  function scrollToSelection(y: number, m: number, d: number, monthRows: { month: number }[]) {
     requestAnimationFrame(() => {
       const yi = Math.max(0, years.indexOf(y));
-      yearListRef.current?.scrollToIndex({ index: yi, animated: false, viewPosition: 0.5 });
-      monthListRef.current?.scrollToIndex({ index: m - 1, animated: false, viewPosition: 0.5 });
+      yearListRef.current?.scrollToOffset({ offset: Math.max(0, yi * CHIP_H), animated: false });
+      const mi = Math.max(0, monthRows.findIndex((row) => row.month === m));
+      monthListRef.current?.scrollToOffset({ offset: Math.max(0, mi * CHIP_H), animated: false });
+      dayListRef.current?.scrollToOffset({
+        offset: Math.max(0, Math.min(d - 1, maxDay - 1) * CHIP_H),
+        animated: false,
+      });
     });
   }
 
+  function openPicker() {
+    const base = parseIsoLocal(value) ?? new Date();
+    const p = getCalendarParts(base, prefs.calendarId, prefs.locale);
+    setYear(p.year);
+    setMonth(p.month);
+    setDay(p.day);
+    setOpen(true);
+    const monthRows = monthLabelsForYear(prefs.calendarId, p.year, prefs.locale);
+    setTimeout(() => scrollToSelection(p.year, p.month, p.day, monthRows), 50);
+  }
+
   function apply() {
-    const d = Math.min(day, daysInMonth(year, month));
-    onChange(toIso(year, month, d));
+    const d = dateFromCalendarParts(prefs.calendarId, year, month, Math.min(day, maxDay), prefs.locale);
+    if (!d) {
+      setOpen(false);
+      return;
+    }
+    onChange(clampIso(toIsoLocal(d), minDate, maxDate));
     setOpen(false);
+  }
+
+  function Chip({
+    active,
+    text,
+    onPress,
+    disabled,
+  }: {
+    active: boolean;
+    text: string;
+    onPress: () => void;
+    disabled?: boolean;
+  }) {
+    return (
+      <Pressable
+        onPress={onPress}
+        disabled={disabled}
+        style={{
+          width: 72,
+          height: CHIP_H,
+          marginVertical: 0,
+          borderRadius: radii.md,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: active ? colors.primary : 'transparent',
+          opacity: disabled ? 0.35 : 1,
+        }}
+      >
+        <Text
+          numberOfLines={1}
+          style={{
+            color: active ? colors.onPrimary : colors.text,
+            fontFamily: active ? fonts.uiSemi : fonts.ui,
+            fontSize: 13,
+          }}
+        >
+          {text}
+        </Text>
+      </Pressable>
+    );
   }
 
   return (
@@ -114,194 +194,93 @@ export function DateField({ label, value, onChange, placeholder = 'Select…' }:
         accessibilityLabel={label}
       >
         <Text style={{ color: value ? colors.text : colors.muted, fontFamily: fonts.ui, fontSize: 16 }}>
-          {value || placeholder}
+          {display || placeholder}
         </Text>
       </Pressable>
 
-      <Modal visible={open} animationType="slide" transparent onRequestClose={() => setOpen(false)}>
-        <View style={{ flex: 1, justifyContent: 'flex-end' }}>
+      <Modal visible={open} animationType="fade" transparent onRequestClose={() => setOpen(false)}>
+        <View style={{ flex: 1, justifyContent: 'center', paddingHorizontal: 20 }}>
           <Pressable
             style={{ ...StyleSheet.absoluteFill, backgroundColor: colors.overlay }}
             onPress={() => setOpen(false)}
-            accessibilityLabel="Dismiss"
           />
           <View
             style={{
               backgroundColor: colors.surface,
-              borderTopLeftRadius: radii.xl,
-              borderTopRightRadius: radii.xl,
-              padding: space.md,
-              gap: 12,
+              borderRadius: radii.lg,
+              paddingBottom: space.md,
+              paddingTop: space.sm,
               maxHeight: '80%',
+              borderWidth: StyleSheet.hairlineWidth,
+              borderColor: colors.border,
             }}
           >
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 18 }}>{label}</Text>
-              <Pressable
-                onPress={() => setOpen(false)}
-                hitSlop={10}
-                accessibilityLabel="Close"
-                style={{
-                  width: 36,
-                  height: 36,
-                  borderRadius: radii.full,
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  backgroundColor: colors.surfaceMuted,
-                }}
-              >
-                <IconClose size={16} color={colors.text} />
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16 }}>
+              <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>Pick a date</Text>
+              <Pressable onPress={() => setOpen(false)} accessibilityLabel="Close" style={{ padding: 8 }}>
+                <IconClose size={18} color={colors.text} />
               </Pressable>
             </View>
 
-            {!manual ? (
-              <>
-                <Text style={{ color: colors.muted, fontFamily: fonts.uiSemi, fontSize: 12 }}>Year</Text>
-                <FlatList
-                  ref={yearListRef}
-                  horizontal
-                  data={years}
-                  keyExtractor={(y) => String(y)}
-                  showsHorizontalScrollIndicator={false}
-                  style={{ maxHeight: 48 }}
-                  getItemLayout={(_, index) => ({ length: CHIP_W + 8, offset: (CHIP_W + 8) * index, index })}
-                  onScrollToIndexFailed={(info) => {
-                    yearListRef.current?.scrollToOffset({
-                      offset: info.averageItemLength * info.index,
-                      animated: false,
-                    });
-                  }}
-                  renderItem={({ item: y }) => (
-                    <View style={{ marginRight: 8 }}>
-                      <Chip label={String(y)} active={y === year} onPress={() => setYear(y)} />
-                    </View>
-                  )}
-                />
-                <Text style={{ color: colors.muted, fontFamily: fonts.uiSemi, fontSize: 12 }}>Month</Text>
-                <FlatList
-                  ref={monthListRef}
-                  horizontal
-                  data={monthIndexes}
-                  keyExtractor={(m) => String(m)}
-                  showsHorizontalScrollIndicator={false}
-                  style={{ maxHeight: 48 }}
-                  getItemLayout={(_, index) => ({ length: CHIP_W + 8, offset: (CHIP_W + 8) * index, index })}
-                  onScrollToIndexFailed={(info) => {
-                    monthListRef.current?.scrollToOffset({
-                      offset: info.averageItemLength * info.index,
-                      animated: false,
-                    });
-                  }}
-                  renderItem={({ item: m }) => (
-                    <View style={{ marginRight: 8 }}>
-                      <Chip
-                        label={MONTHS[m - 1].slice(0, 3)}
-                        active={m === month}
-                        onPress={() => {
-                          setMonth(m);
-                          setDay((d) => Math.min(d, daysInMonth(year, m)));
-                        }}
-                      />
-                    </View>
-                  )}
-                />
-                <Text style={{ color: colors.muted, fontFamily: fonts.uiSemi, fontSize: 12 }}>Day</Text>
-                <ScrollView style={{ maxHeight: 160 }}>
-                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-                    {days.map((d) => (
-                      <Chip key={d} label={String(d)} active={d === day} onPress={() => setDay(d)} />
-                    ))}
-                  </View>
-                </ScrollView>
-                <Pressable onPress={() => setManual(true)}>
-                  <Text style={{ color: colors.tertiary, fontFamily: fonts.uiSemi, textAlign: 'center' }}>
-                    Enter manually
-                  </Text>
-                </Pressable>
-                <Pressable
-                  onPress={apply}
-                  style={{
-                    backgroundColor: colors.primary,
-                    borderRadius: radii.md,
-                    minHeight: 48,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
-                  <Text style={{ color: colors.onPrimary, fontFamily: fonts.uiSemi, fontSize: 16 }}>Use date</Text>
-                </Pressable>
-              </>
-            ) : (
-              <>
-                <TextInput
-                  value={value}
-                  onChangeText={onChange}
-                  placeholder="YYYY-MM-DD"
-                  placeholderTextColor={colors.muted}
-                  autoCapitalize="none"
-                  style={{
-                    backgroundColor: colors.surfaceMuted,
-                    borderRadius: radii.md,
-                    paddingHorizontal: 14,
-                    paddingVertical: 14,
-                    color: colors.text,
-                    fontFamily: fonts.ui,
-                    fontSize: 16,
-                    borderWidth: StyleSheet.hairlineWidth,
-                    borderColor: colors.border,
-                  }}
-                />
-                <Pressable onPress={() => setManual(false)}>
-                  <Text style={{ color: colors.tertiary, fontFamily: fonts.uiSemi, textAlign: 'center' }}>
-                    Use picker
-                  </Text>
-                </Pressable>
-                <Pressable
-                  onPress={() => setOpen(false)}
-                  style={{
-                    backgroundColor: colors.primary,
-                    borderRadius: radii.md,
-                    minHeight: 48,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
-                  <Text style={{ color: colors.onPrimary, fontFamily: fonts.uiSemi, fontSize: 16 }}>Done</Text>
-                </Pressable>
-              </>
-            )}
+            <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 8, paddingVertical: 8 }}>
+              <FlatList
+                ref={yearListRef}
+                data={years}
+                keyExtractor={(y) => `y-${y}`}
+                showsVerticalScrollIndicator={false}
+                style={{ height: LIST_H }}
+                contentContainerStyle={{ paddingVertical: PAD }}
+                getItemLayout={(_, index) => ({ length: CHIP_H, offset: CHIP_H * index, index })}
+                renderItem={({ item }) => (
+                  <Chip active={item === year} text={String(item)} onPress={() => setYear(item)} />
+                )}
+              />
+              <FlatList
+                ref={monthListRef}
+                data={months}
+                keyExtractor={(m) => `m-${m.month}`}
+                showsVerticalScrollIndicator={false}
+                style={{ height: LIST_H, minWidth: 120 }}
+                contentContainerStyle={{ paddingVertical: PAD }}
+                getItemLayout={(_, index) => ({ length: CHIP_H, offset: CHIP_H * index, index })}
+                renderItem={({ item }) => (
+                  <Chip
+                    active={item.month === month}
+                    text={item.label}
+                    onPress={() => setMonth(item.month)}
+                  />
+                )}
+              />
+              <FlatList
+                ref={dayListRef}
+                data={days}
+                keyExtractor={(d) => `d-${d}`}
+                showsVerticalScrollIndicator={false}
+                style={{ height: LIST_H }}
+                contentContainerStyle={{ paddingVertical: PAD }}
+                getItemLayout={(_, index) => ({ length: CHIP_H, offset: CHIP_H * index, index })}
+                renderItem={({ item }) => (
+                  <Chip active={item === day} text={String(item)} onPress={() => setDay(item)} />
+                )}
+              />
+            </View>
+
+            <Pressable
+              onPress={apply}
+              style={{
+                marginHorizontal: 16,
+                marginTop: 8,
+                paddingVertical: 14,
+                borderRadius: radii.md,
+                backgroundColor: colors.primary,
+                alignItems: 'center',
+              }}
+            >
+              <Text style={{ color: colors.onPrimary, fontFamily: fonts.uiSemi, fontSize: 16 }}>Done</Text>
+            </Pressable>
           </View>
         </View>
       </Modal>
     </View>
-  );
-}
-
-function Chip({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
-  const { colors } = useTheme();
-  return (
-    <Pressable
-      onPress={onPress}
-      style={{
-        paddingHorizontal: 12,
-        paddingVertical: 8,
-        borderRadius: radii.full,
-        backgroundColor: active ? colors.primary : colors.surfaceMuted,
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: active ? colors.primary : colors.border,
-        minWidth: CHIP_W,
-        alignItems: 'center',
-      }}
-    >
-      <Text
-        style={{
-          color: active ? colors.onPrimary : colors.text,
-          fontFamily: fonts.uiSemi,
-          fontSize: 13,
-        }}
-      >
-        {label}
-      </Text>
-    </Pressable>
   );
 }

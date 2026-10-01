@@ -148,9 +148,25 @@ func (a goalStoreAdapter) SumContributionsSince(ctx context.Context, userID, goa
 	return a.Inner.SumGoalContributionsSince(ctx, userID, goalID, since)
 }
 
+func (a goalStoreAdapter) ClaimMilestone(ctx context.Context, goalID uuid.UUID, threshold int) (bool, error) {
+	return a.Inner.ClaimGoalMilestone(ctx, goalID, threshold)
+}
+
 // GoalsAdapter exposes SQLStore as goals.Store.
 func GoalsAdapter(s *SQLStore) goals.Store {
 	return goalStoreAdapter{Inner: s}
+}
+
+func (s *SQLStore) ClaimGoalMilestone(ctx context.Context, goalID uuid.UUID, threshold int) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `
+		INSERT INTO goal_milestones (goal_id, threshold)
+		VALUES ($1, $2)
+		ON CONFLICT (goal_id, threshold) DO NOTHING
+	`, goalID, threshold)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 type goalScannable interface {

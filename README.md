@@ -1,6 +1,6 @@
 # Lony
 
-Peer lending ledger **and** personal financial tracker: accounts & net worth, cashflow, budgets, goals, Insights, deterministic **Lony Trust (A–E)** grades for lenders, rule-based Analyst/Coach, and an operator admin console.
+Peer lending ledger **and** personal financial tracker: accounts & net worth, cashflow, budgets, goals, Insights, deterministic **Lony Trust (A–E)** grades for lenders, LLM-backed Analyst / Visualizer / Coach (Premium; OpenAI-compatible providers such as Groq), and an operator admin console.
 
 Money still moves **outside** Lony (not a bank, wallet, or payment processor).
 
@@ -11,6 +11,7 @@ Money still moves **outside** Lony (not a bank, wallet, or payment processor).
 ## Stack
 
 - Mobile: Expo / React Native (EAS-ready)
+- User website: Vite React app (`apps/web`)
 - API: Go, Chi, sqlc
 - Admin: Vite React app (`apps/admin`)
 - Postgres 16 (system of record + reminder job rows)
@@ -19,11 +20,14 @@ Money still moves **outside** Lony (not a bank, wallet, or payment processor).
 
 ## Auth
 
-- Email + password + verification
+- Email + password + verification (+ resend)
+- Forgot / reset password (email code)
+- Change password (signed-in)
 - Google (`POST /auth/oauth` with `id_token`; mobile uses `expo-auth-session`)
 - Telegram Login Widget (mobile opens `/auth/telegram/widget` → deep link `lony://oauth/telegram`)
 - **WhatsApp:** not available — Meta does not provide consumer Sign-In OAuth (API returns 501)
 - Admins: set `ADMIN_EMAILS` (comma-separated) so matching accounts get `role=admin` on API boot
+- Access JWTs are bound to sessions; logout / password reset revoke the session immediately
 
 ## Run locally
 
@@ -59,7 +63,17 @@ npm start
 
 Set `EXPO_PUBLIC_API_URL` to your LAN IP for Expo Go.
 
-### 5. Admin console
+### 5. User website
+
+```powershell
+cd apps/web
+npm install
+npm run dev
+```
+
+Open http://localhost:8082 (proxies `/api` to the local API). This is the product web app — not Expo web.
+
+### 6. Admin console
 
 ```powershell
 cd apps/admin
@@ -76,14 +90,19 @@ Optional env:
 - API email: `RESEND_API_KEY` **or** `SMTP_HOST`/`SMTP_USER`/`SMTP_PASS`, plus `MAIL_FROM` (dev without these logs codes to the API response)
 - Other: `EXPO_ACCESS_TOKEN`, `MEDIA_DIR`, `ADMIN_EMAILS`
 
-### 6. EAS builds
+### 6. EAS builds (store readiness — you do this)
+
+Product code is ready for device builds; Apple/Google distribution still needs your accounts:
 
 ```powershell
 cd apps/mobile
 npx eas-cli login
 npx eas init
+# set EXPO_PUBLIC_EAS_PROJECT_ID in apps/mobile/.env and app.json extra.eas.projectId
 npx eas build --profile preview --platform android
 ```
+
+Also run the API worker (`go run ./cmd/worker`) with Redis for reminders/overdue jobs in production.
 
 ### 7. Live test on Fly.io (free allowance)
 

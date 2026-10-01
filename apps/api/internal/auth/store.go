@@ -28,6 +28,9 @@ type UserRecord struct {
 	PlanTier              string
 	Timezone              string
 	Locale                string
+	CalendarID            string
+	HourCycle             string
+	LoanRequireApproval   bool
 	DefaultCurrencyCode   *string
 	CreatedAt             time.Time
 }
@@ -44,6 +47,9 @@ type AccountUpdate struct {
 	PreferredAuthProvider *string
 	Timezone              *string
 	Locale                *string
+	CalendarID            *string
+	HourCycle             *string
+	LoanRequireApproval   *bool
 	Currency              *string
 	TOSVersion            *string
 	TOSAcceptedAt         *time.Time
@@ -60,6 +66,7 @@ type SessionRecord struct {
 type ChallengeRecord struct {
 	ID          uuid.UUID
 	UserID      uuid.UUID
+	Channel     string
 	CodeHash    string
 	Attempts    int32
 	MaxAttempts int32
@@ -71,6 +78,7 @@ type Store interface {
 	GetUserByEmail(ctx context.Context, email string) (UserRecord, error)
 	GetUserByID(ctx context.Context, id uuid.UUID) (UserRecord, error)
 	MarkEmailVerified(ctx context.Context, id uuid.UUID) (UserRecord, error)
+	UpdatePasswordHash(ctx context.Context, id uuid.UUID, passwordHash string) error
 	UpdateUserProfile(ctx context.Context, id uuid.UUID, displayName, username, timezone, locale, currency *string) (UserRecord, error)
 	UpdateUserAccount(ctx context.Context, id uuid.UUID, in AccountUpdate) (UserRecord, error)
 	AcceptTOS(ctx context.Context, id uuid.UUID, version string) (UserRecord, error)
@@ -83,6 +91,7 @@ type Store interface {
 	GetSessionByRefreshHash(ctx context.Context, hash string) (SessionRecord, error)
 	RotateSession(ctx context.Context, id uuid.UUID, newHash string) (SessionRecord, error)
 	RevokeSession(ctx context.Context, id uuid.UUID) error
+	RevokeAllSessions(ctx context.Context, userID uuid.UUID) error
 
 	InvalidateOpenChallenges(ctx context.Context, userID uuid.UUID) error
 	CreateChallenge(ctx context.Context, userID uuid.UUID, channel, destination, codeHash string, expiresAt time.Time) (ChallengeRecord, error)

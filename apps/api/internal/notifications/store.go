@@ -22,6 +22,10 @@ const (
 	TypeRepaymentSubmitted   = "repayment_submitted"
 	TypeRepaymentConfirmed   = "repayment_confirmed"
 	TypeRepaymentRejected    = "repayment_rejected"
+	TypeGoalMilestone        = "goal_milestone"
+	TypeBillDue              = "bill_due"
+	TypeBillUpcoming         = "bill_upcoming"
+	TypeSMSIngest            = "sms_ingest"
 
 	KindDueSoon7d     = "due_soon_7d"
 	KindDueSoon3d     = "due_soon_3d"

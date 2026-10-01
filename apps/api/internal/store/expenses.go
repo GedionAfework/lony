@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -383,4 +384,36 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(b[i:])
+}
+
+func (s *SQLStore) GetSMSIngest(ctx context.Context, userID uuid.UUID, fingerprint string) (*expenses.SMSIngestRow, error) {
+	var id uuid.UUID
+	var cashflowID *uuid.UUID
+	err := s.pool.QueryRow(ctx, `
+		SELECT id, cashflow_id FROM sms_ingest_log WHERE user_id = $1 AND fingerprint = $2
+	`, userID, fingerprint).Scan(&id, &cashflowID)
+	if err != nil {
+		return nil, err
+	}
+	return &expenses.SMSIngestRow{ID: id, CashflowID: cashflowID}, nil
+}
+
+func (s *SQLStore) InsertSMSIngest(ctx context.Context, userID uuid.UUID, fingerprint, excerpt string, parsed expenses.ParsedSMS, cashflowID *uuid.UUID) error {
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO sms_ingest_log (user_id, fingerprint, raw_excerpt, parsed, cashflow_id)
+		VALUES ($1, $2, $3, $4::jsonb, $5)
+		ON CONFLICT (user_id, fingerprint) DO UPDATE SET
+			raw_excerpt = EXCLUDED.raw_excerpt,
+			parsed = EXCLUDED.parsed,
+			cashflow_id = COALESCE(EXCLUDED.cashflow_id, sms_ingest_log.cashflow_id)
+	`, userID, fingerprint, excerpt, mustJSON(parsed), cashflowID)
+	return err
+}
+
+func mustJSON(v any) []byte {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return []byte("{}")
+	}
+	return b
 }

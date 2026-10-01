@@ -70,6 +70,20 @@ func (h *Handler) Disconnect(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.Error(w, httpx.E(http.StatusBadRequest, "MALFORMED_ID", "invalid connection id"))
+		return
+	}
+	out, err := h.svc.Sync(r.Context(), auth.UserIDFrom(r.Context()), id)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, out)
+}
+
 func (h *Handler) LinkUI(w http.ResponseWriter, r *http.Request) {
 	token := strings.TrimSpace(r.URL.Query().Get("token"))
 	if token == "" {

@@ -351,12 +351,16 @@ func (s *Service) enrichInsightsLLM(ctx context.Context, userID uuid.UUID, curre
 			break
 		}
 		if strings.TrimSpace(out[i].Title) != "" {
-			rows[i].Title = strings.TrimSpace(out[i].Title)
+			title := strings.TrimSpace(out[i].Title)
+			if len(title) > 160 {
+				title = title[:160]
+			}
+			rows[i].Title = title
 		}
 		if strings.TrimSpace(out[i].Body) != "" {
 			rows[i].Body = strings.TrimSpace(out[i].Body)
 		}
-		rows[i].Source = "llm_analyst"
+		rows[i].Source = "llm"
 	}
 	model := res.Model
 	_, _ = s.store.InsertRun(ctx, Run{

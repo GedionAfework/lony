@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"equilend/api/db"
+	"equilend/api/internal/appaudit"
 	"equilend/api/internal/config"
 	"equilend/api/internal/server"
 	"equilend/api/internal/store"
@@ -22,6 +23,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
+
+	if err := appaudit.Init("lony-api"); err != nil {
+		log.Printf("appaudit: init failed (continuing without axonops stdout): %v", err)
+	}
+	defer appaudit.Close()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	if err := db.Migrate(ctx, cfg.DatabaseURL); err != nil {

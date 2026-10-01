@@ -55,12 +55,34 @@ type Message struct {
 	Content string `json:"content"`
 }
 
+// VisionPart is an OpenAI-compatible multimodal content part.
+type VisionPart struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL *struct {
+		URL string `json:"url"`
+	} `json:"image_url,omitempty"`
+}
+
+// VisionMessage allows string or []VisionPart content.
+type VisionMessage struct {
+	Role    string `json:"role"`
+	Content any    `json:"content"`
+}
+
 type ChatRequest struct {
 	Model       string    `json:"model"`
 	Messages    []Message `json:"messages"`
 	Temperature float64   `json:"temperature,omitempty"`
 	MaxTokens   int       `json:"max_tokens,omitempty"`
 	Stream      bool      `json:"stream,omitempty"`
+}
+
+type visionChatRequest struct {
+	Model       string          `json:"model"`
+	Messages    []VisionMessage `json:"messages"`
+	Temperature float64         `json:"temperature,omitempty"`
+	MaxTokens   int             `json:"max_tokens,omitempty"`
 }
 
 type ChatResponse struct {
@@ -104,6 +126,69 @@ func (c *Client) Chat(ctx context.Context, messages []Message, maxTokens int) (R
 		Temperature: 0.4,
 		MaxTokens:   maxTokens,
 	}
+	return c.doChat(ctx, body)
+}
+
+// ChatVision sends a multimodal (image + text) chat completion.
+func (c *Client) ChatVision(ctx context.Context, messages []VisionMessage, maxTokens int) (Result, error) {
+	if !c.Available() {
+		return Result{}, fmt.Errorf("llm unavailable: missing API key")
+	}
+	if maxTokens <= 0 {
+		maxTokens = 800
+	}
+	body := visionChatRequest{
+		Model:       c.model,
+		Messages:    messages,
+		Temperature: 0.2,
+		MaxTokens:   maxTokens,
+	}
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return Result{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.BaseURL+"/chat/completions", bytes.NewReader(raw))
+	if err != nil {
+		return Result{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.cfg.APIKey)
+
+	res, err := c.http.Do(req)
+	if err != nil {
+		return Result{}, err
+	}
+	defer res.Body.Close()
+	payload, err := io.ReadAll(io.LimitReader(res.Body, 4<<20))
+	if err != nil {
+		return Result{}, err
+	}
+	var parsed ChatResponse
+	if err := json.Unmarshal(payload, &parsed); err != nil {
+		return Result{}, fmt.Errorf("llm decode: %w", err)
+	}
+	if parsed.Error != nil && parsed.Error.Message != "" {
+		return Result{}, fmt.Errorf("llm: %s", parsed.Error.Message)
+	}
+	if res.StatusCode >= 300 {
+		return Result{}, fmt.Errorf("llm http %d: %s", res.StatusCode, strings.TrimSpace(string(payload)))
+	}
+	if len(parsed.Choices) == 0 {
+		return Result{}, fmt.Errorf("llm: empty choices")
+	}
+	model := parsed.Model
+	if model == "" {
+		model = c.model
+	}
+	return Result{
+		Content:          strings.TrimSpace(parsed.Choices[0].Message.Content),
+		Model:            model,
+		PromptTokens:     parsed.Usage.PromptTokens,
+		CompletionTokens: parsed.Usage.CompletionTokens,
+	}, nil
+}
+
+func (c *Client) doChat(ctx context.Context, body ChatRequest) (Result, error) {
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return Result{}, err

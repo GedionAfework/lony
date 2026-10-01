@@ -1,6 +1,6 @@
 module equilend/api
 
-go 1.26.0
+go 1.26.4
 
 require (
 	github.com/alexedwards/argon2id v1.0.0
@@ -15,8 +15,11 @@ require (
 )
 
 require (
+	github.com/axonops/audit v0.2.5 // indirect
+	github.com/axonops/syncmap v1.0.0 // indirect
 	github.com/cespare/xxhash/v2 v2.2.0 // indirect
 	github.com/dgryski/go-rendezvous v0.0.0-20200823014737-9f7001d12a5f // indirect
+	github.com/goccy/go-yaml v1.19.2 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect

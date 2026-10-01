@@ -89,10 +89,18 @@ func (s *SQLStore) AdminPromoteEmails(ctx context.Context, emails []string) (int
 	if len(emails) == 0 {
 		return 0, nil
 	}
+	var superID *uuid.UUID
+	var id uuid.UUID
+	if err := s.pool.QueryRow(ctx, `SELECT id FROM admin_roles WHERE name = 'Super Admin' LIMIT 1`).Scan(&id); err == nil {
+		superID = &id
+	}
 	tag, err := s.pool.Exec(ctx, `
-		UPDATE users SET role = 'admin', updated_at = now()
-		WHERE lower(email::text) = ANY($1::text[]) AND deleted_at IS NULL AND COALESCE(role,'user') <> 'admin'
-	`, emails)
+		UPDATE users SET role = 'admin',
+		  admin_role_id = COALESCE(admin_role_id, $2),
+		  updated_at = now()
+		WHERE lower(email::text) = ANY($1::text[]) AND deleted_at IS NULL
+		  AND (COALESCE(role,'user') <> 'admin' OR admin_role_id IS NULL)
+	`, emails, superID)
 	if err != nil {
 		return 0, err
 	}
@@ -147,6 +155,12 @@ func (s *SQLStore) AdminOverview(ctx context.Context) (admin.Overview, error) {
 		FROM ai_usage_daily
 		WHERE day = (now() AT TIME ZONE 'UTC')::date
 	`).Scan(&out.AIRequestsToday)
+	_ = s.pool.QueryRow(ctx, `
+		SELECT
+			COUNT(*) FILTER (WHERE status = 'failed')::int,
+			COUNT(*) FILTER (WHERE status = 'pending')::int
+		FROM notification_jobs
+	`).Scan(&out.JobsFailed, &out.JobsPending)
 	return out, nil
 }
 
@@ -170,12 +184,13 @@ func (s *SQLStore) AdminListUsers(ctx context.Context, q, status string, limit, 
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT u.id, u.email::text, u.display_name, u.username, u.status, COALESCE(u.role,'user'),
-		       COALESCE(u.plan_tier,'free'), u.country_code, u.created_at,
+		       COALESCE(u.plan_tier,'free'), u.admin_role_id, r.name, u.country_code, u.created_at,
 		       (
 		         SELECT MAX(s.last_used_at) FROM user_sessions s
 		         WHERE s.user_id = u.id AND s.revoked_at IS NULL
 		       ) AS last_active_at
 		FROM users u
+		LEFT JOIN admin_roles r ON r.id = u.admin_role_id
 		WHERE u.deleted_at IS NULL
 		  AND ($1 = '' OR u.status = $1)
 		  AND (
@@ -196,7 +211,7 @@ func (s *SQLStore) AdminListUsers(ctx context.Context, q, status string, limit, 
 		var item admin.UserListItem
 		if err := rows.Scan(
 			&item.ID, &item.Email, &item.DisplayName, &item.Username, &item.Status, &item.Role,
-			&item.PlanTier, &item.CountryCode, &item.CreatedAt, &item.LastActiveAt,
+			&item.PlanTier, &item.AdminRoleID, &item.AdminRoleName, &item.CountryCode, &item.CreatedAt, &item.LastActiveAt,
 		); err != nil {
 			return nil, 0, err
 		}
@@ -210,17 +225,18 @@ func (s *SQLStore) AdminGetUser(ctx context.Context, id uuid.UUID) (admin.UserDe
 	var verifiedAt *time.Time
 	err := s.pool.QueryRow(ctx, `
 		SELECT u.id, u.email::text, u.display_name, u.username, u.status, COALESCE(u.role,'user'),
-		       COALESCE(u.plan_tier,'free'), u.country_code, u.created_at, u.phone_e164, u.locale, u.timezone, u.default_currency_code,
+		       COALESCE(u.plan_tier,'free'), u.admin_role_id, r.name, u.country_code, u.created_at, u.phone_e164, u.locale, u.timezone, u.default_currency_code,
 		       u.email_verified_at,
 		       (
 		         SELECT MAX(s.last_used_at) FROM user_sessions s
 		         WHERE s.user_id = u.id AND s.revoked_at IS NULL
 		       )
 		FROM users u
+		LEFT JOIN admin_roles r ON r.id = u.admin_role_id
 		WHERE u.id = $1 AND u.deleted_at IS NULL
 	`, id).Scan(
 		&d.ID, &d.Email, &d.DisplayName, &d.Username, &d.Status, &d.Role,
-		&d.PlanTier, &d.CountryCode, &d.CreatedAt, &d.PhoneE164, &d.Locale, &d.Timezone, &d.DefaultCurrencyCode,
+		&d.PlanTier, &d.AdminRoleID, &d.AdminRoleName, &d.CountryCode, &d.CreatedAt, &d.PhoneE164, &d.Locale, &d.Timezone, &d.DefaultCurrencyCode,
 		&verifiedAt, &d.LastActiveAt,
 	)
 	if err != nil {

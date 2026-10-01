@@ -54,21 +54,22 @@ Money still moves **outside** Lony (banks, mobile money, cash). Lony remains a *
 | Push / workers | Done | Overdue, reminders, cashflow materialize |
 | Mobile shell | Done | Home, Loans, Chat tabs; drawer: Expenses, Analytics, Plan, Settings |
 
-### 2.2 What is stubbed or missing
+### 2.2 What was gap / current status
 
 | Area | Status |
 |------|--------|
-| **Plan** (goals / life plans) | Done (Phase 3) — goals, contribute, ETA |
-| **Accounts & balances** (how much is in each bank) | Done (Phase 1) — manual balances + interest projection |
-| **Interest-bearing accounts** (accrual projection) | Done (Phase 1) — optional rate + 12‑mo projection |
+| **Plan** (goals / life plans) | Done (Phase 3) — goals, contribute, ETA, covers |
+| **Accounts & balances** | Done (Phase 1) — manual balances + interest projection |
+| **Interest-bearing accounts** | Done (Phase 1) — optional rate + 12‑mo projection |
 | **Unified net worth** | Done (Phase 1) — cash + loan nets by currency |
 | **Budgets / envelopes** | Done (Phase 2) — monthly category budgets + burn |
 | **Bill calendar** (first-class) | Partial via recurring cashflow only |
-| **3 AIs** (Analyst, Analytics, Coach) | Missing entirely |
-| **Lony Score** | Explicitly out of old v1 scope; not built |
-| **Admin console** | Not built (no `internal/admin`, no web app) |
-| **Data export** | “Coming soon” in Settings |
-| **OpenAPI for cashflow** | API exists; contract lag in `packages/shared` |
+| **3 AIs** (Analyst, Visualizer, Coach) | Done — LLM via OpenAI-compatible API; Premium (admins bypass) |
+| **Lony Trust (A–E)** | Done — deterministic grade for lenders |
+| **Admin console** | Done — `apps/admin` + RBAC/themes; thin KPI/AI toggle in user apps |
+| **Data export / delete** | Done — Settings privacy |
+| **Plaid bank link + sync** | Done — needs `PLAID_*` + `PUBLIC_BASE_URL`; CSV import without Plaid |
+| **Soft polish left** | Richer Visualizer charts; fuller i18n; web offline drafts deferred |
 
 ### 2.3 Architectural tension to resolve early
 
@@ -662,7 +663,7 @@ Do not wait for M5 to ship M1–M4; each milestone should be usable alone.
 **Already have:** social lending, chat, payment-profile sharing, cashflow income/expenses with recurrence and confirmation, accounts/net worth, budgets, goals (**Plan** = multi-plan hub with optional cover images), insights, A–E Trust, admin + catalogs, export/delete (JSON/zip/CSV), offline drafts, bill calendar, locale/timezone pickers, statement CSV import (open banking v1), modular Settings (Profile / Themes / Payments / Notifications / Privacy / Legal), custom themes, **bonds via loan/split accept**.
 
 **Still open / deferred:**
-- Transaction auto-sync after Plaid link (connection storage + Link UI shipped; sync into cashflow next)
+- ~~Transaction auto-sync after Plaid link~~ — `POST /bank-links/{id}/sync` + Accounts Sync (idempotent `plaid:{txn_id}` notes)
 - Fuller UI string coverage beyond en/am/fr packs; dedicated admin mobile catalogs editor
 
 **Shipped recently:** Admin KPI screen (Settings → Admin); i18n packs (en/am/fr) for nav/settings; Plaid bank-link OAuth scaffold (`/bank-links/*`, Accounts → Connect bank). Statement CSV remains the default for regions without Plaid coverage.
@@ -681,9 +682,10 @@ Do not wait for M5 to ship M1–M4; each milestone should be usable alone.
 
 ## 22. Immediate next actions
 
-1. Optional: Plaid transaction sync into cashflow after Link.  
-2. Soft polish: expand i18n string coverage; admin catalogs editor on mobile.  
-3. Keep manual balances + statement import as the default money-in path until live open banking is deliberate.
+1. ~~Optional: Plaid transaction sync into cashflow after Link.~~  
+2. Soft polish: expand i18n string coverage; optional admin catalogs editor on mobile.  
+3. Keep manual balances + statement import as the default money-in path; enable Plaid only when `PLAID_*` is configured.  
+4. Finishing: keep docs honest; wire web Coach deep-links; point user-app Admin at the ops console for full RBAC.
 
 ---
 

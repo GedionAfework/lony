@@ -23,6 +23,8 @@ type SQLStoreAdapter struct {
 		UpsertBudget(ctx context.Context, rec Budget) (Budget, error)
 		ListBudgets(ctx context.Context, userID uuid.UUID, period time.Time) ([]Budget, error)
 		DeleteBudget(ctx context.Context, userID, id uuid.UUID) error
+		GetSMSIngest(ctx context.Context, userID uuid.UUID, fingerprint string) (*SMSIngestRow, error)
+		InsertSMSIngest(ctx context.Context, userID uuid.UUID, fingerprint, excerpt string, parsed ParsedSMS, cashflowID *uuid.UUID) error
 	}
 }
 
@@ -67,4 +69,10 @@ func (a SQLStoreAdapter) ListBudgets(ctx context.Context, userID uuid.UUID, peri
 }
 func (a SQLStoreAdapter) DeleteBudget(ctx context.Context, userID, id uuid.UUID) error {
 	return a.Inner.DeleteBudget(ctx, userID, id)
+}
+func (a SQLStoreAdapter) GetSMSIngest(ctx context.Context, userID uuid.UUID, fingerprint string) (*SMSIngestRow, error) {
+	return a.Inner.GetSMSIngest(ctx, userID, fingerprint)
+}
+func (a SQLStoreAdapter) InsertSMSIngest(ctx context.Context, userID uuid.UUID, fingerprint, excerpt string, parsed ParsedSMS, cashflowID *uuid.UUID) error {
+	return a.Inner.InsertSMSIngest(ctx, userID, fingerprint, excerpt, parsed, cashflowID)
 }

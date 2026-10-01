@@ -2,6 +2,7 @@ package notifications
 
 import (
 	"context"
+	"fmt"
 
 	"equilend/api/internal/loans"
 
@@ -86,4 +87,68 @@ func (h BankHooks) OnBankShared(ctx context.Context, owner, recipient uuid.UUID,
 		return h.Svc.NotifyBankShared(ctx, recipient, *loanID, ref)
 	}
 	return h.Svc.Notify(ctx, recipient, TypeBankProfileShared, nil, "Payment profile shared", "A payment profile was shared with you.", map[string]any{})
+}
+
+type GoalHooks struct {
+	Svc *Service
+}
+
+func (h GoalHooks) OnGoalMilestone(ctx context.Context, userID, goalID uuid.UUID, title string, threshold int, progressPercent float64) error {
+	if h.Svc == nil {
+		return nil
+	}
+	body := fmt.Sprintf("You've reached %d%% on “%s”.", threshold, title)
+	if threshold >= 100 {
+		body = fmt.Sprintf("Goal complete: “%s”. Nice work.", title)
+	}
+	return h.Svc.Notify(ctx, userID, TypeGoalMilestone, nil,
+		fmt.Sprintf("Goal %d%%", threshold),
+		body,
+		map[string]any{
+			"goal_id":          goalID.String(),
+			"title":            title,
+			"threshold":        threshold,
+			"progress_percent": progressPercent,
+		},
+	)
+}
+
+// CashflowHooks notifies users about recurring bills / SMS imports.
+type CashflowHooks struct {
+	Svc *Service
+}
+
+func (h CashflowHooks) NotifyBillDue(ctx context.Context, userID uuid.UUID, entryID uuid.UUID, title, amount, currency, kind string) error {
+	if h.Svc == nil {
+		return nil
+	}
+	label := "Bill due"
+	body := fmt.Sprintf("%s — %s %s is due.", title, amount, currency)
+	if kind == "income" {
+		label = "Expected income"
+		body = fmt.Sprintf("%s — expect %s %s.", title, amount, currency)
+	}
+	return h.Svc.Notify(ctx, userID, TypeBillDue, nil, label, body, map[string]any{
+		"cashflow_id": entryID.String(),
+		"title":       title,
+		"amount":      amount,
+		"currency":    currency,
+		"kind":        kind,
+	})
+}
+
+func (h CashflowHooks) NotifyBillUpcoming(ctx context.Context, userID uuid.UUID, entryID uuid.UUID, title, amount, currency string, days int) error {
+	if h.Svc == nil {
+		return nil
+	}
+	return h.Svc.Notify(ctx, userID, TypeBillUpcoming, nil, "Upcoming bill",
+		fmt.Sprintf("%s — %s %s in %d day(s).", title, amount, currency, days),
+		map[string]any{
+			"cashflow_id": entryID.String(),
+			"title":       title,
+			"amount":      amount,
+			"currency":    currency,
+			"days":        days,
+		},
+	)
 }

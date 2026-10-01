@@ -1,6 +1,7 @@
 import { useMemo, type Ref } from 'react';
 import { Pressable, StyleSheet, Text, TextInput, View, type TextInputProps, type ViewStyle } from 'react-native';
 import { formatAmountCommas } from './amountFormat';
+import { useFormatDate } from './datePrefs';
 import { IconMoon, IconSun, IconBack } from './icons';
 import { fonts, radii, space, useTheme, type ThemeColors } from './theme';
 
@@ -11,15 +12,30 @@ export function Screen({ children, style }: { children: React.ReactNode; style?:
 
 export function BrandMark({ compact = false, hero = false }: { compact?: boolean; hero?: boolean }) {
   const { colors } = useTheme();
-  const fontSize = hero ? 42 : compact ? 20 : 28;
+  const fontSize = hero ? 44 : compact ? 18 : 26;
   return (
-    <View style={{ alignItems: 'center', justifyContent: 'center' }}>
+    <View style={{ alignItems: 'center', justifyContent: 'center', gap: hero ? 8 : 0 }}>
+      {hero ? (
+        <View
+          style={{
+            width: 56,
+            height: 56,
+            borderRadius: 18,
+            backgroundColor: colors.primarySoft,
+            alignItems: 'center',
+            justifyContent: 'center',
+            marginBottom: 4,
+          }}
+        >
+          <View style={{ width: 22, height: 22, borderRadius: 7, backgroundColor: colors.primary }} />
+        </View>
+      ) : null}
       <Text
         style={{
           color: colors.text,
-          fontFamily: fonts.uiSemi,
+          fontFamily: fonts.uiBold,
           fontSize,
-          letterSpacing: hero ? 0.5 : 0.2,
+          letterSpacing: hero ? -0.4 : 0.1,
         }}
         accessibilityRole="header"
         accessibilityLabel="Lony"
@@ -54,10 +70,15 @@ export function Card({
         {
           backgroundColor: colors.surface,
           borderRadius: radii.lg,
-          padding: space.md,
+          padding: space.md + 2,
           gap: 12,
           borderWidth: StyleSheet.hairlineWidth,
           borderColor: border,
+          shadowColor: '#0F172A',
+          shadowOpacity: 0.04,
+          shadowRadius: 12,
+          shadowOffset: { width: 0, height: 4 },
+          elevation: 1,
         },
         style,
       ]}
@@ -144,6 +165,7 @@ export function DueDatePill({
   locale?: string | null;
 }) {
   const { colors } = useTheme();
+  const formatDate = useFormatDate();
   if (!dueAt) {
     const pending = status === 'pending';
     return (
@@ -169,7 +191,7 @@ export function DueDatePill({
     );
   }
   const due = new Date(dueAt);
-  const label = due.toLocaleDateString(locale || 'en', { month: 'short', day: 'numeric' });
+  const label = formatDate(dueAt);
   const startToday = new Date();
   startToday.setHours(0, 0, 0, 0);
   const startDue = new Date(due.getFullYear(), due.getMonth(), due.getDate());
@@ -219,8 +241,13 @@ export function PrimaryButton({
         minHeight: 52,
         alignItems: 'center',
         justifyContent: 'center',
-        paddingHorizontal: 16,
+        paddingHorizontal: 18,
         opacity: disabled ? 0.45 : 1,
+        shadowColor: colors.primary,
+        shadowOpacity: disabled ? 0 : 0.25,
+        shadowRadius: 10,
+        shadowOffset: { width: 0, height: 4 },
+        elevation: disabled ? 0 : 2,
       }}
       onPress={onPress}
       disabled={disabled}
@@ -680,7 +707,7 @@ function makeAppStyles(colors: ThemeColors) {
       borderColor: colors.primary,
     },
     center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-    container: { padding: 20, paddingTop: 24, gap: 18, paddingBottom: 32 },
+    container: { padding: 20, paddingTop: 20, gap: 20, paddingBottom: 100 },
     card: {
       backgroundColor: colors.surface,
       borderRadius: radii.lg,
@@ -688,8 +715,13 @@ function makeAppStyles(colors: ThemeColors) {
       gap: 14,
       borderWidth: StyleSheet.hairlineWidth,
       borderColor: colors.border,
+      shadowColor: '#0F172A',
+      shadowOpacity: 0.04,
+      shadowRadius: 12,
+      shadowOffset: { width: 0, height: 4 },
+      elevation: 1,
     },
-    cardTitle: { color: colors.text, fontSize: 22, fontFamily: fonts.uiSemi },
+    cardTitle: { color: colors.text, fontSize: 22, fontFamily: fonts.uiBold },
     hero: { color: colors.primary, fontSize: 24, fontFamily: fonts.uiBold },
     authHero: { gap: 10, marginBottom: 4 },
     authSub: { color: colors.muted, fontSize: 15, lineHeight: 22, fontFamily: fonts.ui, maxWidth: 320 },

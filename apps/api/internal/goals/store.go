@@ -140,6 +140,8 @@ type Store interface {
 	InsertContribution(ctx context.Context, c Contribution) (Contribution, error)
 	ListContributions(ctx context.Context, userID, goalID uuid.UUID, limit int) ([]Contribution, error)
 	SumContributionsSince(ctx context.Context, userID, goalID uuid.UUID, since time.Time) (decimal.Decimal, int, error)
+	// ClaimMilestone returns true when this threshold was newly recorded for the goal.
+	ClaimMilestone(ctx context.Context, goalID uuid.UUID, threshold int) (bool, error)
 }
 
 func toDTO(rec Goal, monthlyRate *decimal.Decimal) GoalDTO {

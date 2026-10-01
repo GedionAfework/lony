@@ -19,10 +19,15 @@ type AccountDebiter interface {
 	ApplyCashflowDelta(ctx context.Context, userID, accountID uuid.UUID, kind string, amount decimal.Decimal, currency, note string) error
 }
 
+type MilestoneNotifier interface {
+	OnGoalMilestone(ctx context.Context, userID, goalID uuid.UUID, title string, threshold int, progressPercent float64) error
+}
+
 type Service struct {
-	store    Store
-	accounts AccountDebiter
-	now      func() time.Time
+	store      Store
+	accounts   AccountDebiter
+	milestones MilestoneNotifier
+	now        func() time.Time
 }
 
 func NewService(store Store) *Service {
@@ -31,6 +36,10 @@ func NewService(store Store) *Service {
 
 func (s *Service) SetAccounts(a AccountDebiter) {
 	s.accounts = a
+}
+
+func (s *Service) SetMilestoneNotifier(n MilestoneNotifier) {
+	s.milestones = n
 }
 
 func (s *Service) List(ctx context.Context, userID uuid.UUID, includeArchived bool) ([]GoalDTO, error) {
@@ -250,6 +259,7 @@ func (s *Service) Contribute(ctx context.Context, userID, id uuid.UUID, in Contr
 			"amount": "must be a positive decimal",
 		})
 	}
+	oldPct := progressPercent(rec)
 	accountID := in.AccountID
 	if accountID == nil {
 		accountID = rec.LinkedAccountID
@@ -291,8 +301,38 @@ func (s *Service) Contribute(ctx context.Context, userID, id uuid.UUID, in Contr
 	if err != nil {
 		return GoalDTO{}, ContributionDTO{}, err
 	}
+	newPct := progressPercent(saved)
+	s.emitMilestones(ctx, userID, saved, oldPct, newPct)
 	rate, _ := s.monthlyRate(ctx, userID, id)
 	return toDTO(saved, rate), toContributionDTO(savedC), nil
+}
+
+func progressPercent(rec Goal) float64 {
+	if !rec.TargetAmount.GreaterThan(decimal.Zero) {
+		return 0
+	}
+	pct := rec.CurrentAmount.Div(rec.TargetAmount).Mul(decimal.NewFromInt(100)).InexactFloat64()
+	if pct > 100 {
+		return 100
+	}
+	return pct
+}
+
+func (s *Service) emitMilestones(ctx context.Context, userID uuid.UUID, goal Goal, oldPct, newPct float64) {
+	if s.milestones == nil {
+		return
+	}
+	for _, t := range []int{25, 50, 75, 100} {
+		th := float64(t)
+		if oldPct >= th || newPct < th {
+			continue
+		}
+		claimed, err := s.store.ClaimMilestone(ctx, goal.ID, t)
+		if err != nil || !claimed {
+			continue
+		}
+		_ = s.milestones.OnGoalMilestone(ctx, userID, goal.ID, goal.Title, t, newPct)
+	}
 }
 
 func (s *Service) ListContributions(ctx context.Context, userID, id uuid.UUID) ([]ContributionDTO, error) {

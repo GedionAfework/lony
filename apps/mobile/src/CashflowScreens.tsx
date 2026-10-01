@@ -14,7 +14,9 @@ import {
 } from './api';
 import { stripAmount, formatAmountCommas } from './amountFormat';
 import { CURRENCIES } from './catalogs';
-import { DateField } from './DateField';
+import { DateField, isoToday } from './DateField';
+import { useFormatDate } from './datePrefs';
+import { scheduleBillReminders } from './billReminders';
 import { IconContact, IconEdit, IconSearch, IconTrash } from './icons';
 import { dialForCountry, toE164 } from './phone';
 import { SearchSelect } from './SearchSelect';
@@ -457,6 +459,10 @@ export function CashflowFormScreen({
       onError('Choose a repayment date');
       return;
     }
+    if (kind === 'expense' && payWith === 'friends' && shareDueAt.trim() && shareDueAt.trim() < isoToday()) {
+      onError('Repayment date cannot be before today');
+      return;
+    }
     if (kind === 'expense' && payWith === 'friends' && splitMode === 'percent') {
       const pctSum = selectedSplit.reduce((s, f) => s + (Number(f.value) || 0), 0);
       if (pctSum <= 0 || pctSum > 100) {
@@ -613,6 +619,18 @@ export function CashflowFormScreen({
         }
       }
       onSaved(entry);
+      if (periodic && (periodValue === 'monthly' || periodValue === 'weekly' || periodValue === 'yearly')) {
+        const day = Number(date.slice(8, 10)) || new Date().getDate();
+        void scheduleBillReminders({
+          id: entry.template_id || entry.id,
+          title: entry.title,
+          amount: entry.amount,
+          currency: entry.currency_code,
+          dayOfMonth: day,
+          daysBefore: 3,
+          monthsAhead: periodValue === 'yearly' ? 2 : 6,
+        }).catch(() => undefined);
+      }
     } catch (e) {
       onError(e instanceof Error ? e.message : 'Could not save');
     } finally {
@@ -1081,7 +1099,12 @@ export function CashflowFormScreen({
                       </View>
                     ) : null}
 
-                    <DateField label="Repayment date" value={shareDueAt} onChange={setShareDueAt} />
+                    <DateField
+                      label="Repayment date"
+                      value={shareDueAt}
+                      onChange={setShareDueAt}
+                      minDate={isoToday()}
+                    />
                     <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
                       Each share is a loan request. It only becomes active when they accept.
                     </Text>
@@ -1134,6 +1157,7 @@ export function CashflowShowScreen({
   onUpdated,
 }: ShowProps) {
   const { colors } = useTheme();
+  const formatDate = useFormatDate();
   const [busy, setBusy] = useState(false);
   const [monthEntries, setMonthEntries] = useState<CashflowEntry[]>([]);
   const [current, setCurrent] = useState(entry);
@@ -1204,11 +1228,7 @@ export function CashflowShowScreen({
     }
   }
 
-  const monthLabel = new Date(period.from).toLocaleDateString(user.locale || 'en', {
-    month: 'long',
-    year: 'numeric',
-    timeZone: 'UTC',
-  });
+  const monthLabel = formatDate(period.from);
   const expected = current.status === 'expected' || current.is_template;
   const receiveAccountOptions = accounts
     .filter((a) => a.currency_code.toUpperCase() === (current.currency_code || '').toUpperCase())
@@ -1327,11 +1347,7 @@ export function CashflowShowScreen({
                     {formatMoney(row.amount, row.currency_code, user.locale)}
                   </Text>
                   <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
-                    {new Date(row.occurred_at).toLocaleDateString(user.locale || 'en', {
-                      weekday: 'short',
-                      month: 'short',
-                      day: 'numeric',
-                    })}
+                    {formatDate(row.occurred_at)}
                     {rowExpected ? (income ? '  Expected' : '  Due') : ''}
                   </Text>
                 </View>

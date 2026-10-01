@@ -674,8 +674,11 @@ func (s *Service) parseTerms(in TermsInput) (Terms, error) {
 			fields["interest_period_months"] = "must be between 1 and 480 months"
 		}
 	}
-	if dueAt.IsZero() || !dueAt.After(s.now()) {
-		fields["due_at"] = "must be in the future"
+	if dueAt.IsZero() || calendarDateUTC(dueAt).Before(calendarDateUTC(s.now())) {
+		fields["due_at"] = "must be today or a future date"
+	}
+	if !dueAt.IsZero() && calendarDateUTC(dueAt).Before(calendarDateUTC(start)) {
+		fields["due_at"] = "must be on or after the start date"
 	}
 	if len(fields) > 0 {
 		return Terms{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", fields)
@@ -1089,6 +1092,11 @@ func timeVal(v *time.Time) time.Time {
 		return time.Time{}
 	}
 	return *v
+}
+
+func calendarDateUTC(t time.Time) time.Time {
+	y, m, d := t.UTC().Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
 }
 
 func termsSnapshot(rec Record) map[string]any {

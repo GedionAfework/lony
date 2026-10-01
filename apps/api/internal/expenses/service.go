@@ -29,7 +29,31 @@ type Service struct {
 	store    Store
 	loans    LoanCreator
 	accounts AccountLinker
+	notify   BillNotifier
+	receipts ReceiptExtractor
 	now      func() time.Time
+}
+
+type BillNotifier interface {
+	NotifyBillDue(ctx context.Context, userID uuid.UUID, entryID uuid.UUID, title, amount, currency, kind string) error
+	NotifyBillUpcoming(ctx context.Context, userID uuid.UUID, entryID uuid.UUID, title, amount, currency string, days int) error
+}
+
+type ReceiptExtract struct {
+	Kind         string `json:"kind"`
+	Title        string `json:"title"`
+	Amount       string `json:"amount"`
+	CurrencyCode string `json:"currency_code"`
+	Merchant     string `json:"merchant,omitempty"`
+	OccurredAt   string `json:"occurred_at,omitempty"`
+	Note         string `json:"note,omitempty"`
+	AccountHint  string `json:"account_hint,omitempty"`
+	Confidence   float64 `json:"confidence"`
+	MatchedID    *uuid.UUID `json:"matched_entry_id,omitempty"`
+}
+
+type ReceiptExtractor interface {
+	ExtractReceipt(ctx context.Context, userID uuid.UUID, mime, b64 string) (ReceiptExtract, error)
 }
 
 func NewService(store Store) *Service {
@@ -42,6 +66,14 @@ func (s *Service) SetLoans(lc LoanCreator) {
 
 func (s *Service) SetAccounts(a AccountLinker) {
 	s.accounts = a
+}
+
+func (s *Service) SetNotifier(n BillNotifier) {
+	s.notify = n
+}
+
+func (s *Service) SetReceipts(r ReceiptExtractor) {
+	s.receipts = r
 }
 
 func (s *Service) Create(ctx context.Context, userID uuid.UUID, in CreateInput) (EntryDTO, error) {
@@ -400,6 +432,12 @@ func (s *Service) Share(ctx context.Context, userID, entryID uuid.UUID, in Share
 	due := s.now().UTC().Add(14 * 24 * time.Hour)
 	if in.DueAt != nil {
 		due = in.DueAt.UTC()
+		today := calendarDayUTC(s.now())
+		if calendarDayUTC(due).Before(today) {
+			return EntryDTO{}, loans.LoanDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+				"due_at": "must be today or a future date",
+			})
+		}
 	}
 	title := rec.Title
 	if title == "" {
@@ -518,8 +556,12 @@ func (s *Service) MaterializeDue(ctx context.Context) (int, error) {
 			CreatedAt:    now,
 			UpdatedAt:    now,
 		}
-		if _, err := s.store.Insert(ctx, child); err != nil {
+		saved, err := s.store.Insert(ctx, child)
+		if err != nil {
 			return n, err
+		}
+		if s.notify != nil {
+			_ = s.notify.NotifyBillDue(ctx, tmpl.UserID, saved.ID, tmpl.Title, tmpl.Amount.StringFixed(Scale), tmpl.CurrencyCode, kind)
 		}
 		if tmpl.Recurrence == nil {
 			continue
@@ -531,6 +573,33 @@ func (s *Service) MaterializeDue(ctx context.Context) (int, error) {
 			return n, err
 		}
 		n++
+	}
+	// Upcoming reminders: templates due within 3 days.
+	if s.notify != nil {
+		ahead := now.Add(3 * 24 * time.Hour)
+		upcoming, err := s.store.ListDueTemplates(ctx, ahead, 100)
+		if err == nil {
+			for _, tmpl := range upcoming {
+				if tmpl.NextOccurrenceAt == nil {
+					continue
+				}
+				due := tmpl.NextOccurrenceAt.UTC()
+				if due.Before(now) || due.After(ahead) {
+					continue
+				}
+				days := int(due.Sub(now).Hours()/24) + 1
+				if days < 1 {
+					days = 1
+				}
+				if days > 3 {
+					continue
+				}
+				// Only nudge once when ~3 days out (hour job will re-check; keep body short).
+				if days == 3 || days == 1 {
+					_ = s.notify.NotifyBillUpcoming(ctx, tmpl.UserID, tmpl.ID, tmpl.Title, tmpl.Amount.StringFixed(Scale), tmpl.CurrencyCode, days)
+				}
+			}
+		}
 	}
 	return n, nil
 }
@@ -814,4 +883,234 @@ func parsePeriodMonth(raw string) (time.Time, error) {
 	return time.Time{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
 		"period_month": "must be YYYY-MM or YYYY-MM-01",
 	})
+}
+
+func calendarDayUTC(t time.Time) time.Time {
+	y, m, d := t.UTC().Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+}
+
+type SMSIngestInput struct {
+	Text      string
+	AccountID *uuid.UUID
+	Create    bool
+}
+
+type SMSIngestResult struct {
+	Parsed   ParsedSMS  `json:"parsed"`
+	Entry    *EntryDTO  `json:"entry,omitempty"`
+	Duplicate bool      `json:"duplicate,omitempty"`
+}
+
+func (s *Service) IngestSMS(ctx context.Context, userID uuid.UUID, in SMSIngestInput) (SMSIngestResult, error) {
+	text := strings.TrimSpace(in.Text)
+	if text == "" {
+		return SMSIngestResult{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"text": "required",
+		})
+	}
+	if utf8.RuneCountInString(text) > 4000 {
+		return SMSIngestResult{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"text": "max 4000 characters",
+		})
+	}
+	fp := SMSFingerprint(text)
+	parsed := ParseTransferSMS(text)
+	if logger, ok := s.store.(SMSLogStore); ok {
+		if existing, err := logger.GetSMSIngest(ctx, userID, fp); err == nil && existing != nil {
+			out := SMSIngestResult{Parsed: parsed, Duplicate: true}
+			if existing.CashflowID != nil {
+				if ent, err := s.store.Get(ctx, userID, *existing.CashflowID); err == nil {
+					dto := toDTO(ent)
+					out.Entry = &dto
+				}
+			}
+			return out, nil
+		}
+	}
+	out := SMSIngestResult{Parsed: parsed}
+	if !in.Create {
+		if logger, ok := s.store.(SMSLogStore); ok {
+			excerpt := text
+			if len(excerpt) > 280 {
+				excerpt = excerpt[:280]
+			}
+			_ = logger.InsertSMSIngest(ctx, userID, fp, excerpt, parsed, nil)
+		}
+		return out, nil
+	}
+	if parsed.Amount == "" || parsed.Kind == "" {
+		return SMSIngestResult{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"text": "could not detect amount and direction — edit manually",
+		})
+	}
+	currency := parsed.CurrencyCode
+	if currency == "" {
+		currency = "USD"
+	}
+	title := "Bank SMS"
+	if parsed.Counterparty != "" {
+		if parsed.Kind == KindIncome {
+			title = "From " + parsed.Counterparty
+		} else {
+			title = "To " + parsed.Counterparty
+		}
+	}
+	note := text
+	if len(note) > 500 {
+		note = note[:500]
+	}
+	if parsed.AccountLast4 != "" {
+		extra := "acct …" + parsed.AccountLast4
+		if parsed.AccountNumber != "" {
+			extra = "acct " + parsed.AccountNumber
+		}
+		note = extra + "\n" + note
+	}
+	entry, err := s.Create(ctx, userID, CreateInput{
+		Kind:         parsed.Kind,
+		Title:        title,
+		Amount:       parsed.Amount,
+		CurrencyCode: currency,
+		Category:     "Transfers",
+		AccountID:    in.AccountID,
+		Note:         &note,
+		OccurredAt:   s.now().UTC(),
+	})
+	if err != nil {
+		return SMSIngestResult{}, err
+	}
+	out.Entry = &entry
+	if logger, ok := s.store.(SMSLogStore); ok {
+		excerpt := text
+		if len(excerpt) > 280 {
+			excerpt = excerpt[:280]
+		}
+		cid := entry.ID
+		_ = logger.InsertSMSIngest(ctx, userID, fp, excerpt, parsed, &cid)
+	}
+	return out, nil
+}
+
+type ReceiptScanInput struct {
+	Mime      string
+	Base64    string
+	AccountID *uuid.UUID
+	Create    bool
+}
+
+type ReceiptScanResult struct {
+	Extract ReceiptExtract `json:"extract"`
+	Entry   *EntryDTO      `json:"entry,omitempty"`
+}
+
+func (s *Service) ScanReceipt(ctx context.Context, userID uuid.UUID, in ReceiptScanInput) (ReceiptScanResult, error) {
+	if s.receipts == nil {
+		return ReceiptScanResult{}, httpx.E(http.StatusServiceUnavailable, "AI_UNAVAILABLE", "receipt scanning requires AI")
+	}
+	mime := strings.TrimSpace(in.Mime)
+	if mime == "" {
+		mime = "image/jpeg"
+	}
+	b64 := strings.TrimSpace(in.Base64)
+	if b64 == "" {
+		return ReceiptScanResult{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"image_base64": "required",
+		})
+	}
+	if len(b64) > 12<<20 {
+		return ReceiptScanResult{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"image_base64": "image too large",
+		})
+	}
+	extract, err := s.receipts.ExtractReceipt(ctx, userID, mime, b64)
+	if err != nil {
+		return ReceiptScanResult{}, err
+	}
+	// Soft-match expected entries by amount for reconciliation.
+	if extract.Amount != "" {
+		from := s.now().UTC().AddDate(0, -2, 0)
+		to := s.now().UTC().AddDate(0, 1, 0)
+		rows, listErr := s.store.List(ctx, userID, ListQuery{From: &from, To: &to, Limit: 100})
+		if listErr == nil {
+			for _, row := range rows {
+				if row.Status != StatusExpected {
+					continue
+				}
+				if row.Amount.StringFixed(Scale) == extract.Amount {
+					id := row.ID
+					extract.MatchedID = &id
+					break
+				}
+			}
+		}
+	}
+	out := ReceiptScanResult{Extract: extract}
+	if !in.Create {
+		return out, nil
+	}
+	kind := extract.Kind
+	if kind != KindIncome && kind != KindExpense {
+		kind = KindExpense
+	}
+	title := strings.TrimSpace(extract.Title)
+	if title == "" {
+		title = strings.TrimSpace(extract.Merchant)
+	}
+	if title == "" {
+		title = "Receipt scan"
+	}
+	currency := strings.ToUpper(strings.TrimSpace(extract.CurrencyCode))
+	if len(currency) != 3 {
+		currency = "USD"
+	}
+	occurred := s.now().UTC()
+	if extract.OccurredAt != "" {
+		if t, err := time.Parse(time.RFC3339, extract.OccurredAt); err == nil {
+			occurred = t.UTC()
+		} else if t, err := time.Parse("2006-01-02", extract.OccurredAt); err == nil {
+			occurred = t.UTC()
+		}
+	}
+	note := extract.Note
+	if note == "" && extract.Merchant != "" {
+		note = "Merchant: " + extract.Merchant
+	}
+	var notePtr *string
+	if note != "" {
+		notePtr = &note
+	}
+	if extract.MatchedID != nil {
+		rec, err := s.Receive(ctx, userID, *extract.MatchedID, in.AccountID)
+		if err == nil {
+			out.Entry = &rec
+			return out, nil
+		}
+	}
+	entry, err := s.Create(ctx, userID, CreateInput{
+		Kind:         kind,
+		Title:        title,
+		Amount:       extract.Amount,
+		CurrencyCode: currency,
+		Category:     "Receipts",
+		AccountID:    in.AccountID,
+		Note:         notePtr,
+		OccurredAt:   occurred,
+	})
+	if err != nil {
+		return ReceiptScanResult{}, err
+	}
+	out.Entry = &entry
+	return out, nil
+}
+
+// SMSLogStore is an optional store capability for SMS dedupe.
+type SMSLogStore interface {
+	GetSMSIngest(ctx context.Context, userID uuid.UUID, fingerprint string) (*SMSIngestRow, error)
+	InsertSMSIngest(ctx context.Context, userID uuid.UUID, fingerprint, excerpt string, parsed ParsedSMS, cashflowID *uuid.UUID) error
+}
+
+type SMSIngestRow struct {
+	ID         uuid.UUID
+	CashflowID *uuid.UUID
 }

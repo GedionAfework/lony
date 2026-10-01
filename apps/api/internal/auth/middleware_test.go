@@ -7,7 +7,7 @@ import (
 )
 
 func TestMiddlewareRejectsMissingToken(t *testing.T) {
-	handler := Middleware("dev-only-change-me-to-at-least-32-chars")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := Middleware("dev-only-change-me-to-at-least-32-chars", nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
@@ -19,7 +19,7 @@ func TestMiddlewareRejectsMissingToken(t *testing.T) {
 }
 
 func TestMiddlewareRejectsBadToken(t *testing.T) {
-	handler := Middleware("dev-only-change-me-to-at-least-32-chars")(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	handler := Middleware("dev-only-change-me-to-at-least-32-chars", nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)

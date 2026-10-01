@@ -40,7 +40,12 @@ func IssuedAtFrom(ctx context.Context) time.Time {
 	return v
 }
 
-func Middleware(secret string) func(http.Handler) http.Handler {
+// SessionLookup validates that the JWT session still exists and is active.
+type SessionLookup interface {
+	GetSessionByID(ctx context.Context, id uuid.UUID) (SessionRecord, error)
+}
+
+func Middleware(secret string, sessions SessionLookup) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			header := r.Header.Get("Authorization")
@@ -58,6 +63,13 @@ func Middleware(secret string) func(http.Handler) http.Handler {
 			if err != nil {
 				httpx.Error(w, httpx.E(http.StatusUnauthorized, "UNAUTHORIZED", "invalid access token"))
 				return
+			}
+			if sessions != nil {
+				session, serr := sessions.GetSessionByID(r.Context(), claims.SessionID)
+				if serr != nil || session.UserID != userID || session.RevokedAt != nil || time.Now().After(session.ExpiresAt) {
+					httpx.Error(w, httpx.E(http.StatusUnauthorized, "UNAUTHORIZED", "session revoked or expired"))
+					return
+				}
 			}
 			var issuedAt time.Time
 			if claims.IssuedAt != nil {

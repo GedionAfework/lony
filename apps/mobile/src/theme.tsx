@@ -1,4 +1,4 @@
-﻿import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { storageGet, storageSet } from './secureStorage';
 
 export type ThemeMode = 'light' | 'dark';
@@ -50,15 +50,15 @@ export const THEME_COLOR_FIELDS: { key: keyof ThemeColors; label: string }[] = [
 ];
 
 export const lightColors: ThemeColors = {
-  background: '#FFFFFF',
+  background: '#F7F9FB',
   surface: '#FFFFFF',
   surfaceRaised: '#FFFFFF',
-  surfaceMuted: '#F4F6F8',
+  surfaceMuted: '#EEF2F6',
   text: '#0F172A',
   textSecondary: '#334155',
   muted: '#64748B',
-  border: '#E8ECF0',
-  borderStrong: '#D0D7DE',
+  border: '#E2E8F0',
+  borderStrong: '#CBD5E1',
   primary: '#1FA8A8',
   primarySoft: '#E6F7F6',
   onPrimary: '#FFFFFF',
@@ -191,10 +191,10 @@ export const fonts = {
 };
 
 export const radii = {
-  sm: 8,
+  sm: 10,
   md: 14,
-  lg: 18,
-  xl: 24,
+  lg: 20,
+  xl: 28,
   full: 9999,
 };
 
@@ -243,6 +243,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const [mode, setModeState] = useState<ThemeMode>('light');
   const [themeId, setThemeIdState] = useState<string>('lony-light');
   const [customThemes, setCustomThemes] = useState<ThemePreset[]>([]);
+  const [systemThemes, setSystemThemes] = useState<ThemePreset[]>([]);
 
   useEffect(() => {
     (async () => {
@@ -272,6 +273,46 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     })();
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const token = await storageGet('lony.access_token');
+        if (!token) return;
+        const res = await fetch(`${apiBaseUrl}/themes/system`, {
+          headers: { Accept: 'application/json', Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          themes?: { slug: string; label: string; colors: ThemeColors }[];
+        };
+        if (cancelled || !Array.isArray(data.themes)) return;
+        setSystemThemes(
+          data.themes
+            .filter((t) => t?.slug && t?.colors)
+            .map((t) => ({
+              id: t.slug,
+              name: t.label || t.slug,
+              kind: 'preset' as const,
+              colors: { ...lightColors, ...t.colors },
+            })),
+        );
+      } catch {
+        /* keep builtins */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const presets = useMemo(() => {
+    const byId = new Map<string, ThemePreset>();
+    for (const t of BUILTIN_THEMES) byId.set(t.id, t);
+    for (const t of systemThemes) byId.set(t.id, t);
+    return Array.from(byId.values());
+  }, [systemThemes]);
+
   const setMode = (next: ThemeMode) => {
     setModeState(next);
     storageSet(THEME_KEY, next).catch(() => undefined);
@@ -283,7 +324,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const setThemeId = (id: string) => {
     setThemeIdState(id);
     storageSet(THEME_ID_KEY, id).catch(() => undefined);
-    const all = [...BUILTIN_THEMES, ...customThemes];
+    const all = [...presets, ...customThemes];
     const hit = all.find((t) => t.id === id);
     if (hit) {
       const nextMode: ThemeMode = isDarkPalette(hit.colors) ? 'dark' : 'light';
@@ -310,11 +351,11 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   const resolved: 'light' | 'dark' = mode;
   const activeColors = useMemo(() => {
-    const all = [...BUILTIN_THEMES, ...customThemes];
+    const all = [...presets, ...customThemes];
     const hit = all.find((t) => t.id === themeId);
     if (hit) return hit.colors;
     return resolved === 'dark' ? darkColors : lightColors;
-  }, [themeId, customThemes, resolved]);
+  }, [themeId, customThemes, presets, resolved]);
 
   const value = useMemo<ThemeContextValue>(
     () => ({
@@ -322,7 +363,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       resolved,
       colors: activeColors,
       themeId,
-      presets: BUILTIN_THEMES,
+      presets,
       customThemes,
       setMode,
       setThemeId,
@@ -330,7 +371,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       deleteCustomTheme,
       toggle: () => setMode(resolved === 'dark' ? 'light' : 'dark'),
     }),
-    [mode, resolved, activeColors, themeId, customThemes],
+    [mode, resolved, activeColors, themeId, presets, customThemes],
   );
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;

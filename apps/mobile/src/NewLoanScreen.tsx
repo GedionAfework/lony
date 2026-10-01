@@ -13,7 +13,7 @@ import type { Friendship, PeerTrust, SearchHit } from './api';
 import { api } from './api';
 import { formatAmountCommas, parseAmountNumber, stripAmount } from './amountFormat';
 import { CURRENCIES } from './catalogs';
-import { DateField } from './DateField';
+import { DateField, isoToday } from './DateField';
 import { IconBack, IconContact, IconSearch } from './icons';
 import {
   INSTITUTION_TYPES,
@@ -466,7 +466,7 @@ export function NewLoanScreen({
             keyboardType="number-pad"
             placeholder="e.g. 60"
           />
-          <DateField label="Start date" value={startDate} onChange={onStartDate} />
+          <DateField label="Start date" value={startDate} onChange={onStartDate} maxDate={dueDate || undefined} />
           {months >= 2 && principalNum > 0 ? (
             <View
               style={{
@@ -534,7 +534,14 @@ export function NewLoanScreen({
           options={CURRENCIES}
           placeholder="Select currency"
         />
-        {loanKind === 'one_time' ? <DateField label="Due date" value={dueDate} onChange={onDueDate} /> : null}
+        {loanKind === 'one_time' ? (
+          <DateField
+            label="Due date"
+            value={dueDate}
+            onChange={onDueDate}
+            minDate={startDate && startDate > isoToday() ? startDate : isoToday()}
+          />
+        ) : null}
         <Field label="Title" value={loanTitle} onChange={onLoanTitle} onFocus={reportFocus} />
         <Field label="Note" value={note} onChange={onNote} onFocus={reportFocus} />
         <PrimaryButton

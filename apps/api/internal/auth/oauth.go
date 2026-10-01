@@ -120,7 +120,7 @@ func (s *Service) SetAvatar(ctx context.Context, userID uuid.UUID, objectKey str
 }
 
 func (s *Service) verifyGoogle(ctx context.Context, idToken string) (subject, email, name string, err error) {
-	if s.cfg.GoogleClientID == "" && !s.cfg.Dev() {
+	if s.cfg.GoogleClientID == "" && len(s.cfg.GoogleClientIDs) == 0 && !s.cfg.Dev() {
 		return "", "", "", httpx.E(http.StatusServiceUnavailable, "GOOGLE_UNCONFIGURED",
 			"Set GOOGLE_CLIENT_ID to enable Google sign-in")
 	}
@@ -153,7 +153,18 @@ func (s *Service) verifyGoogle(ctx context.Context, idToken string) (subject, em
 	if err := json.Unmarshal(body, &payload); err != nil || payload.Sub == "" {
 		return "", "", "", httpx.E(http.StatusUnauthorized, "INVALID_TOKEN", "Google token is invalid")
 	}
-	if s.cfg.GoogleClientID != "" && payload.Aud != s.cfg.GoogleClientID {
+	if len(s.cfg.GoogleClientIDs) > 0 {
+		ok := false
+		for _, aud := range s.cfg.GoogleClientIDs {
+			if payload.Aud == aud {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return "", "", "", httpx.E(http.StatusUnauthorized, "INVALID_TOKEN", "Google token audience mismatch")
+		}
+	} else if s.cfg.GoogleClientID != "" && payload.Aud != s.cfg.GoogleClientID {
 		return "", "", "", httpx.E(http.StatusUnauthorized, "INVALID_TOKEN", "Google token audience mismatch")
 	}
 	if payload.EmailVerified != "true" && payload.EmailVerified != "1" {
