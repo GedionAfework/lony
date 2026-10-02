@@ -13,6 +13,8 @@ export type BillReminderInput = {
   daysBefore?: number;
   /** How many future months to schedule (default 6). */
   monthsAhead?: number;
+  /** income → “Did you receive…?”; expense (default) → bill due. */
+  kind?: 'income' | 'expense';
 };
 
 async function notificationsModule() {
@@ -63,6 +65,7 @@ export async function scheduleBillReminders(input: BillReminderInput): Promise<n
   const daysBefore = Math.max(0, input.daysBefore ?? 3);
   const monthsAhead = Math.max(1, Math.min(12, input.monthsAhead ?? 6));
   const day = Math.min(28, Math.max(1, input.dayOfMonth));
+  const income = input.kind === 'income';
   const now = new Date();
   let scheduled = 0;
 
@@ -75,9 +78,11 @@ export async function scheduleBillReminders(input: BillReminderInput): Promise<n
       await Notifications.scheduleNotificationAsync({
         identifier: `bill:${input.id}:pre:${due.toISOString().slice(0, 10)}`,
         content: {
-          title: 'Upcoming bill',
-          body: `${input.title}: ${input.amount} ${input.currency} due ${due.toLocaleDateString()}`,
-          data: { type: 'bill_reminder', cashflow_id: input.id },
+          title: income ? 'Upcoming income' : 'Upcoming bill',
+          body: income
+            ? `${input.title}: ${input.amount} ${input.currency} expected ${due.toLocaleDateString()}`
+            : `${input.title}: ${input.amount} ${input.currency} due ${due.toLocaleDateString()}`,
+          data: { type: 'bill_reminder', cashflow_id: input.id, kind: input.kind || 'expense' },
         },
         trigger: {
           type: Notifications.SchedulableTriggerInputTypes.DATE,
@@ -90,9 +95,11 @@ export async function scheduleBillReminders(input: BillReminderInput): Promise<n
     await Notifications.scheduleNotificationAsync({
       identifier: `bill:${input.id}:due:${due.toISOString().slice(0, 10)}`,
       content: {
-        title: 'Bill due today',
-        body: `${input.title}: ${input.amount} ${input.currency}`,
-        data: { type: 'bill_due', cashflow_id: input.id },
+        title: income ? 'Income today' : 'Bill due today',
+        body: income
+          ? `${input.title}: ${input.amount} ${input.currency} — did you receive it?`
+          : `${input.title}: ${input.amount} ${input.currency}`,
+        data: { type: 'bill_due', cashflow_id: input.id, kind: input.kind || 'expense' },
       },
       trigger: {
         type: Notifications.SchedulableTriggerInputTypes.DATE,

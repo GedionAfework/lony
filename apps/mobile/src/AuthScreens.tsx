@@ -1,7 +1,9 @@
 import { Image, Pressable, Text, View } from 'react-native';
-import { fonts, radii, space, useTheme } from './theme';
-import { Card, CheckRow, Field, PrimaryButton } from './ui';
+import { PhoneField } from './PhoneField';
+import { passwordHint } from './errors';
 import { IconGoogle, IconTelegram } from './icons';
+import { fonts, space, useTheme } from './theme';
+import { Card, CheckRow, Field, PrimaryButton } from './ui';
 
 const logo = require('../assets/lony-logo.png');
 export type AuthMode = 'login' | 'register' | 'verify' | 'forgot' | 'reset';
@@ -10,6 +12,11 @@ type Props = {
   mode: AuthMode;
   email: string;
   password: string;
+  confirmPassword?: string;
+  firstName?: string;
+  lastName?: string;
+  phone?: string;
+  phoneCountry?: string;
   displayName: string;
   code: string;
   newPassword?: string;
@@ -18,6 +25,11 @@ type Props = {
   acceptedDisclaimer: boolean;
   onEmail: (v: string) => void;
   onPassword: (v: string) => void;
+  onConfirmPassword?: (v: string) => void;
+  onFirstName?: (v: string) => void;
+  onLastName?: (v: string) => void;
+  onPhone?: (v: string) => void;
+  onPhoneCountry?: (v: string) => void;
   onDisplayName: (v: string) => void;
   onCode: (v: string) => void;
   onNewPassword?: (v: string) => void;
@@ -40,6 +52,11 @@ export function AuthScreens({
   mode,
   email,
   password,
+  confirmPassword = '',
+  firstName = '',
+  lastName = '',
+  phone = '',
+  phoneCountry = 'ET',
   displayName,
   code,
   newPassword = '',
@@ -48,6 +65,11 @@ export function AuthScreens({
   acceptedDisclaimer,
   onEmail,
   onPassword,
+  onConfirmPassword,
+  onFirstName,
+  onLastName,
+  onPhone,
+  onPhoneCountry,
   onDisplayName,
   onCode,
   onNewPassword,
@@ -65,6 +87,9 @@ export function AuthScreens({
   onGoForgot,
 }: Props) {
   const { colors } = useTheme();
+  const pwdHint = mode === 'register' ? passwordHint(password) : null;
+  const confirmMismatch =
+    mode === 'register' && confirmPassword.length > 0 && password !== confirmPassword;
 
   return (
     <View style={{ gap: space.md, paddingTop: space.xl }}>
@@ -118,34 +143,42 @@ export function AuthScreens({
           <Text style={{ color: colors.text, fontFamily: fonts.uiBold, fontSize: 26, letterSpacing: -0.4 }}>
             Create account
           </Text>
-          <Field label="Display name" value={displayName} onChange={onDisplayName} />
+          <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13, marginBottom: 4 }}>
+            Use your real name and a strong password. You’ll verify your email next.
+          </Text>
+          <Field label="First name" value={firstName} onChange={onFirstName ?? (() => undefined)} />
+          <Field label="Last name" value={lastName} onChange={onLastName ?? (() => undefined)} />
           <Field label="Email" value={email} onChange={onEmail} keyboardType="email-address" />
+          {onPhone && onPhoneCountry ? (
+            <PhoneField value={phone} country={phoneCountry} onCountryChange={onPhoneCountry} onChange={onPhone} />
+          ) : (
+            <Field label="Display name" value={displayName} onChange={onDisplayName} />
+          )}
           <Field label="Password" value={password} onChange={onPassword} secure />
+          {pwdHint ? (
+            <Text style={{ color: colors.warning, fontFamily: fonts.ui, fontSize: 12, marginTop: -4 }}>{pwdHint}</Text>
+          ) : null}
+          <Field
+            label="Confirm password"
+            value={confirmPassword}
+            onChange={onConfirmPassword ?? (() => undefined)}
+            secure
+          />
+          {confirmMismatch ? (
+            <Text style={{ color: colors.error, fontFamily: fonts.ui, fontSize: 12, marginTop: -4 }}>
+              Passwords do not match.
+            </Text>
+          ) : null}
           <CheckRow
             checked={acceptedDisclaimer}
-            label="I understand Lony is a shared ledger, not a bank"
+            label="I understand Lony is a shared ledger, not a bank or payment processor"
             onPress={onToggleDisclaimer}
           />
           <PrimaryButton
             label={busy ? 'Working…' : 'Continue'}
             onPress={onRegister}
-            disabled={busy || !acceptedDisclaimer}
+            disabled={busy || !acceptedDisclaimer || Boolean(pwdHint) || confirmMismatch}
           />
-
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginVertical: 4 }}>
-            <View style={{ flex: 1, height: 1, backgroundColor: colors.border }} />
-            <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>or</Text>
-            <View style={{ flex: 1, height: 1, backgroundColor: colors.border }} />
-          </View>
-
-          <View style={{ flexDirection: 'row', justifyContent: 'center', gap: 14 }}>
-            <OAuthIcon onPress={onGoogle} disabled={busy || !acceptedDisclaimer} label="Google">
-              <IconGoogle size={22} color={colors.text} />
-            </OAuthIcon>
-            <OAuthIcon onPress={onTelegram} disabled={busy || !acceptedDisclaimer} label="Telegram">
-              <IconTelegram size={22} color={colors.text} />
-            </OAuthIcon>
-          </View>
 
           <Pressable onPress={onGoLogin} hitSlop={8}>
             <Text style={{ color: colors.muted, fontFamily: fonts.ui, textAlign: 'center', paddingTop: 8, fontSize: 14 }}>
@@ -159,7 +192,7 @@ export function AuthScreens({
         <Card>
           <Text style={{ color: colors.text, fontFamily: fonts.uiBold, fontSize: 24 }}>Verify email</Text>
           <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 14 }}>
-            Enter the code sent to {email || 'your email'}.
+            Enter the 6-digit code sent to {email || 'your email'}.
           </Text>
           {devCode ? (
             <Text style={{ color: colors.secondary, fontFamily: fonts.mono, fontSize: 13 }}>Code: {devCode}</Text>
@@ -199,7 +232,7 @@ export function AuthScreens({
         <Card>
           <Text style={{ color: colors.text, fontFamily: fonts.uiBold, fontSize: 24 }}>Reset password</Text>
           <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 14 }}>
-            Enter the code sent to {email || 'your email'}.
+            Enter the code from your email and choose a new password.
           </Text>
           {devCode ? (
             <Text style={{ color: colors.secondary, fontFamily: fonts.mono, fontSize: 13 }}>Code: {devCode}</Text>
@@ -207,7 +240,7 @@ export function AuthScreens({
           <Field label="Code" value={code} onChange={onCode} keyboardType="number-pad" />
           <Field label="New password" value={newPassword} onChange={onNewPassword ?? (() => undefined)} secure />
           <PrimaryButton
-            label={busy ? 'Updating…' : 'Update password'}
+            label={busy ? 'Saving…' : 'Update password'}
             onPress={onResetPassword ?? (() => undefined)}
             disabled={busy}
           />
@@ -238,18 +271,17 @@ function OAuthIcon({
     <Pressable
       onPress={onPress}
       disabled={disabled}
-      accessibilityRole="button"
       accessibilityLabel={label}
       style={{
         width: 52,
         height: 52,
-        borderRadius: radii.full,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: colors.surfaceMuted,
+        borderRadius: 16,
         borderWidth: 1,
         borderColor: colors.border,
-        opacity: disabled ? 0.45 : 1,
+        backgroundColor: colors.surfaceMuted,
+        alignItems: 'center',
+        justifyContent: 'center',
+        opacity: disabled ? 0.5 : 1,
       }}
     >
       {children}

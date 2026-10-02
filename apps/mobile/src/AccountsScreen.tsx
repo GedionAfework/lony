@@ -23,6 +23,7 @@ type Props = {
   onError: (message: string) => void;
   reloadToken?: number;
   onPanelChange?: (open: boolean) => void;
+  onChanged?: () => void;
 };
 
 const FALLBACK_ACCOUNT_TYPES: CatalogOption[] = [
@@ -60,7 +61,15 @@ function mergeOptions(primary: CatalogOption[], fallback: CatalogOption[]): Cata
   return out;
 }
 
-export function AccountsScreen({ user, token, formatMoney, onError, reloadToken = 0, onPanelChange }: Props) {
+export function AccountsScreen({
+  user,
+  token,
+  formatMoney,
+  onError,
+  reloadToken = 0,
+  onPanelChange,
+  onChanged,
+}: Props) {
   const { colors } = useTheme();
   const [accounts, setAccounts] = useState<MoneyAccount[]>([]);
   const [busy, setBusy] = useState(false);
@@ -280,6 +289,7 @@ export function AccountsScreen({ user, token, formatMoney, onError, reloadToken 
       });
       resetForm();
       await reload();
+      onChanged?.();
     } catch (e) {
       onError(e instanceof Error ? e.message : 'Could not create account');
     } finally {
@@ -308,6 +318,7 @@ export function AccountsScreen({ user, token, formatMoney, onError, reloadToken 
       });
       resetForm();
       await reload();
+      onChanged?.();
     } catch (e) {
       onError(e instanceof Error ? e.message : 'Could not update account');
     } finally {
@@ -323,6 +334,7 @@ export function AccountsScreen({ user, token, formatMoney, onError, reloadToken 
       setBalanceId(null);
       setNewBalance('');
       await reload();
+      onChanged?.();
     } catch (e) {
       onError(e instanceof Error ? e.message : 'Could not update balance');
     } finally {

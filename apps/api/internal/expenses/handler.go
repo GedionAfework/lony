@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 )
 
 type Handler struct {
@@ -56,6 +57,7 @@ type shareBody struct {
 
 type receiveBody struct {
 	AccountID *uuid.UUID `json:"account_id"`
+	Amount    *string    `json:"amount"`
 }
 
 type categoryBody struct {
@@ -232,7 +234,22 @@ func (h *Handler) Receive(w http.ResponseWriter, r *http.Request) {
 	}
 	var body receiveBody
 	_ = httpx.Decode(r, &body) // optional body
-	out, err := h.svc.Receive(r.Context(), auth.UserIDFrom(r.Context()), id, body.AccountID)
+	var amountOverride *decimal.Decimal
+	if body.Amount != nil {
+		raw := strings.TrimSpace(strings.ReplaceAll(*body.Amount, ",", ""))
+		if raw != "" {
+			d, err := decimal.NewFromString(raw)
+			if err != nil || !d.GreaterThan(decimal.Zero) {
+				httpx.Error(w, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+					"amount": "must be a positive number",
+				}))
+				return
+			}
+			d = d.Round(Scale)
+			amountOverride = &d
+		}
+	}
+	out, err := h.svc.Receive(r.Context(), auth.UserIDFrom(r.Context()), id, body.AccountID, amountOverride)
 	if err != nil {
 		httpx.Error(w, err)
 		return

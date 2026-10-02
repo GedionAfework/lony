@@ -19,6 +19,9 @@ export type User = {
   calendar_id?: string;
   hour_cycle?: '24h' | '12h' | 'ethiopian_6' | string;
   loan_require_approval?: boolean;
+  ask_recurring_received?: boolean;
+  net_worth_override?: string | null;
+  net_worth_override_currency?: string | null;
   default_currency_code: string | null;
   email_verified: boolean;
   status: string;
@@ -112,10 +115,15 @@ async function request<T>(
         .map(([k, v]) => `${k}: ${v}`)
         .join('; ');
       if (detail) {
-        throw new Error(detail);
+        const e = new Error(detail) as Error & { api?: ApiError };
+        e.api = err ?? undefined;
+        throw e;
       }
     }
-    throw new Error(err?.error?.message ?? `Request failed (${res.status})`);
+    const message = err?.error?.message ?? `Request failed (${res.status})`;
+    const e = new Error(message) as Error & { api?: ApiError };
+    e.api = err ?? undefined;
+    throw e;
   }
   return data as T;
 }
@@ -145,7 +153,18 @@ export const DISCLAIMER =
   'Lony is a shared ledger and reminder app, not a bank, wallet, escrow, or payment processor. Money moves outside the app. Records are for personal tracking only and are not legally binding contracts.';
 
 export const api = {
-  register: (email: string, password: string, displayName: string, acceptedDisclaimer: boolean) =>
+  register: (
+    email: string,
+    password: string,
+    displayName: string,
+    acceptedDisclaimer: boolean,
+    extra?: {
+      first_name?: string;
+      last_name?: string;
+      phone_e164?: string;
+      country_code?: string;
+    },
+  ) =>
     request<{ user: User; verification_code?: string; verification_hint: string }>('/auth/register', {
       method: 'POST',
       headers: { 'Idempotency-Key': idemKey('register') },
@@ -154,6 +173,10 @@ export const api = {
         password,
         display_name: displayName,
         accepted_disclaimer: acceptedDisclaimer,
+        first_name: extra?.first_name,
+        last_name: extra?.last_name,
+        phone_e164: extra?.phone_e164,
+        country_code: extra?.country_code,
       }),
     }),
   verify: (email: string, code: string) =>
@@ -227,6 +250,9 @@ export const api = {
       calendar_id?: string;
       hour_cycle?: string;
       loan_require_approval?: boolean;
+      ask_recurring_received?: boolean;
+      net_worth_override?: string | null;
+      net_worth_override_currency?: string | null;
       default_currency_code?: string;
     },
   ) =>
@@ -745,7 +771,7 @@ export const api = {
       method: 'DELETE',
       headers: { 'Idempotency-Key': idemKey('cashflow-delete') },
     }, token),
-  receiveCashflow: (token: string, id: string, body?: { account_id?: string }) =>
+  receiveCashflow: (token: string, id: string, body?: { account_id?: string; amount?: string }) =>
     request<{ entry: CashflowEntry }>(`/cashflow/${id}/receive`, {
       method: 'POST',
       headers: { 'Idempotency-Key': idemKey('cashflow-receive') },
@@ -1585,6 +1611,8 @@ export type WealthSummary = {
   receivables: string;
   payables: string;
   net_worth: string;
+  live_net_worth?: string;
+  net_worth_manual?: boolean;
   by_currency: WealthCurrencySlice[];
   accounts: MoneyAccount[];
 };

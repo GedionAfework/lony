@@ -11,6 +11,7 @@ import {
   type User,
   type WealthSummary,
 } from './api';
+import { formatError } from './errors';
 import { stripAmount } from './amountFormat';
 import {
   addCalendarMonths,
@@ -41,7 +42,10 @@ type Props = {
   onOpenLoan: (id: string) => void;
   onOpenEntry: (entry: CashflowEntry) => void;
   onOpenAccounts?: () => void;
+  /** Reloads cashflow lists only (not net worth). */
   reloadToken?: number;
+  /** Reloads net worth (accounts edits). */
+  wealthReloadToken?: number;
 };
 
 function monthBounds(
@@ -93,6 +97,7 @@ export function ExpensesScreen({
   onOpenEntry,
   onOpenAccounts,
   reloadToken = 0,
+  wealthReloadToken = 0,
 }: Props) {
   const { colors } = useTheme();
   const datePrefs = useDatePrefs();
@@ -130,13 +135,12 @@ export function ExpensesScreen({
   const reload = useCallback(async () => {
     try {
       setLoadError(null);
-      const [sum, inc, exp, incT, expT, wealthRes, breakRes, budgetRes] = await Promise.all([
+      const [sum, inc, exp, incT, expT, breakRes, budgetRes] = await Promise.all([
         api.cashflowSummary(token, { from: period.from, to: period.to }),
         api.listCashflow(token, { kind: 'income', from: period.from, to: period.to }),
         api.listCashflow(token, { kind: 'expense', from: period.from, to: period.to }),
         api.listCashflow(token, { kind: 'income', templates: true }),
         api.listCashflow(token, { kind: 'expense', templates: true }),
-        api.wealth(token, preferred).catch(() => null),
         api.cashflowBreakdown(token, { kind: 'expense', from: period.from, to: period.to }).catch(() => ({ breakdown: [] })),
         api.listBudgets(token, period.from).catch(() => ({ budgets: [] })),
       ]);
@@ -145,17 +149,25 @@ export function ExpensesScreen({
       setExpenseRows(exp.entries ?? []);
       setIncomeTemplates(incT.entries ?? []);
       setExpenseTemplates(expT.entries ?? []);
-      setWealth(wealthRes?.wealth ?? null);
       setBreakdown(breakRes.breakdown ?? []);
       setBudgets(budgetRes.budgets ?? []);
       setDrafts(await listCashflowDrafts());
     } catch (e) {
-      const message = e instanceof Error ? e.message : 'Could not load expenses';
+      const message = formatError(e, 'Could not load expenses');
       setLoadError(message);
       onError(message);
       setDrafts(await listCashflowDrafts());
     }
-  }, [token, period.from, period.to, preferred, onError]);
+  }, [token, period.from, period.to, onError]);
+
+  const reloadWealth = useCallback(async () => {
+    try {
+      const wealthRes = await api.wealth(token, preferred).catch(() => null);
+      setWealth(wealthRes?.wealth ?? null);
+    } catch {
+      /* keep last snapshot */
+    }
+  }, [token, preferred]);
 
   const upcomingBills = useMemo(() => {
     const today = new Date();
@@ -227,6 +239,10 @@ export function ExpensesScreen({
   useEffect(() => {
     void reload();
   }, [reload, reloadToken]);
+
+  useEffect(() => {
+    void reloadWealth();
+  }, [reloadWealth, wealthReloadToken]);
 
   const slice =
     summary?.by_currency?.find((s) => s.currency_code === preferred) ?? summary?.by_currency?.[0] ?? null;

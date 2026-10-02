@@ -50,15 +50,15 @@ export const THEME_COLOR_FIELDS: { key: keyof ThemeColors; label: string }[] = [
 ];
 
 export const lightColors: ThemeColors = {
-  background: '#F7F9FB',
+  background: '#FFFFFF',
   surface: '#FFFFFF',
   surfaceRaised: '#FFFFFF',
-  surfaceMuted: '#EEF2F6',
+  surfaceMuted: '#F4F4F5',
   text: '#0F172A',
   textSecondary: '#334155',
   muted: '#64748B',
-  border: '#E2E8F0',
-  borderStrong: '#CBD5E1',
+  border: '#E4E4E7',
+  borderStrong: '#D4D4D8',
   primary: '#1FA8A8',
   primarySoft: '#E6F7F6',
   onPrimary: '#FFFFFF',

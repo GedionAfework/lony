@@ -1,6 +1,6 @@
 ﻿import { StatusBar } from 'expo-status-bar';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import {
   JetBrainsMono_500Medium,
@@ -37,6 +37,8 @@ import {
   authenticateWithBiometrics,
   getBiometricsAvailability,
   getBiometricsLockEnabled,
+  isWithinBiometricsGrace,
+  markBiometricsUnlocked,
 } from './src/biometricsLock';
 import { BiometricsLockScreen } from './src/BiometricsLockScreen';
 import { BottomNav, type TabId } from './src/BottomNav';
@@ -70,6 +72,7 @@ import { registerPushToken } from './src/push';
 import { storageDelete, storageGet, storageSet } from './src/secureStorage';
 import { SearchSelect } from './src/SearchSelect';
 import { applyNativeDirection, parseLocaleMessages, setActivePack } from './src/i18n';
+import { formatError, passwordHint } from './src/errors';
 import { SettingsScreen, shareExportJSON, shareExportNote } from './src/SettingsScreen';
 import { Card, DueDatePill, EmptyState, Field, Money, PrimaryButton, ScreenHeader, SecondaryButton, SectionLabel, useAppStyles } from './src/ui';
 
@@ -207,8 +210,12 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   const [expensesTab, setExpensesTab] = useState<ExpensesTab>('dashboard');
   const [selectedCashflow, setSelectedCashflow] = useState<CashflowEntry | null>(null);
   const [cashflowKind, setCashflowKind] = useState<'income' | 'expense'>('expense');
+  const [cashflowPrefill, setCashflowPrefill] = useState<import('./src/CashflowScreens').CashflowFormPrefill | null>(
+    null,
+  );
   const [cashflowReload, setCashflowReload] = useState(0);
   const [accountsReload, setAccountsReload] = useState(0);
+  const [wealthReload, setWealthReload] = useState(0);
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [dashCurrency, setDashCurrency] = useState('');
   const [loanFilter, setLoanFilter] = useState('');
@@ -238,6 +245,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   const [profileCalendarId, setProfileCalendarId] = useState('gregorian');
   const [profileHourCycle, setProfileHourCycle] = useState('24h');
   const [loanRequireApproval, setLoanRequireApproval] = useState(true);
+  const [askRecurringReceived, setAskRecurringReceived] = useState(true);
   const [paymentRails, setPaymentRails] = useState<import('./src/api').PaymentRail[]>([]);
   const [selectedRail, setSelectedRail] = useState('');
   const [bankCountry, setBankCountry] = useState('');
@@ -253,6 +261,11 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [displayName, setDisplayName] = useState('');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [regPhone, setRegPhone] = useState('');
+  const [regPhoneCountry, setRegPhoneCountry] = useState('ET');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [code, setCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [devCode, setDevCode] = useState<string | undefined>();
@@ -295,6 +308,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     setProfileCalendarId(next.calendar_id || 'gregorian');
     setProfileHourCycle(next.hour_cycle === 'ethiopian_6' ? '24h' : next.hour_cycle || '24h');
     setLoanRequireApproval(next.loan_require_approval !== false);
+    setAskRecurringReceived(next.ask_recurring_received !== false);
     setProfileCurrency(next.default_currency_code ?? '');
     setProfileTimezone(next.timezone || 'UTC');
     setCurrency((c) => c || next.default_currency_code || '');
@@ -311,24 +325,52 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   }
 
   const [appLocked, setAppLocked] = useState(false);
-  const [bioLabel, setBioLabel] = useState('Biometrics');
+  const [bioLabel, setBioLabel] = useState('Screen lock');
   const [unlockError, setUnlockError] = useState<string | null>(null);
   const [unlocking, setUnlocking] = useState(false);
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
   const unlockingRef = useRef(false);
+  const appLockedRef = useRef(false);
+  /** Bumped on each successful unlock — cancels stale "lock on background" work. */
+  const unlockGenerationRef = useRef(0);
+  /** While > Date.now(), ignore AppState (biometric sheet backgrounds the app). */
+  const ignoreAppStateUntilRef = useRef(0);
+
+  function setLocked(next: boolean) {
+    appLockedRef.current = next;
+    setAppLocked(next);
+  }
+
+  function pauseAppStateHandling(ms: number) {
+    ignoreAppStateUntilRef.current = Math.max(ignoreAppStateUntilRef.current, Date.now() + ms);
+  }
+
+  function shouldIgnoreAppState(): boolean {
+    return unlockingRef.current || Date.now() < ignoreAppStateUntilRef.current;
+  }
 
   async function promptUnlock() {
     if (unlockingRef.current) return;
+    if (!appLockedRef.current) return;
     unlockingRef.current = true;
     setUnlocking(true);
     setUnlockError(null);
+    // Fingerprint / Face ID UI temporarily backgrounds the app on Android/iOS.
+    pauseAppStateHandling(20_000);
+    const genAtStart = unlockGenerationRef.current;
     try {
       const ok = await authenticateWithBiometrics('Unlock Lony');
       if (ok) {
-        setAppLocked(false);
+        unlockGenerationRef.current = genAtStart + 1;
+        await markBiometricsUnlocked();
+        setLocked(false);
         setUnlockError(null);
+        // Absorb the post-auth AppState bounce back to "active".
+        pauseAppStateHandling(4_000);
       } else {
+        setLocked(true);
         setUnlockError('Authentication failed. Try again.');
+        pauseAppStateHandling(1_000);
       }
     } finally {
       setUnlocking(false);
@@ -338,7 +380,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
 
   useEffect(() => {
     if (!token) {
-      setAppLocked(false);
+      setLocked(false);
       return;
     }
     let cancelled = false;
@@ -346,13 +388,23 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
       const on = await getBiometricsLockEnabled();
       if (cancelled) return;
       if (!on) {
-        setAppLocked(false);
+        setLocked(false);
         return;
       }
       const avail = await getBiometricsAvailability();
       if (cancelled) return;
+      if (!avail.available || !avail.enrolled) {
+        setLocked(false);
+        return;
+      }
       setBioLabel(avail.label);
-      setAppLocked(true);
+      // Stay unlocked for 1 hour after the last successful unlock.
+      if (await isWithinBiometricsGrace()) {
+        if (cancelled) return;
+        setLocked(false);
+        return;
+      }
+      setLocked(true);
       void promptUnlock();
     })();
     return () => {
@@ -365,19 +417,38 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
       const prev = appStateRef.current;
       appStateRef.current = next;
       if (!token) return;
-      // Lock only when fully backgrounded (not inactive — Face ID UI would re-trigger).
+      if (shouldIgnoreAppState()) return;
+
+      // Leaving the app: only lock if the 1-hour unlock grace already expired.
       if (next === 'background') {
-        void getBiometricsLockEnabled().then((on) => {
-          if (on) setAppLocked(true);
-        });
+        const genWhenBackgrounded = unlockGenerationRef.current;
+        void (async () => {
+          const on = await getBiometricsLockEnabled();
+          if (!on) return;
+          if (unlockGenerationRef.current !== genWhenBackgrounded) return;
+          if (shouldIgnoreAppState()) return;
+          if (await isWithinBiometricsGrace()) return;
+          setLocked(true);
+        })();
+        return;
       }
-      if (prev === 'background' && next === 'active') {
-        void getBiometricsLockEnabled().then((on) => {
-          if (on) {
-            setAppLocked(true);
-            void promptUnlock();
+
+      // Coming back: prompt only if locked and grace expired.
+      if (
+        next === 'active' &&
+        (prev === 'background' || prev === 'inactive') &&
+        !shouldIgnoreAppState()
+      ) {
+        void (async () => {
+          const on = await getBiometricsLockEnabled();
+          if (!on) return;
+          if (await isWithinBiometricsGrace()) {
+            setLocked(false);
+            return;
           }
-        });
+          if (!appLockedRef.current) setLocked(true);
+          void promptUnlock();
+        })();
       }
     });
     return () => sub.remove();
@@ -497,11 +568,45 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     setBusy(true);
     setError(null);
     try {
-      const res = await api.register(email.trim(), password, displayName.trim(), acceptedDisclaimer);
+      const fn = firstName.trim();
+      const ln = lastName.trim();
+      if (!fn || !ln) {
+        setError('First and last name are required.');
+        return;
+      }
+      if (!email.trim() || !email.includes('@')) {
+        setError('Enter a valid email address.');
+        return;
+      }
+      const hint = passwordHint(password);
+      if (hint) {
+        setError(hint);
+        return;
+      }
+      if (password !== confirmPassword) {
+        setError('Passwords do not match.');
+        return;
+      }
+      if (!regPhone.trim()) {
+        setError('Phone number is required.');
+        return;
+      }
+      const name = `${fn} ${ln}`.trim();
+      setDisplayName(name);
+      const res = await api.register(email.trim(), password, name, acceptedDisclaimer, {
+        first_name: fn,
+        last_name: ln,
+        phone_e164: regPhone.trim(),
+        country_code: regPhoneCountry,
+      });
       setDevCode(res.verification_code);
+      setProfileFirstName(fn);
+      setProfileLastName(ln);
+      setProfilePhone(regPhone.trim());
+      setProfileCountry(regPhoneCountry);
       setScreen('verify');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Registration failed');
+      setError(formatError(e, 'Registration failed'));
     } finally {
       setBusy(false);
     }
@@ -515,7 +620,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
       const tokens = await api.login(email.trim(), password);
       await persistTokens(tokens.access_token, tokens.refresh_token, tokens.user);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Verification failed');
+      setError(formatError(e, 'Verification failed'));
     } finally {
       setBusy(false);
     }
@@ -529,7 +634,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
       setDevCode(res.verification_code);
       setError(res.verification_hint);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not resend code');
+      setError(formatError(e, 'Could not resend code'));
     } finally {
       setBusy(false);
     }
@@ -546,7 +651,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
       setScreen('reset');
       setError(res.verification_hint);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not send reset code');
+      setError(formatError(e, 'Could not send reset code'));
     } finally {
       setBusy(false);
     }
@@ -564,7 +669,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
       setScreen('login');
       setError('Password updated. Sign in with your new password.');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not reset password');
+      setError(formatError(e, 'Could not reset password'));
     } finally {
       setBusy(false);
     }
@@ -580,7 +685,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
       setChangePasswordNew('');
       setError('Password updated.');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not change password');
+      setError(formatError(e, 'Could not change password'));
     } finally {
       setBusy(false);
     }
@@ -593,15 +698,9 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
       const tokens = await api.login(email.trim(), password);
       await persistTokens(tokens.access_token, tokens.refresh_token, tokens.user);
     } catch (e) {
-      const message = e instanceof Error ? e.message : 'Sign in failed';
-      const networkish =
-        /network request failed|failed to fetch|timeout|ECONNREFUSED|unreachable/i.test(message);
-      setError(
-        networkish
-          ? `Cannot reach API (${process.env.EXPO_PUBLIC_API_URL || 'not set'}). Check Wi‑Fi and that the API is running.`
-          : message,
-      );
-      if (message.toLowerCase().includes('verify')) {
+      const message = formatError(e, 'Sign in failed');
+      setError(message);
+      if (/verify/i.test(message)) {
         setScreen('verify');
       }
     } finally {
@@ -748,7 +847,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   useEffect(() => {
     if ((screen === 'home' || screen === 'loans') && token) {
       refreshFriends(token).catch((e) => {
-        setError(e instanceof Error ? e.message : 'Could not load friends');
+        setError(formatError(e, 'Could not load your data'));
       });
     }
   }, [screen, token]);
@@ -935,6 +1034,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
           ? { default_currency_code: profileCurrency.trim().toUpperCase() }
           : {}),
         loan_require_approval: loanRequireApproval,
+        ask_recurring_received: askRecurringReceived,
       });
       applyUserProfile(res.user);
       setCurrency(res.user.default_currency_code ?? '');
@@ -943,6 +1043,18 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
       setError(e instanceof Error ? e.message : 'Could not update preferences');
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function onSaveAskRecurring(next: boolean) {
+    setAskRecurringReceived(next);
+    if (!token) return;
+    try {
+      const res = await api.patchMe(token, { ask_recurring_received: next });
+      applyUserProfile(res.user);
+    } catch (e) {
+      setAskRecurringReceived(!next);
+      setError(e instanceof Error ? e.message : 'Could not update preference');
     }
   }
 
@@ -1656,8 +1768,20 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
             } catch {
               /* optional */
             }
-            const entry = await scanReceiptWithCamera(token, accountId);
-            if (entry) setCashflowReload((n) => n + 1);
+            const draft = await scanReceiptWithCamera(token, accountId);
+            if (draft) {
+              setCashflowKind(draft.kind === 'income' ? 'income' : 'expense');
+              setSelectedCashflow(null);
+              setCashflowPrefill({
+                title: draft.title || 'Receipt',
+                amount: draft.amount || '',
+                currency_code: draft.currency_code || undefined,
+                note: draft.note,
+                occurred_at: draft.occurred_at,
+              });
+              setExpensesTab('expenses');
+              setScreen('cashflow-new');
+            }
           } catch (e) {
             setError(e instanceof Error ? e.message : 'Receipt scan failed');
           } finally {
@@ -1775,6 +1899,11 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               mode={screen}
               email={email}
               password={password}
+              confirmPassword={confirmPassword}
+              firstName={firstName}
+              lastName={lastName}
+              phone={regPhone}
+              phoneCountry={regPhoneCountry}
               displayName={displayName}
               code={code}
               newPassword={newPassword}
@@ -1783,6 +1912,11 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               acceptedDisclaimer={acceptedDisclaimer}
               onEmail={setEmail}
               onPassword={setPassword}
+              onConfirmPassword={setConfirmPassword}
+              onFirstName={setFirstName}
+              onLastName={setLastName}
+              onPhone={setRegPhone}
+              onPhoneCountry={setRegPhoneCountry}
               onDisplayName={setDisplayName}
               onCode={setCode}
               onNewPassword={setNewPassword}
@@ -1838,7 +1972,8 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               formatMoney={formatMoney}
               onError={(message) => setError(message)}
               onOpenLoan={openLoan}
-              reloadToken={cashflowReload + accountsReload}
+              reloadToken={cashflowReload}
+              wealthReloadToken={wealthReload + accountsReload}
               onOpenAccounts={() => setScreen('accounts')}
               onOpenEntry={(entry) => {
                 setSelectedCashflow(entry);
@@ -1855,6 +1990,10 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               onError={(message) => setError(message)}
               reloadToken={accountsReload}
               onPanelChange={setAccountsPanelOpen}
+              onChanged={() => {
+                setAccountsReload((n) => n + 1);
+                setWealthReload((n) => n + 1);
+              }}
             />
           ) : null}
 
@@ -1866,14 +2005,18 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               friends={friends}
               loans={loans}
               editing={selectedCashflow}
+              prefill={cashflowPrefill}
               countryCode={profileCountry || user.country_code || 'US'}
               onBack={() => {
                 setSelectedCashflow(null);
+                setCashflowPrefill(null);
                 setScreen('home');
               }}
               onSaved={() => {
                 setSelectedCashflow(null);
+                setCashflowPrefill(null);
                 setCashflowReload((n) => n + 1);
+                setWealthReload((n) => n + 1);
                 setExpensesTab(cashflowKind === 'income' ? 'income' : 'expenses');
                 setScreen('home');
               }}
@@ -1921,6 +2064,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               onDeleted={() => {
                 setSelectedCashflow(null);
                 setCashflowReload((n) => n + 1);
+                setWealthReload((n) => n + 1);
                 setScreen('home');
               }}
               onOpenLoan={openLoan}
@@ -1928,6 +2072,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               onUpdated={(entry) => {
                 setSelectedCashflow(entry);
                 setCashflowReload((n) => n + 1);
+                setWealthReload((n) => n + 1);
               }}
             />
           ) : null}
@@ -2044,6 +2189,10 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               onHourCycle={setProfileHourCycle}
               loanRequireApproval={loanRequireApproval}
               onLoanRequireApproval={setLoanRequireApproval}
+              askRecurringReceived={askRecurringReceived}
+              onAskRecurringReceived={(v) => {
+                void onSaveAskRecurring(v);
+              }}
               onAuthPref={setProfileAuthPref}
               onSave={onSaveProfile}
               onSaveRegion={onSaveRegion}

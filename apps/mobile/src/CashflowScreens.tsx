@@ -34,6 +34,14 @@ import {
 
 type Kind = 'income' | 'expense';
 
+export type CashflowFormPrefill = {
+  title?: string;
+  amount?: string;
+  currency_code?: string;
+  note?: string;
+  occurred_at?: string;
+};
+
 type Props = {
   user: User;
   token: string;
@@ -41,6 +49,7 @@ type Props = {
   friends: Friendship[];
   loans?: Loan[];
   editing?: CashflowEntry | null;
+  prefill?: CashflowFormPrefill | null;
   countryCode?: string;
   onBack: () => void;
   onSaved: (entry: CashflowEntry) => void;
@@ -101,6 +110,7 @@ export function CashflowFormScreen({
   friends,
   loans = [],
   editing,
+  prefill,
   countryCode,
   onBack,
   onSaved,
@@ -111,16 +121,22 @@ export function CashflowFormScreen({
   const { colors } = useTheme();
   const [busy, setBusy] = useState(false);
   const [categories, setCategories] = useState<CashflowCategory[]>([]);
-  const [title, setTitle] = useState(editing?.title ?? '');
+  const [title, setTitle] = useState(editing?.title ?? prefill?.title ?? '');
   const [amount, setAmount] = useState(
-    editing?.amount ? formatAmountCommas(editing.amount) : '',
+    editing?.amount
+      ? formatAmountCommas(editing.amount)
+      : prefill?.amount
+        ? formatAmountCommas(prefill.amount)
+        : '',
   );
   const [categoryId, setCategoryId] = useState(editing?.category_id ?? '');
   const [newCategory, setNewCategory] = useState('');
-  const [note, setNote] = useState(editing?.note ?? '');
-  const [date, setDate] = useState(editing?.occurred_at?.slice(0, 10) ?? todayIso());
+  const [note, setNote] = useState(editing?.note ?? prefill?.note ?? '');
+  const [date, setDate] = useState(
+    editing?.occurred_at?.slice(0, 10) ?? prefill?.occurred_at?.slice(0, 10) ?? todayIso(),
+  );
   const [currency, setCurrency] = useState(
-    (editing?.currency_code || user.default_currency_code || 'USD').toUpperCase(),
+    (editing?.currency_code || prefill?.currency_code || user.default_currency_code || 'USD').toUpperCase(),
   );
   const [recurrence, setRecurrence] = useState<string>(editing?.recurrence || 'monthly');
   const [accounts, setAccounts] = useState<MoneyAccount[]>([]);
@@ -629,6 +645,7 @@ export function CashflowFormScreen({
           dayOfMonth: day,
           daysBefore: 3,
           monthsAhead: periodValue === 'yearly' ? 2 : 6,
+          kind: kind === 'income' ? 'income' : 'expense',
         }).catch(() => undefined);
       }
     } catch (e) {
@@ -661,9 +678,24 @@ export function CashflowFormScreen({
   return (
     <View style={{ gap: space.md, paddingTop: 4 }}>
       <ScreenHeader
-        title={editing ? 'Edit' : kind === 'income' ? 'New income' : 'New expense'}
+        title={
+          editing
+            ? 'Edit'
+            : prefill
+              ? kind === 'income'
+                ? 'Receipt → income'
+                : 'Receipt → expense'
+              : kind === 'income'
+                ? 'New income'
+                : 'New expense'
+        }
         onBack={onBack}
       />
+      {prefill && !editing ? (
+        <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
+          AI filled this from your photo. Review, choose “with friends” if you’re splitting, then save.
+        </Text>
+      ) : null}
       <Card>
         {kind === 'expense' && !editing ? (
           <>
@@ -1163,20 +1195,35 @@ export function CashflowShowScreen({
   const [current, setCurrent] = useState(entry);
   const [accounts, setAccounts] = useState<MoneyAccount[]>([]);
   const [receiveAccountId, setReceiveAccountId] = useState(entry.account_id ?? '');
+  const [receiveAmount, setReceiveAmount] = useState(
+    entry.amount ? formatAmountCommas(entry.amount) : '',
+  );
   const income = current.kind === 'income';
   const period = useMemo(() => monthBounds(), []);
 
-  useEffect(() => {
-    setCurrent(entry);
-    setReceiveAccountId(entry.account_id ?? '');
-  }, [entry]);
-
-  useEffect(() => {
+	useEffect(() => {
     api
       .listAccounts(token)
-      .then((res) => setAccounts(res.accounts ?? []))
+      .then((res) => {
+        const rows = res.accounts ?? [];
+        setAccounts(rows);
+        setReceiveAccountId((current) => {
+          if (current) return current;
+          if (entry.account_id) return entry.account_id;
+          const match = rows.find(
+            (a) => a.currency_code.toUpperCase() === (entry.currency_code || '').toUpperCase(),
+          );
+          return match?.id ?? '';
+        });
+      })
       .catch(() => setAccounts([]));
-  }, [token]);
+  }, [token, entry.account_id, entry.currency_code]);
+
+  useEffect(() => {
+    setCurrent(entry);
+    if (entry.account_id) setReceiveAccountId(entry.account_id);
+    setReceiveAmount(entry.amount ? formatAmountCommas(entry.amount) : '');
+  }, [entry]);
 
   useEffect(() => {
     const templateId = current.is_template ? current.id : current.template_id;
@@ -1211,13 +1258,22 @@ export function CashflowShowScreen({
   }
 
   async function onReceive(target: CashflowEntry) {
+    if (!receiveAccountId) {
+      onError(
+        accounts.length
+          ? 'Choose which account received this money'
+          : 'Add an account first (Dashboard → Accounts), then mark received',
+      );
+      return;
+    }
     setBusy(true);
     try {
-      const res = await api.receiveCashflow(
-        token,
-        target.id,
-        receiveAccountId ? { account_id: receiveAccountId } : undefined,
-      );
+      const cleaned = stripAmount(receiveAmount);
+      const body: { account_id?: string; amount?: string } = {
+        account_id: receiveAccountId,
+      };
+      if (cleaned) body.amount = cleaned;
+      const res = await api.receiveCashflow(token, target.id, body);
       setCurrent(res.entry);
       onUpdated(res.entry);
       setMonthEntries((rows) => rows.map((r) => (r.id === res.entry.id ? res.entry : r)));
@@ -1299,6 +1355,17 @@ export function CashflowShowScreen({
         ) : null}
         {expected ? (
           <View style={{ marginTop: 12, gap: space.sm }}>
+            <Field
+              label={income ? 'Amount received' : 'Amount paid'}
+              value={receiveAmount}
+              onChange={setReceiveAmount}
+              money
+            />
+            <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
+              {income
+                ? 'Edit if you received a different amount (cuts, taxes, etc.).'
+                : 'Edit if the paid amount differs from what was expected.'}
+            </Text>
             {receiveAccountOptions.length ? (
               <SearchSelect
                 label="Account"
@@ -1307,11 +1374,15 @@ export function CashflowShowScreen({
                 options={receiveAccountOptions}
                 placeholder="Which account?"
               />
-            ) : null}
+            ) : (
+              <Text style={{ color: colors.warning, fontFamily: fonts.ui, fontSize: 13 }}>
+                Add an account in the matching currency so this can update cash on hand.
+              </Text>
+            )}
             <PrimaryButton
               label={busy ? 'Saving…' : income ? 'Received' : 'Paid'}
               onPress={() => onReceive(current)}
-              disabled={busy}
+              disabled={busy || !receiveAccountId}
             />
           </View>
         ) : null}

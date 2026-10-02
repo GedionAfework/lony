@@ -25,6 +25,9 @@ type PublicUser struct {
 	CalendarID            string     `json:"calendar_id"`
 	HourCycle             string     `json:"hour_cycle"`
 	LoanRequireApproval   bool       `json:"loan_require_approval"`
+	AskRecurringReceived  bool       `json:"ask_recurring_received"`
+	NetWorthOverride      *string    `json:"net_worth_override,omitempty"`
+	NetWorthOverrideCurr  *string    `json:"net_worth_override_currency,omitempty"`
 	DefaultCurrencyCode   *string    `json:"default_currency_code"`
 	EmailVerified         bool       `json:"email_verified"`
 	Status                string     `json:"status"`

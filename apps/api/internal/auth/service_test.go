@@ -23,7 +23,8 @@ func testService() (*Service, *memoryStore) {
 func TestRegisterValidateEmail(t *testing.T) {
 	svc, _ := testService()
 	_, err := svc.Register(context.Background(), RegisterInput{
-		Email: "not-an-email", Password: "password12", DisplayName: "Abebe", AcceptedDisclaimer: true,
+		Email: "not-an-email", Password: "password12", DisplayName: "Abebe",
+		FirstName: "Abebe", LastName: "Bekele", AcceptedDisclaimer: true,
 	})
 	if err == nil {
 		t.Fatal("expected validation error")
@@ -34,6 +35,7 @@ func TestRegisterRequiresDisclaimer(t *testing.T) {
 	svc, _ := testService()
 	_, err := svc.Register(context.Background(), RegisterInput{
 		Email: "abebe@example.com", Password: "password12", DisplayName: "Abebe",
+		FirstName: "Abebe", LastName: "Bekele",
 	})
 	if err == nil {
 		t.Fatal("expected disclaimer error")
@@ -45,7 +47,8 @@ func TestRegisterVerifyLoginMe(t *testing.T) {
 	ctx := context.Background()
 
 	reg, err := svc.Register(ctx, RegisterInput{
-		Email: "abebe@example.com", Password: "password12", DisplayName: "Abebe", AcceptedDisclaimer: true,
+		Email: "abebe@example.com", Password: "password12", DisplayName: "Abebe",
+		FirstName: "Abebe", LastName: "Bekele", AcceptedDisclaimer: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -106,7 +109,8 @@ func TestDuplicateVerifiedEmail(t *testing.T) {
 	svc, _ := testService()
 	ctx := context.Background()
 	reg, err := svc.Register(ctx, RegisterInput{
-		Email: "sara@example.com", Password: "password12", DisplayName: "Sara", AcceptedDisclaimer: true,
+		Email: "sara@example.com", Password: "password12", DisplayName: "Sara",
+		FirstName: "Sara", LastName: "Tesfaye", AcceptedDisclaimer: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +119,8 @@ func TestDuplicateVerifiedEmail(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err = svc.Register(ctx, RegisterInput{
-		Email: "sara@example.com", Password: "password12", DisplayName: "Sara", AcceptedDisclaimer: true,
+		Email: "sara@example.com", Password: "password12", DisplayName: "Sara",
+		FirstName: "Sara", LastName: "Tesfaye", AcceptedDisclaimer: true,
 	})
 	if err == nil {
 		t.Fatal("expected email taken")

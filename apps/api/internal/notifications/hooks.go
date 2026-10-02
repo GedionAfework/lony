@@ -123,10 +123,10 @@ func (h CashflowHooks) NotifyBillDue(ctx context.Context, userID uuid.UUID, entr
 		return nil
 	}
 	label := "Bill due"
-	body := fmt.Sprintf("%s — %s %s is due.", title, amount, currency)
+	body := fmt.Sprintf("%s — %s %s is due. Did you pay it?", title, amount, currency)
 	if kind == "income" {
-		label = "Expected income"
-		body = fmt.Sprintf("%s — expect %s %s.", title, amount, currency)
+		label = "Income today"
+		body = fmt.Sprintf("%s — %s %s should arrive today. Did you receive it?", title, amount, currency)
 	}
 	return h.Svc.Notify(ctx, userID, TypeBillDue, nil, label, body, map[string]any{
 		"cashflow_id": entryID.String(),

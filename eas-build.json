@@ -1,0 +1,49 @@
+﻿{
+  "id": "008a8ba0-75de-47ab-b3f9-e5a24734ee9f",
+  "status": "ERRORED",
+  "platform": "ANDROID",
+  "error": {
+    "errorCode": "EAS_BUILD_UNKNOWN_GRADLE_ERROR",
+    "message": "Gradle build failed with unknown error. See logs for the \"Run gradlew\" phase for more information."
+  },
+  "artifacts": {},
+  "fingerprint": {
+    "id": "01a0fc33-eb62-737b-b126-97f76c020137",
+    "hash": "801c6b73ebefe93d294e62321801581bcf61b183"
+  },
+  "initiatingActor": {
+    "id": "c6b0cb41-6299-4371-99e7-210c7bb5c9c8",
+    "displayName": "gedionafework"
+  },
+  "logFiles": [
+    "https://storage.googleapis.com/eas-workflows-production/logs/d6dd1164-155d-4177-9b8a-82c50fd7d709/008a8ba0-75de-47ab-b3f9-e5a24734ee9f/2026-10-02T10%3A41%3A51Z-b9bcea5a-2024-4da0-9ad5-abf07fdc1768.txt?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=www-production%40exponentjs.iam.gserviceaccount.com%2F20261002%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20261002T105037Z&X-Goog-Expires=900&X-Goog-SignedHeaders=host&X-Goog-Signature=3aeb86173def5ee94cf2c7612b6eadabd69966fcc071bd0f94fd5efc52c054a8c17bf0d70a27a2aadfdbff4ea0d2e2935c181e050f2695021682dacd173c41591d9c7b5519c7aeefccbcd9d8220e144cd3916f69be6b00df15de64db0e7c095bdc29bd2d29cdfd8d91d499ea3c205408f8a270d6a1509300f9e31911cdf18d917cbfcb157f0bcdc2c0c0fe4ad4e091b389ecb05e2aba56a179fc390cffe3134af62d87970872c58847c03ddec654b1ce9c1db0a147b649178b84f7dc9deae3dc7bcf859ca17c2646883f6ab99c7d2f6a20eb139cc3cfc09af7d80ac28cc1b01760ad796288cb6623e96e4434b6ecc3bc0c1426353ebf32e8ed940f245cf1d7e2"
+  ],
+  "app": {
+    "id": "d6dd1164-155d-4177-9b8a-82c50fd7d709",
+    "name": "lony",
+    "slug": "lony",
+    "ownerAccount": {
+      "id": "bbf5a15e-85e6-4b64-b11f-d133934f5b4a",
+      "name": "gedionafework"
+    }
+  },
+  "distribution": "INTERNAL",
+  "buildProfile": "preview",
+  "appIdentifier": "io.lony.app",
+  "sdkVersion": "57.0.0",
+  "appVersion": "0.1.0",
+  "appBuildVersion": "1",
+  "gitCommitHash": "336c9bac0cbbcd3a13c959213d3fff62be1c3c48",
+  "gitCommitMessage": "update",
+  "priority": "NORMAL_PLUS",
+  "createdAt": "2026-10-02T10:40:56.108Z",
+  "updatedAt": "2026-10-02T10:44:03.064Z",
+  "completedAt": "2026-10-02T10:44:02.808Z",
+  "expirationDate": "2026-10-16T10:40:56.150Z",
+  "isForIosSimulator": false,
+  "metrics": {
+    "buildWaitTime": 5076,
+    "buildQueueTime": 54783,
+    "buildDuration": 126841
+  }
+}

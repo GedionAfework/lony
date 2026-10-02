@@ -1,0 +1,51 @@
+﻿[
+  {
+    "id": "008a8ba0-75de-47ab-b3f9-e5a24734ee9f",
+    "status": "ERRORED",
+    "platform": "ANDROID",
+    "error": {
+      "errorCode": "EAS_BUILD_UNKNOWN_GRADLE_ERROR",
+      "message": "Gradle build failed with unknown error. See logs for the \"Run gradlew\" phase for more information."
+    },
+    "artifacts": {},
+    "fingerprint": {
+      "id": "01a0fc33-eb62-737b-b126-97f76c020137",
+      "hash": "801c6b73ebefe93d294e62321801581bcf61b183"
+    },
+    "initiatingActor": {
+      "id": "c6b0cb41-6299-4371-99e7-210c7bb5c9c8",
+      "displayName": "gedionafework"
+    },
+    "logFiles": [
+      "https://storage.googleapis.com/eas-workflows-production/logs/d6dd1164-155d-4177-9b8a-82c50fd7d709/008a8ba0-75de-47ab-b3f9-e5a24734ee9f/2026-10-02T10%3A41%3A51Z-b9bcea5a-2024-4da0-9ad5-abf07fdc1768.txt?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=www-production%40exponentjs.iam.gserviceaccount.com%2F20261002%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20261002T104305Z&X-Goog-Expires=900&X-Goog-SignedHeaders=host&X-Goog-Signature=8935d7e9d1c10ff4f2e20531759b10ed745781a55f0312f7b26cb1b82736a8db9d5821b197adf1778df8c6960a4d7d31d3dcf646d21c9cdc87b0dad1105ed3731997cf2f4ab52d9307e02d9b50925ecc48d0345413d744569a41d79051f7f2038ed2d61c507c942a99ec2dda89f09183e6a8a010c6fa0d0e16dfee0dd1cab8c0b515c942d196ebfcab41483abea47bdf61e6c383fbce02fb288cc84990896efe7b160830135e51efdfd2ac9b63ca22a2cd67821422c23ea19240eba2e9ddd51f42159fc469be1c37af1b4ee947f698fe294086216983802689a2a18a079996cc339303438bccd0fa2a5d11764ddddcb433b116dedbae26b9b6bc302e2d6905c7"
+    ],
+    "app": {
+      "id": "d6dd1164-155d-4177-9b8a-82c50fd7d709",
+      "name": "lony",
+      "slug": "lony",
+      "ownerAccount": {
+        "id": "bbf5a15e-85e6-4b64-b11f-d133934f5b4a",
+        "name": "gedionafework"
+      }
+    },
+    "distribution": "INTERNAL",
+    "buildProfile": "preview",
+    "appIdentifier": "io.lony.app",
+    "sdkVersion": "57.0.0",
+    "appVersion": "0.1.0",
+    "appBuildVersion": "1",
+    "gitCommitHash": "336c9bac0cbbcd3a13c959213d3fff62be1c3c48",
+    "gitCommitMessage": "update",
+    "priority": "NORMAL_PLUS",
+    "createdAt": "2026-10-02T10:40:56.108Z",
+    "updatedAt": "2026-10-02T10:44:03.064Z",
+    "completedAt": "2026-10-02T10:44:02.808Z",
+    "expirationDate": "2026-10-16T10:40:56.150Z",
+    "isForIosSimulator": false,
+    "metrics": {
+      "buildWaitTime": 5076,
+      "buildQueueTime": 54783,
+      "buildDuration": 126841
+    }
+  }
+]

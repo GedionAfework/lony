@@ -23,6 +23,12 @@ type LoanCreator interface {
 
 type AccountLinker interface {
 	ApplyCashflowDelta(ctx context.Context, userID, accountID uuid.UUID, kind string, amount decimal.Decimal, currency, note string) error
+	// PickAccount returns preferred if set, else the first account matching currency.
+	PickAccount(ctx context.Context, userID uuid.UUID, currency string, preferred *uuid.UUID) (*uuid.UUID, error)
+}
+
+type RecurringPrefs interface {
+	AskRecurringReceived(ctx context.Context, userID uuid.UUID) (bool, error)
 }
 
 type Service struct {
@@ -31,6 +37,7 @@ type Service struct {
 	accounts AccountLinker
 	notify   BillNotifier
 	receipts ReceiptExtractor
+	prefs    RecurringPrefs
 	now      func() time.Time
 }
 
@@ -74,6 +81,21 @@ func (s *Service) SetNotifier(n BillNotifier) {
 
 func (s *Service) SetReceipts(r ReceiptExtractor) {
 	s.receipts = r
+}
+
+func (s *Service) SetPrefs(p RecurringPrefs) {
+	s.prefs = p
+}
+
+func (s *Service) askBeforeConfirm(ctx context.Context, userID uuid.UUID) bool {
+	if s.prefs == nil {
+		return true
+	}
+	on, err := s.prefs.AskRecurringReceived(ctx, userID)
+	if err != nil {
+		return true
+	}
+	return on
 }
 
 func (s *Service) Create(ctx context.Context, userID uuid.UUID, in CreateInput) (EntryDTO, error) {
@@ -157,8 +179,14 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, in CreateInput) 
 	if err != nil {
 		return EntryDTO{}, err
 	}
-	// Periodic: immediately create an expected occurrence for the start date so the user can mark Received.
+	// Periodic: create an occurrence for the start date.
+	// If "ask received" is on (default), status is expected until the user confirms.
+	// If off, auto-confirm and apply to the account.
 	if isTemplate {
+		status := StatusExpected
+		if !s.askBeforeConfirm(ctx, userID) {
+			status = StatusConfirmed
+		}
 		child := Entry{
 			UserID:       userID,
 			Kind:         kind,
@@ -172,13 +200,20 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, in CreateInput) 
 			OccurredAt:   occurred,
 			IsTemplate:   false,
 			TemplateID:   &saved.ID,
-			Status:       StatusExpected,
+			Status:       status,
 			CreatedAt:    now,
 			UpdatedAt:    now,
 		}
 		pending, err := s.store.Insert(ctx, child)
 		if err != nil {
 			return EntryDTO{}, err
+		}
+		if status == StatusConfirmed {
+			if err := s.applyAccount(ctx, userID, pending); err != nil {
+				return EntryDTO{}, err
+			}
+		} else if s.notify != nil && kind == KindIncome {
+			_ = s.notify.NotifyBillDue(ctx, userID, pending.ID, title, amount.StringFixed(Scale), currency, kind)
 		}
 		return toDTO(pending), nil
 	}
@@ -467,7 +502,7 @@ func (s *Service) Share(ctx context.Context, userID, entryID uuid.UUID, in Share
 	return toDTO(rec), loan, nil
 }
 
-func (s *Service) Receive(ctx context.Context, userID, id uuid.UUID, accountID *uuid.UUID) (EntryDTO, error) {
+func (s *Service) Receive(ctx context.Context, userID, id uuid.UUID, accountID *uuid.UUID, amountOverride *decimal.Decimal) (EntryDTO, error) {
 	rec, err := s.store.Get(ctx, userID, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -477,15 +512,28 @@ func (s *Service) Receive(ctx context.Context, userID, id uuid.UUID, accountID *
 	}
 	now := s.now().UTC()
 	if rec.IsTemplate {
+		amt := rec.Amount
+		if amountOverride != nil {
+			amt = *amountOverride
+		}
+		acct, err := s.resolveAccountID(ctx, userID, rec.CurrencyCode, firstAccountID(accountID, rec.AccountID))
+		if err != nil {
+			return EntryDTO{}, err
+		}
+		if acct == nil {
+			return EntryDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+				"account_id": "choose which account received this money",
+			})
+		}
 		child := Entry{
 			UserID:       rec.UserID,
 			Kind:         rec.Kind,
 			Title:        rec.Title,
-			Amount:       rec.Amount,
+			Amount:       amt,
 			CurrencyCode: rec.CurrencyCode,
 			Category:     rec.Category,
 			CategoryID:   rec.CategoryID,
-			AccountID:    firstAccountID(accountID, rec.AccountID),
+			AccountID:    acct,
 			Note:         rec.Note,
 			OccurredAt:   now,
 			IsTemplate:   false,
@@ -512,8 +560,18 @@ func (s *Service) Receive(ctx context.Context, userID, id uuid.UUID, accountID *
 	if rec.Status == StatusConfirmed {
 		return toDTO(rec), nil
 	}
-	if accountID != nil {
-		rec.AccountID = accountID
+	acct, err := s.resolveAccountID(ctx, userID, rec.CurrencyCode, firstAccountID(accountID, rec.AccountID))
+	if err != nil {
+		return EntryDTO{}, err
+	}
+	if acct == nil {
+		return EntryDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"account_id": "choose which account received this money",
+		})
+	}
+	rec.AccountID = acct
+	if amountOverride != nil {
+		rec.Amount = *amountOverride
 	}
 	rec.Status = StatusConfirmed
 	rec.UpdatedAt = now
@@ -556,11 +614,22 @@ func (s *Service) MaterializeDue(ctx context.Context) (int, error) {
 			CreatedAt:    now,
 			UpdatedAt:    now,
 		}
+		ask := s.askBeforeConfirm(ctx, tmpl.UserID)
+		if !ask {
+			child.Status = StatusConfirmed
+			if child.AccountID == nil {
+				if picked, err := s.resolveAccountID(ctx, tmpl.UserID, tmpl.CurrencyCode, nil); err == nil && picked != nil {
+					child.AccountID = picked
+				}
+			}
+		}
 		saved, err := s.store.Insert(ctx, child)
 		if err != nil {
 			return n, err
 		}
-		if s.notify != nil {
+		if child.Status == StatusConfirmed {
+			_ = s.applyAccount(ctx, tmpl.UserID, saved)
+		} else if s.notify != nil {
 			_ = s.notify.NotifyBillDue(ctx, tmpl.UserID, saved.ID, tmpl.Title, tmpl.Amount.StringFixed(Scale), tmpl.CurrencyCode, kind)
 		}
 		if tmpl.Recurrence == nil {
@@ -729,12 +798,35 @@ func slugify(name string) string {
 	return out
 }
 
+func (s *Service) resolveAccountID(ctx context.Context, userID uuid.UUID, currency string, preferred *uuid.UUID) (*uuid.UUID, error) {
+	if preferred != nil {
+		return preferred, nil
+	}
+	if s.accounts == nil {
+		return nil, nil
+	}
+	return s.accounts.PickAccount(ctx, userID, currency, nil)
+}
+
 func (s *Service) applyAccount(ctx context.Context, userID uuid.UUID, rec Entry) error {
-	if s.accounts == nil || rec.AccountID == nil || rec.Status != StatusConfirmed || rec.IsTemplate {
+	if s.accounts == nil || rec.Status != StatusConfirmed || rec.IsTemplate {
 		return nil
 	}
+	accountID := rec.AccountID
+	if accountID == nil {
+		picked, err := s.accounts.PickAccount(ctx, userID, rec.CurrencyCode, nil)
+		if err != nil {
+			return err
+		}
+		accountID = picked
+	}
+	if accountID == nil {
+		return httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"account_id": "choose which account received this money",
+		})
+	}
 	note := rec.Title
-	return s.accounts.ApplyCashflowDelta(ctx, userID, *rec.AccountID, rec.Kind, rec.Amount, rec.CurrencyCode, note)
+	return s.accounts.ApplyCashflowDelta(ctx, userID, *accountID, rec.Kind, rec.Amount, rec.CurrencyCode, note)
 }
 
 func firstAccountID(preferred, fallback *uuid.UUID) *uuid.UUID {
@@ -1081,7 +1173,7 @@ func (s *Service) ScanReceipt(ctx context.Context, userID uuid.UUID, in ReceiptS
 		notePtr = &note
 	}
 	if extract.MatchedID != nil {
-		rec, err := s.Receive(ctx, userID, *extract.MatchedID, in.AccountID)
+		rec, err := s.Receive(ctx, userID, *extract.MatchedID, in.AccountID, nil)
 		if err == nil {
 			out.Entry = &rec
 			return out, nil

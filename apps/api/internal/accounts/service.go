@@ -22,6 +22,7 @@ type LoanNets interface {
 
 type PrefsReader interface {
 	LoanRequireApproval(ctx context.Context, userID uuid.UUID) (bool, error)
+	NetWorthOverride(ctx context.Context, userID uuid.UUID) (amount *string, currency *string, err error)
 }
 
 type Service struct {
@@ -325,6 +326,29 @@ func (s *Service) ApplyCashflowDelta(ctx context.Context, userID, accountID uuid
 	return nil
 }
 
+// PickAccount returns preferred when valid, otherwise the first non-archived account in currency.
+func (s *Service) PickAccount(ctx context.Context, userID uuid.UUID, currency string, preferred *uuid.UUID) (*uuid.UUID, error) {
+	currency = strings.ToUpper(strings.TrimSpace(currency))
+	if preferred != nil {
+		rec, err := s.store.Get(ctx, userID, *preferred)
+		if err == nil && strings.EqualFold(rec.CurrencyCode, currency) {
+			id := rec.ID
+			return &id, nil
+		}
+	}
+	rows, err := s.store.List(ctx, userID, false)
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range rows {
+		if strings.EqualFold(a.CurrencyCode, currency) {
+			id := a.ID
+			return &id, nil
+		}
+	}
+	return nil, nil
+}
+
 func (s *Service) Transfer(ctx context.Context, userID uuid.UUID, in TransferInput) (TransferDTO, error) {
 	if in.FromAccountID == in.ToAccountID {
 		return TransferDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
@@ -487,12 +511,15 @@ func (s *Service) Wealth(ctx context.Context, userID uuid.UUID, preferred string
 		prefPay, _ = decimal.NewFromString(slices[0].Payables)
 	}
 	prefNet := prefCash.Add(prefRecv).Sub(prefPay)
+	live := prefNet.StringFixed(Scale)
 	return WealthSummary{
 		PreferredCurrency: preferred,
 		CashOnHand:        prefCash.StringFixed(Scale),
 		Receivables:       prefRecv.StringFixed(Scale),
 		Payables:          prefPay.StringFixed(Scale),
-		NetWorth:          prefNet.StringFixed(Scale),
+		NetWorth:          live,
+		LiveNetWorth:      live,
+		NetWorthManual:    false,
 		ByCurrency:        slices,
 		Accounts:          dtos,
 	}, nil

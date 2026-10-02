@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,15 +39,17 @@ func (m *memoryStore) CreateUser(_ context.Context, email, passwordHash, display
 		return UserRecord{}, errors.New("duplicate email")
 	}
 	user := UserRecord{
-		ID:           uuid.New(),
-		Email:        email,
-		DisplayName:  displayName,
-		PasswordHash: passwordHash,
-		Status:       "active",
-		Role:         "user",
-		Timezone:     timezone,
-		Locale:       locale,
-		CreatedAt:    time.Now(),
+		ID:                   uuid.New(),
+		Email:                email,
+		DisplayName:          displayName,
+		PasswordHash:         passwordHash,
+		Status:               "active",
+		Role:                 "user",
+		Timezone:             timezone,
+		Locale:               locale,
+		LoanRequireApproval:  true,
+		AskRecurringReceived: true,
+		CreatedAt:            time.Now(),
 	}
 	m.users[user.ID] = user
 	m.byEmail[email] = user.ID
@@ -146,6 +149,22 @@ func (m *memoryStore) UpdateUserAccount(_ context.Context, id uuid.UUID, in Acco
 	}
 	if in.LoanRequireApproval != nil {
 		user.LoanRequireApproval = *in.LoanRequireApproval
+	}
+	if in.AskRecurringReceived != nil {
+		user.AskRecurringReceived = *in.AskRecurringReceived
+	}
+	if in.NetWorthOverride != nil {
+		v := strings.TrimSpace(*in.NetWorthOverride)
+		if v == "" {
+			user.NetWorthOverride = nil
+			user.NetWorthOverrideCurr = nil
+		} else {
+			user.NetWorthOverride = &v
+			if in.NetWorthOverrideCurr != nil {
+				c := strings.ToUpper(strings.TrimSpace(*in.NetWorthOverrideCurr))
+				user.NetWorthOverrideCurr = &c
+			}
+		}
 	}
 	if in.TOSVersion != nil {
 		user.TOSVersion = in.TOSVersion

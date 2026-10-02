@@ -77,6 +77,8 @@ type Props = {
   onHourCycle: (v: string) => void;
   loanRequireApproval: boolean;
   onLoanRequireApproval: (v: boolean) => void;
+  askRecurringReceived: boolean;
+  onAskRecurringReceived: (v: boolean) => void;
   onAuthPref: (v: 'email' | 'google' | 'telegram') => void;
   onSave: () => void;
   onSaveRegion?: () => void;
@@ -348,6 +350,10 @@ export function SettingsScreen(props: Props) {
               <Text style={{ color: colors.text, fontFamily: fonts.ui, fontSize: 15 }}>
                 {t(props.locale, 'settings.biometricsLock')}
               </Text>
+              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12, marginTop: 2 }}>
+                {t(props.locale, 'settings.biometricsLockHint') ||
+                  `Require ${biometricsLabel} when opening Lony`}
+              </Text>
             </View>
             <Switch
               value={biometricsLock}
@@ -359,7 +365,7 @@ export function SettingsScreen(props: Props) {
                     if (v) {
                       const res = await enableBiometricsLock();
                       if (!res.ok) {
-                        Alert.alert('Biometrics Lock', res.error || `Could not enable ${biometricsLabel}`);
+                        Alert.alert('Screen lock', res.error || `Could not enable ${biometricsLabel}`);
                         setBiometricsLock(false);
                         return;
                       }
@@ -367,7 +373,7 @@ export function SettingsScreen(props: Props) {
                     } else {
                       const res = await disableBiometricsLock();
                       if (!res.ok) {
-                        Alert.alert('Biometrics Lock', res.error || `Could not disable ${biometricsLabel}`);
+                        Alert.alert('Screen lock', res.error || `Could not disable ${biometricsLabel}`);
                         setBiometricsLock(true);
                         return;
                       }
@@ -513,6 +519,32 @@ export function SettingsScreen(props: Props) {
           <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13, marginBottom: 8 }}>
             Choose what you want to hear about. Device push still requires a registered token.
           </Text>
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              paddingVertical: 12,
+              borderBottomWidth: 1,
+              borderBottomColor: colors.border,
+              gap: 12,
+            }}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: colors.text, fontFamily: fonts.ui, fontSize: 15 }}>
+                Ask received for recurring payments
+              </Text>
+              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12, marginTop: 2 }}>
+                When on, we’ll ask if you got today’s recurring income (or paid a bill). Turn off to auto-apply the amount.
+              </Text>
+            </View>
+            <Switch
+              value={props.askRecurringReceived}
+              onValueChange={props.onAskRecurringReceived}
+              trackColor={{ false: colors.borderStrong, true: colors.primarySoft }}
+              thumbColor={props.askRecurringReceived ? colors.primary : colors.muted}
+            />
+          </View>
           {(
             [
               { label: 'Loan & repayment alerts', value: pushLoans, onChange: setPushLoans },
@@ -664,6 +696,11 @@ export function SettingsScreen(props: Props) {
         <HubRow title={t(props.locale, 'themes')} subtitle={t(props.locale, 'settings.themesSubtitle')} onPress={() => goPage('themes')} />
         <HubRow title={t(props.locale, 'payments')} subtitle={t(props.locale, 'settings.paymentsSubtitle')} onPress={() => goPage('payments')} />
         <HubRow title={t(props.locale, 'notifications')} subtitle={t(props.locale, 'settings.notificationsSubtitle')} onPress={() => goPage('notifications')} />
+        <HubRow
+          title="Preferences"
+          subtitle="Recurring income prompts and related options"
+          onPress={() => goPage('notifications')}
+        />
         <HubRow title={t(props.locale, 'privacy')} subtitle={t(props.locale, 'settings.privacySubtitle')} onPress={() => goPage('privacy')} />
         <HubRow title={t(props.locale, 'settings.security')} subtitle={t(props.locale, 'settings.securitySubtitle')} onPress={() => goPage('security')} />
         <HubRow title={t(props.locale, 'legal')} subtitle={t(props.locale, 'settings.legalSubtitle')} onPress={() => goPage('legal')} />

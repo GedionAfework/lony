@@ -63,6 +63,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 	accountsSvc.SetLoans(loansSvc)
 	accountsSvc.SetPrefs(sqlStore)
 	expensesSvc.SetAccounts(accountsSvc)
+	expensesSvc.SetPrefs(sqlStore)
 	expensesH := expenses.NewHandler(expensesSvc)
 	accountsH := accounts.NewHandler(accountsSvc)
 	importsSvc := imports.NewService(expensesSvc, accountsSvc)

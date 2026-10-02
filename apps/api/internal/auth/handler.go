@@ -33,6 +33,10 @@ type registerBody struct {
 	Email              string `json:"email"`
 	Password           string `json:"password"`
 	DisplayName        string `json:"display_name"`
+	FirstName          string `json:"first_name"`
+	LastName           string `json:"last_name"`
+	PhoneE164          string `json:"phone_e164"`
+	CountryCode        string `json:"country_code"`
 	AcceptedDisclaimer bool   `json:"accepted_disclaimer"`
 }
 
@@ -64,6 +68,9 @@ type patchMeBody struct {
 	CalendarID            *string `json:"calendar_id"`
 	HourCycle             *string `json:"hour_cycle"`
 	LoanRequireApproval   *bool   `json:"loan_require_approval"`
+	AskRecurringReceived  *bool   `json:"ask_recurring_received"`
+	NetWorthOverride      *string `json:"net_worth_override"`
+	NetWorthOverrideCurr  *string `json:"net_worth_override_currency"`
 	DefaultCurrencyCode   *string `json:"default_currency_code"`
 }
 
@@ -245,6 +252,9 @@ func (h *Handler) PatchMe(w http.ResponseWriter, r *http.Request) {
 		CalendarID:            body.CalendarID,
 		HourCycle:             body.HourCycle,
 		LoanRequireApproval:   body.LoanRequireApproval,
+		AskRecurringReceived:  body.AskRecurringReceived,
+		NetWorthOverride:      body.NetWorthOverride,
+		NetWorthOverrideCurr:  body.NetWorthOverrideCurr,
 		Currency:              body.DefaultCurrencyCode,
 	})
 	if err != nil {

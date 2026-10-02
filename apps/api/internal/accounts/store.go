@@ -107,6 +107,8 @@ type WealthSummary struct {
 	Receivables       string          `json:"receivables"`
 	Payables          string          `json:"payables"`
 	NetWorth          string          `json:"net_worth"`
+	LiveNetWorth      string          `json:"live_net_worth,omitempty"`
+	NetWorthManual    bool            `json:"net_worth_manual"`
 	ByCurrency        []CurrencySlice `json:"by_currency"`
 	Accounts          []AccountDTO    `json:"accounts"`
 }

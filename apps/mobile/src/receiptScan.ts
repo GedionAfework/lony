@@ -1,12 +1,28 @@
 import * as ImagePicker from 'expo-image-picker';
 import { Alert } from 'react-native';
-import { api, type CashflowEntry } from './api';
+import { api } from './api';
 
-/** Open the camera, send the photo to AI receipt scan, and create a cashflow entry. */
+export type ReceiptExtractDraft = {
+  kind: 'income' | 'expense';
+  title: string;
+  amount: string;
+  currency_code: string;
+  note?: string;
+  occurred_at?: string;
+  merchant?: string;
+  matched_entry_id?: string;
+  partial?: boolean;
+};
+
+/**
+ * Open the camera, send the photo to AI receipt scan, and return a draft for the
+ * expense form (create: false). Always prefers opening the form with whatever
+ * the model returned so the user can save / split with friends without typing from scratch.
+ */
 export async function scanReceiptWithCamera(
   token: string,
   accountId?: string,
-): Promise<CashflowEntry | null> {
+): Promise<ReceiptExtractDraft | null> {
   const cam = await ImagePicker.requestCameraPermissionsAsync();
   if (!cam.granted) {
     Alert.alert('Camera permission', 'Allow camera access to scan receipts and statements.');
@@ -14,41 +30,50 @@ export async function scanReceiptWithCamera(
   }
 
   const pick = await ImagePicker.launchCameraAsync({
-    quality: 0.75,
+    // Smaller images are more reliable for vision APIs (Groq 20MB / token limits).
+    quality: 0.45,
     base64: true,
-    allowsEditing: true,
+    allowsEditing: false,
+    exif: false,
   });
   if (pick.canceled || !pick.assets?.[0]?.base64) return null;
 
   const asset = pick.assets[0];
-  const res = await api.scanCashflowReceipt(token, {
-    mime: asset.mimeType || 'image/jpeg',
-    image_base64: asset.base64!,
-    account_id: accountId,
-    create: true,
-  });
-
-  if (!res.entry) {
-    const e = res.extract;
-    Alert.alert(
-      'Could not save receipt',
-      [
-        e.title || e.merchant,
-        e.amount ? `${e.amount} ${e.currency_code || ''}`.trim() : null,
-        'Try again with a clearer photo.',
-      ]
-        .filter(Boolean)
-        .join('\n'),
-    );
+  let res;
+  try {
+    res = await api.scanCashflowReceipt(token, {
+      mime: asset.mimeType || 'image/jpeg',
+      image_base64: asset.base64!,
+      account_id: accountId,
+      create: false,
+    });
+  } catch (e) {
+    Alert.alert('Receipt scan failed', e instanceof Error ? e.message : 'Could not read receipt');
     return null;
   }
 
   const e = res.extract;
-  Alert.alert(
-    'Receipt saved',
-    [res.entry.title, `${res.entry.amount} ${res.entry.currency_code}`, e.matched_entry_id ? 'Matched an expected bill.' : null]
-      .filter(Boolean)
-      .join('\n'),
-  );
-  return res.entry;
+  const amount = (e.amount || '').trim();
+  const title = (e.title || e.merchant || 'Receipt').trim();
+  const kind = e.kind === 'income' ? 'income' : 'expense';
+  const draft: ReceiptExtractDraft = {
+    kind,
+    title,
+    amount,
+    currency_code: (e.currency_code || '').trim().toUpperCase(),
+    note: e.note || (e.merchant && e.merchant !== title ? e.merchant : undefined),
+    occurred_at: e.occurred_at,
+    merchant: e.merchant,
+    matched_entry_id: e.matched_entry_id,
+    partial: !amount,
+  };
+
+  if (!amount) {
+    Alert.alert(
+      'Couldn’t read the amount',
+      'We opened the expense form with what we could extract. Fill the amount, then save — or share with friends.',
+    );
+  }
+
+  return draft;
 }

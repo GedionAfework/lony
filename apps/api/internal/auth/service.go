@@ -61,6 +61,10 @@ type RegisterInput struct {
 	Email              string
 	Password           string
 	DisplayName        string
+	FirstName          string
+	LastName           string
+	PhoneE164          string
+	CountryCode        string
 	AcceptedDisclaimer bool
 }
 
@@ -93,7 +97,22 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (RegisterResul
 			"accepted_disclaimer": "you must accept the Lony product disclaimer",
 		})
 	}
+	firstName := strings.TrimSpace(in.FirstName)
+	lastName := strings.TrimSpace(in.LastName)
 	displayName := strings.TrimSpace(in.DisplayName)
+	if displayName == "" {
+		displayName = strings.TrimSpace(firstName + " " + lastName)
+	}
+	if utf8.RuneCountInString(firstName) < 1 || utf8.RuneCountInString(firstName) > 60 {
+		return RegisterResult{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"first_name": "required, max 60 characters",
+		})
+	}
+	if utf8.RuneCountInString(lastName) < 1 || utf8.RuneCountInString(lastName) > 60 {
+		return RegisterResult{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"last_name": "required, max 60 characters",
+		})
+	}
 	if utf8.RuneCountInString(displayName) < 1 || utf8.RuneCountInString(displayName) > 120 {
 		return RegisterResult{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
 			"display_name": "must be between 1 and 120 characters",
@@ -101,6 +120,32 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (RegisterResul
 	}
 	if err := validatePassword(in.Password); err != nil {
 		return RegisterResult{}, err
+	}
+	phone := strings.TrimSpace(in.PhoneE164)
+	if phone != "" {
+		if !strings.HasPrefix(phone, "+") || len(phone) < 8 || len(phone) > 20 {
+			return RegisterResult{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+				"phone_e164": "use E.164 format like +2519…",
+			})
+		}
+	}
+	country := strings.ToUpper(strings.TrimSpace(in.CountryCode))
+	if country != "" && len(country) != 2 {
+		return RegisterResult{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"country_code": "must be a 2-letter country code",
+		})
+	}
+
+	profilePatch := AccountUpdate{
+		DisplayName: &displayName,
+		FirstName:   &firstName,
+		LastName:    &lastName,
+	}
+	if phone != "" {
+		profilePatch.PhoneE164 = &phone
+	}
+	if country != "" {
+		profilePatch.CountryCode = &country
 	}
 
 	existing, err := s.store.GetUserByEmail(ctx, email)
@@ -116,10 +161,8 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (RegisterResul
 			return RegisterResult{}, updErr
 		}
 		existing.PasswordHash = hash
-		if dn := strings.TrimSpace(displayName); dn != "" {
-			if updated, updErr := s.store.UpdateUserAccount(ctx, existing.ID, AccountUpdate{DisplayName: &dn}); updErr == nil {
-				existing = updated
-			}
+		if updated, updErr := s.store.UpdateUserAccount(ctx, existing.ID, profilePatch); updErr == nil {
+			existing = updated
 		}
 		code, issueErr := s.issueChallenge(ctx, existing)
 		if issueErr != nil {
@@ -138,6 +181,9 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) (RegisterResul
 	user, err := s.store.CreateUser(ctx, email, hash, displayName, "UTC", "en")
 	if err != nil {
 		return RegisterResult{}, err
+	}
+	if updated, updErr := s.store.UpdateUserAccount(ctx, user.ID, profilePatch); updErr == nil {
+		user = updated
 	}
 	code, err := s.issueChallenge(ctx, user)
 	if err != nil {
@@ -721,6 +767,9 @@ func ToPublic(user UserRecord) users.PublicUser {
 		CalendarID:            user.CalendarID,
 		HourCycle:             user.HourCycle,
 		LoanRequireApproval:   user.LoanRequireApproval,
+		AskRecurringReceived:  user.AskRecurringReceived,
+		NetWorthOverride:      user.NetWorthOverride,
+		NetWorthOverrideCurr:  user.NetWorthOverrideCurr,
 		DefaultCurrencyCode:   user.DefaultCurrencyCode,
 		EmailVerified:         user.EmailVerifiedAt != nil,
 		Status:                user.Status,
@@ -784,6 +833,20 @@ func validatePassword(password string) error {
 	if utf8.RuneCountInString(password) < 8 {
 		return httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
 			"password": "must be at least 8 characters",
+		})
+	}
+	hasLetter, hasDigit := false, false
+	for _, r := range password {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+			hasLetter = true
+		}
+		if r >= '0' && r <= '9' {
+			hasDigit = true
+		}
+	}
+	if !hasLetter || !hasDigit {
+		return httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"password": "must include at least one letter and one number",
 		})
 	}
 	return nil

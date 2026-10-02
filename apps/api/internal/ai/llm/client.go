@@ -79,10 +79,14 @@ type ChatRequest struct {
 }
 
 type visionChatRequest struct {
-	Model       string          `json:"model"`
-	Messages    []VisionMessage `json:"messages"`
-	Temperature float64         `json:"temperature,omitempty"`
-	MaxTokens   int             `json:"max_tokens,omitempty"`
+	Model               string          `json:"model"`
+	Messages            []VisionMessage `json:"messages"`
+	Temperature         float64         `json:"temperature,omitempty"`
+	MaxTokens           int             `json:"max_tokens,omitempty"`
+	MaxCompletionTokens int             `json:"max_completion_tokens,omitempty"`
+	ResponseFormat      *struct {
+		Type string `json:"type"`
+	} `json:"response_format,omitempty"`
 }
 
 type ChatResponse struct {
@@ -130,7 +134,16 @@ func (c *Client) Chat(ctx context.Context, messages []Message, maxTokens int) (R
 }
 
 // ChatVision sends a multimodal (image + text) chat completion.
+// opts may be nil. Use JSONObject: true for structured extraction.
 func (c *Client) ChatVision(ctx context.Context, messages []VisionMessage, maxTokens int) (Result, error) {
+	return c.ChatVisionOpts(ctx, messages, maxTokens, nil)
+}
+
+type VisionOpts struct {
+	JSONObject bool
+}
+
+func (c *Client) ChatVisionOpts(ctx context.Context, messages []VisionMessage, maxTokens int, opts *VisionOpts) (Result, error) {
 	if !c.Available() {
 		return Result{}, fmt.Errorf("llm unavailable: missing API key")
 	}
@@ -138,10 +151,16 @@ func (c *Client) ChatVision(ctx context.Context, messages []VisionMessage, maxTo
 		maxTokens = 800
 	}
 	body := visionChatRequest{
-		Model:       c.model,
-		Messages:    messages,
-		Temperature: 0.2,
-		MaxTokens:   maxTokens,
+		Model:               c.model,
+		Messages:            messages,
+		Temperature:         0.1,
+		MaxTokens:           maxTokens,
+		MaxCompletionTokens: maxTokens,
+	}
+	if opts != nil && opts.JSONObject {
+		body.ResponseFormat = &struct {
+			Type string `json:"type"`
+		}{Type: "json_object"}
 	}
 	raw, err := json.Marshal(body)
 	if err != nil {
@@ -180,8 +199,9 @@ func (c *Client) ChatVision(ctx context.Context, messages []VisionMessage, maxTo
 	if model == "" {
 		model = c.model
 	}
+	content := StripThinking(strings.TrimSpace(parsed.Choices[0].Message.Content))
 	return Result{
-		Content:          strings.TrimSpace(parsed.Choices[0].Message.Content),
+		Content:          content,
 		Model:            model,
 		PromptTokens:     parsed.Usage.PromptTokens,
 		CompletionTokens: parsed.Usage.CompletionTokens,

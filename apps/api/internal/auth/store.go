@@ -31,6 +31,9 @@ type UserRecord struct {
 	CalendarID            string
 	HourCycle             string
 	LoanRequireApproval   bool
+	AskRecurringReceived  bool
+	NetWorthOverride      *string
+	NetWorthOverrideCurr  *string
 	DefaultCurrencyCode   *string
 	CreatedAt             time.Time
 }
@@ -50,9 +53,13 @@ type AccountUpdate struct {
 	CalendarID            *string
 	HourCycle             *string
 	LoanRequireApproval   *bool
-	Currency              *string
-	TOSVersion            *string
-	TOSAcceptedAt         *time.Time
+	AskRecurringReceived  *bool
+	// NetWorthOverride: nil = leave unchanged; pointer to empty = clear; otherwise set.
+	NetWorthOverride     *string
+	NetWorthOverrideCurr *string
+	Currency             *string
+	TOSVersion           *string
+	TOSAcceptedAt        *time.Time
 }
 
 type SessionRecord struct {

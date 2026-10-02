@@ -7,7 +7,9 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "scheme": "lony",
+    "icon": "./assets/icon.png",
     "splash": {
+      "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#FFFFFF"
     },
@@ -25,19 +27,25 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#FFFFFF"
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0F766E"
       },
       "package": "io.lony.app",
       "softwareKeyboardLayoutMode": "resize",
       "usesCleartextTraffic": true,
       "permissions": [
-        "READ_CONTACTS",
-        "RECORD_AUDIO",
-        "MODIFY_AUDIO_SETTINGS",
-        "CAMERA",
-        "READ_MEDIA_IMAGES",
-        "READ_SMS",
-        "RECEIVE_SMS"
+        "android.permission.READ_CONTACTS",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.CAMERA",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_SMS",
+        "android.permission.RECEIVE_SMS",
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT",
+        "android.permission.FOREGROUND_SERVICE",
+        "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+        "android.permission.WRITE_CONTACTS"
       ],
       "intentFilters": [
         {
@@ -87,12 +95,14 @@
         }
       ],
       "expo-web-browser",
-      "@react-native-community/datetimepicker"
+      "@react-native-community/datetimepicker",
+      "expo-asset"
     ],
     "extra": {
       "eas": {
-        "projectId": ""
+        "projectId": "d6dd1164-155d-4177-9b8a-82c50fd7d709"
       }
-    }
+    },
+    "owner": "gedionafework"
   }
 }
