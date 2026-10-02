@@ -3,8 +3,10 @@ import { Pressable, Text, View } from 'react-native';
 import type { PeerTrust } from './api';
 import { api } from './api';
 import { IconBack } from './icons';
+import { t } from './i18n';
 import { fonts, radii, space, useTheme } from './theme';
 import { Card, PrimaryButton, SecondaryButton } from './ui';
+import { TrustGradeModal } from './TrustGradeModal';
 
 type Peer = {
   id: string;
@@ -35,6 +37,7 @@ export function PeerProfileScreen({
   const avatarLetter = (isSelf ? selfInitial : peer.display_name.slice(0, 1))?.toUpperCase() || '?';
   const [trust, setTrust] = useState<PeerTrust | null>(null);
   const [bondLabel, setBondLabel] = useState<string | null>(null);
+  const [gradeOpen, setGradeOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -112,26 +115,38 @@ export function PeerProfileScreen({
             <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 13 }}>{bondLabel}</Text>
           ) : null}
           {trust ? (
-            <View style={{ alignItems: 'center', gap: 4, marginTop: 4 }}>
+            <Pressable
+              onPress={() => setGradeOpen(true)}
+              style={{ alignItems: 'center', gap: 4, marginTop: 4 }}
+            >
               <Text style={{ color: colors.primary, fontFamily: fonts.uiBold, fontSize: 36 }}>
                 {trust.grade}
               </Text>
               <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }}>
-                Lony Trust · {trust.band}
+                {(
+                  t(undefined, isSelf ? 'trust.youAreGrade' : 'trust.theyAreGrade') ||
+                  (isSelf ? 'You are grade {grade} in Lony Trust' : 'Grade {grade} in Lony Trust')
+                ).replace('{grade}', trust.grade)}
+                {trust.band ? ` · ${trust.band}` : ''}
               </Text>
               <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12, textAlign: 'center' }}>
                 {trust.available
                   ? `Repayment ${Math.round(trust.repayment_score)}${
                       trust.thin_history ? ' · limited history' : ''
                     } · ${trust.loan_sample_size} loan${trust.loan_sample_size === 1 ? '' : 's'} on Lony`
-                  : 'Not enough Lony activity to grade yet'}
+                  : t(undefined, 'trust.notEnough') || 'Not enough Lony activity to grade yet'}
               </Text>
-            </View>
+            </Pressable>
           ) : null}
         </View>
         <PrimaryButton label="Message" onPress={onMessage} />
         {onCreateLoan ? <SecondaryButton label="New loan" onPress={onCreateLoan} /> : null}
       </Card>
+      <TrustGradeModal
+        visible={gradeOpen}
+        grade={trust?.grade}
+        onClose={() => setGradeOpen(false)}
+      />
     </View>
   );
 }

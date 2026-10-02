@@ -15,6 +15,7 @@ import { formatAmountCommas, parseAmountNumber, stripAmount } from './amountForm
 import { CURRENCIES } from './catalogs';
 import { DateField, isoToday } from './DateField';
 import { IconBack, IconContact, IconSearch } from './icons';
+import { t } from './i18n';
 import {
   INSTITUTION_TYPES,
   institutionsForType,
@@ -404,7 +405,7 @@ export function NewLoanScreen({
               ? `Repayment ${Math.round(peerTrust.repayment_score)}${
                   peerTrust.thin_history ? ' · limited history' : ''
                 } · based on Lony activity only`
-              : 'Not enough Lony activity to grade yet'}
+              : t(undefined, 'trust.notEnough') || 'Not enough Lony activity to grade yet'}
           </Text>
         </Card>
       ) : null}

@@ -14,6 +14,8 @@ import {
   type User,
 } from './api';
 import { RichText } from './RichText';
+import { t } from './i18n';
+import { TrustGradeModal } from './TrustGradeModal';
 import { fonts, radii, space, useTheme } from './theme';
 import { Card, EmptyState, Field, Money, PrimaryButton, SecondaryButton } from './ui';
 
@@ -69,89 +71,90 @@ function MonthBars({
   const { colors } = useTheme();
   const max = Math.max(
     1,
-    ...series.map((s) => Math.max(Number(s.income) || 0, Number(s.expense) || 0, Math.abs(Number(s.net) || 0))),
+    ...series.map((s) => Math.max(Number(s.income) || 0, Number(s.expense) || 0)),
   );
+
   return (
-    <View
-      style={{
-        gap: 12,
-        padding: 12,
-        borderRadius: radii.lg,
-        backgroundColor: colors.surfaceMuted,
-        borderWidth: 1,
-        borderColor: colors.border,
-      }}
-    >
-      {series.map((row) => {
-        const income = Number(row.income) || 0;
-        const expense = Number(row.expense) || 0;
-        const net = Number(row.net) || income - expense;
-        const iH = Math.max(income > 0 ? 6 : 0, Math.round((income / max) * 88));
-        const eH = Math.max(expense > 0 ? 6 : 0, Math.round((expense / max) * 88));
-        const nH = Math.max(Math.abs(net) > 0 ? 4 : 0, Math.round((Math.abs(net) / max) * 88));
-        const label = row.month.slice(5);
-        return (
-          <View key={row.month} style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 10 }}>
-            <Text style={{ width: 36, color: colors.muted, fontFamily: fonts.uiSemi, fontSize: 11 }}>{label}</Text>
-            <View style={{ flex: 1, flexDirection: 'row', alignItems: 'flex-end', gap: 5, height: 92 }}>
-              <View
-                style={{
-                  flex: 1,
-                  height: iH,
-                  borderTopLeftRadius: 8,
-                  borderTopRightRadius: 8,
-                  backgroundColor: colors.success,
-                }}
-              />
-              <View
-                style={{
-                  flex: 1,
-                  height: eH,
-                  borderTopLeftRadius: 8,
-                  borderTopRightRadius: 8,
-                  backgroundColor: colors.warning,
-                }}
-              />
-              {showNet ? (
-                <View
-                  style={{
-                    width: 7,
-                    height: nH,
-                    borderTopLeftRadius: 4,
-                    borderTopRightRadius: 4,
-                    backgroundColor: net >= 0 ? colors.primary : colors.error,
-                  }}
-                />
-              ) : null}
-            </View>
-            <View style={{ width: 92, alignItems: 'flex-end', gap: 1 }}>
-              <Text style={{ color: colors.success, fontFamily: fonts.uiSemi, fontSize: 10 }} numberOfLines={1}>
-                {formatMoney(row.income, currency, locale)}
-              </Text>
-              <Text style={{ color: colors.warning, fontFamily: fonts.uiSemi, fontSize: 10 }} numberOfLines={1}>
-                {formatMoney(row.expense, currency, locale)}
-              </Text>
-              {showNet ? (
-                <Text
-                  style={{
-                    color: net >= 0 ? colors.primary : colors.warning,
-                    fontFamily: fonts.uiBold,
-                    fontSize: 10,
-                  }}
-                  numberOfLines={1}
-                >
-                  {formatMoney(String(net), currency, locale)}
-                </Text>
-              ) : null}
-            </View>
-          </View>
-        );
-      })}
-      <View style={{ flexDirection: 'row', gap: 14, marginTop: 2, flexWrap: 'wrap' }}>
+    <View style={{ gap: 10 }}>
+      <View style={{ flexDirection: 'row', gap: 14, flexWrap: 'wrap', marginBottom: 2 }}>
         <LegendDot color={colors.success} label="Income" />
         <LegendDot color={colors.warning} label="Expense" />
         {showNet ? <LegendDot color={colors.primary} label="Net" /> : null}
       </View>
+      {series.map((row) => {
+        const income = Number(row.income) || 0;
+        const expense = Number(row.expense) || 0;
+        const net = Number(row.net) || income - expense;
+        const iPct = Math.max(income > 0 ? 4 : 0, Math.round((income / max) * 100));
+        const ePct = Math.max(expense > 0 ? 4 : 0, Math.round((expense / max) * 100));
+        const label = row.month.slice(5);
+        return (
+          <View
+            key={row.month}
+            style={{
+              gap: 8,
+              padding: 12,
+              borderRadius: radii.lg,
+              backgroundColor: colors.surfaceMuted,
+              borderWidth: 1,
+              borderColor: colors.border,
+            }}
+          >
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+              <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }}>{label}</Text>
+              {showNet ? (
+                <Text
+                  style={{
+                    color: net >= 0 ? colors.success : colors.warning,
+                    fontFamily: fonts.uiBold,
+                    fontSize: 13,
+                  }}
+                >
+                  Net {formatMoney(String(net), currency, locale)}
+                </Text>
+              ) : null}
+            </View>
+            <View style={{ gap: 6 }}>
+              <View style={{ gap: 3 }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                  <Text style={{ color: colors.success, fontFamily: fonts.ui, fontSize: 11 }}>Income</Text>
+                  <Text style={{ color: colors.success, fontFamily: fonts.uiSemi, fontSize: 11 }}>
+                    {formatMoney(row.income, currency, locale)}
+                  </Text>
+                </View>
+                <View style={{ height: 10, borderRadius: radii.full, backgroundColor: colors.surface }}>
+                  <View
+                    style={{
+                      height: 10,
+                      width: `${iPct}%`,
+                      borderRadius: radii.full,
+                      backgroundColor: colors.success,
+                    }}
+                  />
+                </View>
+              </View>
+              <View style={{ gap: 3 }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+                  <Text style={{ color: colors.warning, fontFamily: fonts.ui, fontSize: 11 }}>Expense</Text>
+                  <Text style={{ color: colors.warning, fontFamily: fonts.uiSemi, fontSize: 11 }}>
+                    {formatMoney(row.expense, currency, locale)}
+                  </Text>
+                </View>
+                <View style={{ height: 10, borderRadius: radii.full, backgroundColor: colors.surface }}>
+                  <View
+                    style={{
+                      height: 10,
+                      width: `${ePct}%`,
+                      borderRadius: radii.full,
+                      backgroundColor: colors.warning,
+                    }}
+                  />
+                </View>
+              </View>
+            </View>
+          </View>
+        );
+      })}
     </View>
   );
 }
@@ -347,6 +350,7 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError, 
   const [rates, setRates] = useState<Record<string, number>>(() =>
     preferred ? { [preferred]: 1 } : {},
   );
+  const [gradeModalOpen, setGradeModalOpen] = useState(false);
 
   const isPremium =
     user.role === 'admin' || (user.plan_tier || 'free').toLowerCase() === 'premium';
@@ -603,20 +607,33 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError, 
                       textTransform: 'uppercase',
                     }}
                   >
-                    Lony Trust
+                    {t(user.locale, 'trust.title') || 'Lony Trust'}
                   </Text>
-                  <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 10 }}>
+                  <Pressable
+                    onPress={() => setGradeModalOpen(true)}
+                    style={{ flexDirection: 'row', alignItems: 'baseline', gap: 10 }}
+                  >
                     <Text style={{ color: colors.primary, fontFamily: fonts.uiBold, fontSize: 48 }}>
                       {lonyScore.grade}
                     </Text>
                     <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>
                       {lonyScore.band}
                     </Text>
-                  </View>
-                  <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
-                    Peer-lending trust grade on Lony (not a credit bureau score)
-                    {lonyScore.thin_history ? ' · limited loan history' : ''}
+                  </Pressable>
+                  <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
+                    {(t(user.locale, 'trust.youAreGrade') || 'You are grade {grade} in Lony Trust').replace(
+                      '{grade}',
+                      lonyScore.grade,
+                    )}
+                    {lonyScore.thin_history
+                      ? ` · ${t(user.locale, 'trust.thinHistory') || 'limited loan history'}`
+                      : ''}
                   </Text>
+                  <Pressable onPress={() => setGradeModalOpen(true)}>
+                    <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 12, marginTop: 4 }}>
+                      {t(user.locale, 'trust.whatGradesMean') || 'What grades mean'}
+                    </Text>
+                  </Pressable>
                   <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 8 }}>
                     <Mini label="Repayment" value={`${Math.round(lonyScore.repayment_score)}`} />
                     <Mini label="Debt" value={`${Math.round(lonyScore.debt_score)}`} />
@@ -1132,12 +1149,19 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError, 
               ) : null}
               <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 11, marginTop: 10 }}>
                 {disclaimer ||
-                  'Lony insights are educational estimates, not credit scores, investment advice, or guaranteed outcomes.'}
+                  t(user.locale, 'insights.disclaimer') ||
+                  'Lony insights are educational estimates, not investment advice or guaranteed outcomes.'}
               </Text>
             </Card>
           ) : null}
         </>
       )}
+      <TrustGradeModal
+        visible={gradeModalOpen}
+        grade={lonyScore?.grade}
+        onClose={() => setGradeModalOpen(false)}
+        locale={user.locale}
+      />
     </View>
   );
 }

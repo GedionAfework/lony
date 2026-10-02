@@ -26,10 +26,12 @@ type PrefsReader interface {
 }
 
 type Service struct {
-	store Store
-	loans LoanNets
-	prefs PrefsReader
-	now   func() time.Time
+	store          Store
+	loans          LoanNets
+	prefs          PrefsReader
+	banks          BankProfiles
+	accountNotify  AccountNumberNotifier
+	now            func() time.Time
 }
 
 func NewService(store Store) *Service {
@@ -349,6 +351,34 @@ func (s *Service) PickAccount(ctx context.Context, userID uuid.UUID, currency st
 	return nil, nil
 }
 
+// FindAccountByLast4 returns an account that mentions the last4 digits in name or institution label.
+func (s *Service) FindAccountByLast4(ctx context.Context, userID uuid.UUID, currency, last4 string) (*uuid.UUID, error) {
+	last4 = strings.TrimSpace(last4)
+	if len(last4) < 4 {
+		return nil, nil
+	}
+	last4 = last4[len(last4)-4:]
+	currency = strings.ToUpper(strings.TrimSpace(currency))
+	rows, err := s.store.List(ctx, userID, false)
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range rows {
+		if currency != "" && !strings.EqualFold(a.CurrencyCode, currency) {
+			continue
+		}
+		hay := strings.ToLower(a.Name)
+		if a.InstitutionLabel != nil {
+			hay += " " + strings.ToLower(*a.InstitutionLabel)
+		}
+		if strings.Contains(hay, last4) {
+			id := a.ID
+			return &id, nil
+		}
+	}
+	return nil, nil
+}
+
 func (s *Service) Transfer(ctx context.Context, userID uuid.UUID, in TransferInput) (TransferDTO, error) {
 	if in.FromAccountID == in.ToAccountID {
 		return TransferDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
@@ -479,6 +509,7 @@ func (s *Service) Wealth(ctx context.Context, userID uuid.UUID, preferred string
 	preferred = strings.ToUpper(strings.TrimSpace(preferred))
 	slices := make([]CurrencySlice, 0, len(by))
 	var prefCash, prefRecv, prefPay decimal.Decimal
+	prefFound := false
 	for code, a := range by {
 		net := a.cash.Add(a.recv).Sub(a.pay)
 		slices = append(slices, CurrencySlice{
@@ -491,6 +522,7 @@ func (s *Service) Wealth(ctx context.Context, userID uuid.UUID, preferred string
 		})
 		if preferred != "" && code == preferred {
 			prefCash, prefRecv, prefPay = a.cash, a.recv, a.pay
+			prefFound = true
 		}
 	}
 	// Stable-ish order: preferred first, then by code
@@ -504,11 +536,29 @@ func (s *Service) Wealth(ctx context.Context, userID uuid.UUID, preferred string
 			}
 		}
 	}
+	// If preferred currency has no accounts / zero cash, show the currency that actually holds money.
+	if (!prefFound || (prefCash.IsZero() && prefRecv.IsZero() && prefPay.IsZero())) && len(slices) > 0 {
+		best := slices[0]
+		bestAbs := absDec(mustDec(best.CashOnHand)).Add(absDec(mustDec(best.Receivables))).Add(absDec(mustDec(best.Payables)))
+		for _, sl := range slices[1:] {
+			cand := absDec(mustDec(sl.CashOnHand)).Add(absDec(mustDec(sl.Receivables))).Add(absDec(mustDec(sl.Payables)))
+			if cand.GreaterThan(bestAbs) {
+				best = sl
+				bestAbs = cand
+			}
+		}
+		if !prefFound || bestAbs.GreaterThan(decimal.Zero) {
+			preferred = best.CurrencyCode
+			prefCash = mustDec(best.CashOnHand)
+			prefRecv = mustDec(best.Receivables)
+			prefPay = mustDec(best.Payables)
+		}
+	}
 	if preferred == "" && len(slices) > 0 {
 		preferred = slices[0].CurrencyCode
-		prefCash, _ = decimal.NewFromString(slices[0].CashOnHand)
-		prefRecv, _ = decimal.NewFromString(slices[0].Receivables)
-		prefPay, _ = decimal.NewFromString(slices[0].Payables)
+		prefCash = mustDec(slices[0].CashOnHand)
+		prefRecv = mustDec(slices[0].Receivables)
+		prefPay = mustDec(slices[0].Payables)
 	}
 	prefNet := prefCash.Add(prefRecv).Sub(prefPay)
 	live := prefNet.StringFixed(Scale)
@@ -523,6 +573,21 @@ func (s *Service) Wealth(ctx context.Context, userID uuid.UUID, preferred string
 		ByCurrency:        slices,
 		Accounts:          dtos,
 	}, nil
+}
+
+func mustDec(s string) decimal.Decimal {
+	d, err := decimal.NewFromString(s)
+	if err != nil {
+		return decimal.Zero
+	}
+	return d
+}
+
+func absDec(d decimal.Decimal) decimal.Decimal {
+	if d.IsNegative() {
+		return d.Neg()
+	}
+	return d
 }
 
 func isOpenLoan(row loans.Record, viewer uuid.UUID, requireApproval bool) bool {

@@ -25,6 +25,8 @@ type AccountLinker interface {
 	ApplyCashflowDelta(ctx context.Context, userID, accountID uuid.UUID, kind string, amount decimal.Decimal, currency, note string) error
 	// PickAccount returns preferred if set, else the first account matching currency.
 	PickAccount(ctx context.Context, userID uuid.UUID, currency string, preferred *uuid.UUID) (*uuid.UUID, error)
+	// FindAccountByLast4 matches an account whose name/label contains …last4.
+	FindAccountByLast4(ctx context.Context, userID uuid.UUID, currency, last4 string) (*uuid.UUID, error)
 }
 
 type RecurringPrefs interface {
@@ -989,9 +991,10 @@ type SMSIngestInput struct {
 }
 
 type SMSIngestResult struct {
-	Parsed   ParsedSMS  `json:"parsed"`
-	Entry    *EntryDTO  `json:"entry,omitempty"`
-	Duplicate bool      `json:"duplicate,omitempty"`
+	Parsed            ParsedSMS `json:"parsed"`
+	Entry             *EntryDTO `json:"entry,omitempty"`
+	Duplicate         bool      `json:"duplicate,omitempty"`
+	MatchedExistingID *string   `json:"matched_existing_id,omitempty"` // receipt/cashflow already recorded
 }
 
 func (s *Service) IngestSMS(ctx context.Context, userID uuid.UUID, in SMSIngestInput) (SMSIngestResult, error) {
@@ -1040,6 +1043,25 @@ func (s *Service) IngestSMS(ctx context.Context, userID uuid.UUID, in SMSIngestI
 	if currency == "" {
 		currency = "USD"
 	}
+
+	// Skip if the same payment was already recorded (e.g. receipt scan for the same lunch).
+	if dup := s.findRecentPayment(ctx, userID, parsed.Kind, parsed.Amount, currency, s.now().UTC()); dup != nil {
+		dto := toDTO(*dup)
+		id := dup.ID.String()
+		out.Duplicate = true
+		out.MatchedExistingID = &id
+		out.Entry = &dto
+		if logger, ok := s.store.(SMSLogStore); ok {
+			excerpt := text
+			if len(excerpt) > 280 {
+				excerpt = excerpt[:280]
+			}
+			cid := dup.ID
+			_ = logger.InsertSMSIngest(ctx, userID, fp, excerpt, parsed, &cid)
+		}
+		return out, nil
+	}
+
 	title := "Bank SMS"
 	if parsed.Counterparty != "" {
 		if parsed.Kind == KindIncome {
@@ -1059,13 +1081,33 @@ func (s *Service) IngestSMS(ctx context.Context, userID uuid.UUID, in SMSIngestI
 		}
 		note = extra + "\n" + note
 	}
+
+	accountID := in.AccountID
+	if accountID == nil && s.accounts != nil {
+		if parsed.AccountLast4 != "" {
+			if id, err := s.accounts.FindAccountByLast4(ctx, userID, currency, parsed.AccountLast4); err == nil && id != nil {
+				accountID = id
+			}
+		}
+		if accountID == nil {
+			if id, err := s.accounts.PickAccount(ctx, userID, currency, nil); err == nil {
+				accountID = id
+			}
+		}
+	}
+	if accountID == nil {
+		return SMSIngestResult{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"account_id": "add or choose an account for this currency first",
+		})
+	}
+
 	entry, err := s.Create(ctx, userID, CreateInput{
 		Kind:         parsed.Kind,
 		Title:        title,
 		Amount:       parsed.Amount,
 		CurrencyCode: currency,
 		Category:     "Transfers",
-		AccountID:    in.AccountID,
+		AccountID:    accountID,
 		Note:         &note,
 		OccurredAt:   s.now().UTC(),
 	})
@@ -1082,6 +1124,36 @@ func (s *Service) IngestSMS(ctx context.Context, userID uuid.UUID, in SMSIngestI
 		_ = logger.InsertSMSIngest(ctx, userID, fp, excerpt, parsed, &cid)
 	}
 	return out, nil
+}
+
+// findRecentPayment returns a confirmed cashflow with the same kind/amount/currency within ±2 days
+// (covers receipt scans of the same real-world payment).
+func (s *Service) findRecentPayment(ctx context.Context, userID uuid.UUID, kind, amount, currency string, around time.Time) *Entry {
+	amt, err := decimal.NewFromString(strings.TrimSpace(strings.ReplaceAll(amount, ",", "")))
+	if err != nil || !amt.GreaterThan(decimal.Zero) {
+		return nil
+	}
+	currency = strings.ToUpper(strings.TrimSpace(currency))
+	from := around.AddDate(0, 0, -2)
+	to := around.AddDate(0, 0, 2)
+	rows, err := s.store.List(ctx, userID, ListQuery{Kind: kind, From: &from, To: &to, Limit: 200})
+	if err != nil {
+		return nil
+	}
+	for i := range rows {
+		row := &rows[i]
+		if row.IsTemplate || row.Status != StatusConfirmed {
+			continue
+		}
+		if !strings.EqualFold(row.CurrencyCode, currency) {
+			continue
+		}
+		if !row.Amount.Equal(amt.Round(Scale)) && row.Amount.StringFixed(Scale) != amt.StringFixed(Scale) {
+			continue
+		}
+		return row
+	}
+	return nil
 }
 
 type ReceiptScanInput struct {

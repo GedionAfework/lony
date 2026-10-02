@@ -409,3 +409,13 @@ func (s *Service) NotifyBankShared(ctx context.Context, recipient, loanID uuid.U
 		"reference_code": ref,
 	})
 }
+
+func (s *Service) NotifyAccountNumberNeeded(ctx context.Context, userID, accountID, profileID uuid.UUID, label string) error {
+	return s.Notify(ctx, userID, TypeAccountNumberNeeded, nil,
+		"Complete account number",
+		"Some digits were hidden for "+label+". Open Accounts and enter the full number so friends can repay you.",
+		map[string]any{
+			"account_id":      accountID.String(),
+			"bank_profile_id": profileID.String(),
+		})
+}

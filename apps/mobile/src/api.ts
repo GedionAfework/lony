@@ -412,6 +412,42 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify(body),
     }, token),
+  acceptAccountForLoans: (
+    token: string,
+    id: string,
+    body: {
+      full_name: string;
+      account_identifier: string;
+      profit_percent_yearly?: string;
+      institution_name?: string;
+      profile_type?: string;
+    },
+  ) =>
+    request<{
+      account: MoneyAccount;
+      bank_profile: BankProfile;
+      account_number_masked: boolean;
+    }>(`/accounts/${id}/accept-for-loans`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('accounts-accept') },
+      body: JSON.stringify(body),
+    }, token),
+  extractBankProfile: (token: string, body: { mime?: string; image_base64: string }) =>
+    request<{
+      extract: {
+        full_name?: string;
+        account_number?: string;
+        account_number_masked?: boolean;
+        profit_percent_yearly?: string;
+        institution_name?: string;
+        currency_code?: string;
+        confidence?: number;
+      };
+    }>('/bank-profiles/extract', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('bank-extract') },
+      body: JSON.stringify(body),
+    }, token),
   setAccountBalance: (token: string, id: string, body: { balance: string; note?: string }) =>
     request<{ account: MoneyAccount }>(`/accounts/${id}/balance`, {
       method: 'POST',
@@ -799,6 +835,7 @@ export const api = {
       };
       entry?: CashflowEntry;
       duplicate?: boolean;
+      matched_existing_id?: string;
     }>('/cashflow/sms-ingest', {
       method: 'POST',
       headers: { 'Idempotency-Key': idemKey('cashflow-sms') },
@@ -1593,6 +1630,7 @@ export type UpdateAccountBody = {
   interest_rate_percent?: string;
   compounding?: 'none' | 'monthly' | 'yearly';
   institution_label?: string;
+  bank_profile_id?: string;
   clear_interest?: boolean;
 };
 

@@ -21,7 +21,7 @@ import {
   getCalendarParts,
   toIsoLocal,
 } from './calendarMath';
-import { useDatePrefs } from './datePrefs';
+import { useDatePrefs, useFormatDate } from './datePrefs';
 import { SearchSelect } from './SearchSelect';
 import { IconClose, IconRepeat } from './icons';
 import { listCashflowDrafts, removeCashflowDraft, type CashflowDraft } from './offlineDrafts';
@@ -249,6 +249,26 @@ export function ExpensesScreen({
   const currency = slice?.currency_code || preferred;
   const incomeTotal = Number(slice?.income ?? 0);
   const expenseTotal = Number(slice?.expense ?? slice?.outcome ?? 0);
+  const wealthCurrency =
+    wealth?.preferred_currency ||
+    wealth?.by_currency?.find((c) => Number(c.cash_on_hand) !== 0)?.currency_code ||
+    currency;
+  const wealthCash =
+    wealth?.by_currency?.find((c) => c.currency_code === wealthCurrency)?.cash_on_hand ??
+    wealth?.cash_on_hand ??
+    '0';
+  const wealthRecv =
+    wealth?.by_currency?.find((c) => c.currency_code === wealthCurrency)?.receivables ??
+    wealth?.receivables ??
+    '0';
+  const wealthPay =
+    wealth?.by_currency?.find((c) => c.currency_code === wealthCurrency)?.payables ??
+    wealth?.payables ??
+    '0';
+  const wealthNet =
+    wealth?.by_currency?.find((c) => c.currency_code === wealthCurrency)?.net_worth ??
+    wealth?.net_worth ??
+    '0';
   const maxSpend = Math.max(
     1,
     ...breakdown.filter((b) => b.currency_code === currency).map((b) => Number(b.amount) || 0),
@@ -282,12 +302,20 @@ export function ExpensesScreen({
   const templates = tab === 'income' ? incomeTemplates : expenseTemplates;
 
   // Templates with no occurrence this month still belong in the list (e.g. salary awaiting Received).
+  // Recurring/templates pinned at top; then newest → oldest.
   const monthEntries = useMemo(() => {
     const covered = new Set(
       list.map((e) => e.template_id).filter((id): id is string => Boolean(id)),
     );
     const orphans = templates.filter((t) => !covered.has(t.id));
-    return [...list, ...orphans].sort((a, b) => b.occurred_at.localeCompare(a.occurred_at));
+    const all = [...list, ...orphans];
+    const recurring = (e: CashflowEntry) => Boolean(e.is_template || e.template_id || e.recurrence);
+    return all.sort((a, b) => {
+      const ar = recurring(a) ? 1 : 0;
+      const br = recurring(b) ? 1 : 0;
+      if (ar !== br) return br - ar;
+      return b.occurred_at.localeCompare(a.occurred_at);
+    });
   }, [list, templates]);
 
   const recent = useMemo(() => {
@@ -299,8 +327,14 @@ export function ExpensesScreen({
     );
     const orphanIncome = incomeTemplates.filter((t) => !coveredIncome.has(t.id));
     const orphanExpense = expenseTemplates.filter((t) => !coveredExpense.has(t.id));
+    const recurring = (e: CashflowEntry) => Boolean(e.is_template || e.template_id || e.recurrence);
     return [...income, ...expenseRows, ...orphanIncome, ...orphanExpense]
-      .sort((a, b) => b.occurred_at.localeCompare(a.occurred_at))
+      .sort((a, b) => {
+        const ar = recurring(a) ? 1 : 0;
+        const br = recurring(b) ? 1 : 0;
+        if (ar !== br) return br - ar;
+        return b.occurred_at.localeCompare(a.occurred_at);
+      })
       .slice(0, 16);
   }, [income, expenseRows, incomeTemplates, expenseTemplates]);
 
@@ -545,24 +579,24 @@ export function ExpensesScreen({
               ) : null}
             </View>
             <Money
-              value={formatMoney(wealth?.net_worth ?? '0', wealth?.preferred_currency || currency, user.locale)}
+              value={formatMoney(wealthNet, wealthCurrency, user.locale)}
               size="xl"
-              tone={Number(wealth?.net_worth || 0) >= 0 ? 'positive' : 'negative'}
+              tone={Number(wealthNet || 0) >= 0 ? 'positive' : 'negative'}
             />
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
               <Mini
                 label="Cash on hand"
-                value={formatMoney(wealth?.cash_on_hand ?? '0', wealth?.preferred_currency || currency, user.locale)}
+                value={formatMoney(wealthCash, wealthCurrency, user.locale)}
                 tone="positive"
               />
               <Mini
                 label="Owed to you"
-                value={formatMoney(wealth?.receivables ?? '0', wealth?.preferred_currency || currency, user.locale)}
+                value={formatMoney(wealthRecv, wealthCurrency, user.locale)}
                 tone="positive"
               />
               <Mini
                 label="You owe"
-                value={formatMoney(wealth?.payables ?? '0', wealth?.preferred_currency || currency, user.locale)}
+                value={formatMoney(wealthPay, wealthCurrency, user.locale)}
                 tone="negative"
               />
             </View>
@@ -917,10 +951,13 @@ function EntryRow({
   recurring?: boolean;
 }) {
   const { colors } = useTheme();
+  const formatDate = useFormatDate();
+  const { calendarId } = useDatePrefs();
   const income = entry.kind === 'income';
-  const when = new Date(entry.occurred_at);
-  const dayNum = when.getDate();
-  const monthShort = when.toLocaleDateString(locale || 'en', { month: 'short' });
+  const dateLabel = formatDate(entry.occurred_at);
+  const parts = getCalendarParts(new Date(entry.occurred_at), calendarId);
+  const dayNum = String(parts.day);
+  const monthShort = formatCalendarMonthLabel(calendarId, parts.year, parts.month).split(' ')[0];
   const expected = entry.status === 'expected' || entry.is_template;
   return (
     <Pressable
@@ -944,6 +981,7 @@ function EntryRow({
         <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }} numberOfLines={1}>
           {entry.category}
           {expected ? (income ? '  Expected' : '  Due') : ''}
+          {` · ${dateLabel}`}
         </Text>
       </View>
       <Text
@@ -968,7 +1006,9 @@ function EntryRow({
         }}
       >
         <Text style={{ color: colors.primary, fontFamily: fonts.uiBold, fontSize: 15 }}>{dayNum}</Text>
-        <Text style={{ color: colors.primary, fontFamily: fonts.ui, fontSize: 10, opacity: 0.85 }}>{monthShort}</Text>
+        <Text style={{ color: colors.primary, fontFamily: fonts.ui, fontSize: 10, opacity: 0.85 }} numberOfLines={1}>
+          {monthShort}
+        </Text>
       </View>
     </Pressable>
   );

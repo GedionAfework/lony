@@ -131,10 +131,12 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 	bankLinkH := banklink.NewHandler(bankLinkSvc)
 	banksSvc := banks.NewService(sqlStore, loansSvc, friendsSvc, cfg.BankKey)
 	banksH := banks.NewHandler(banksSvc)
+	accountsSvc.SetBankProfiles(banksSvc)
 	repaySvc := repayments.NewService(sqlStore, loansSvc)
 	repayH := repayments.NewHandler(repaySvc).WithMedia(mediaStore, sqlStore)
 	notifySvc := notifications.NewService(sqlStore, notifications.NewPusher(cfg.ExpoAccessToken))
 	notifyH := notifications.NewHandler(notifySvc)
+	accountsSvc.SetAccountNotifier(notifySvc)
 	goalsSvc.SetMilestoneNotifier(notifications.GoalHooks{Svc: notifySvc})
 	loansSvc.SetHooks(notifications.LoanHooks{Svc: notifySvc})
 	loansSvc.SetBond(friendsSvc)
@@ -164,7 +166,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 		fast := middleware.Timeout(30 * time.Second)(next)
 		slow := middleware.Timeout(120 * time.Second)(next)
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			if strings.HasSuffix(req.URL.Path, "/ai/coach/messages/stream") || strings.HasSuffix(req.URL.Path, "/cashflow/receipt-scan") {
+			if strings.HasSuffix(req.URL.Path, "/ai/coach/messages/stream") || strings.HasSuffix(req.URL.Path, "/cashflow/receipt-scan") || strings.HasSuffix(req.URL.Path, "/bank-profiles/extract") {
 				slow.ServeHTTP(w, req)
 				return
 			}
@@ -254,6 +256,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 			r.With(idem.Handler("accounts.balance")).Post("/accounts/{id}/balance", accountsH.SetBalance)
 			r.With(idem.Handler("accounts.import")).Post("/accounts/{id}/import", importsH.Import)
 			r.With(idem.Handler("accounts.archive")).Post("/accounts/{id}/archive", accountsH.Archive)
+			r.With(idem.Handler("accounts.accept_loans")).Post("/accounts/{id}/accept-for-loans", accountsH.AcceptForLoans)
 			r.Get("/cashflow/summary", expensesH.Summary)
 			r.Get("/cashflow/breakdown", expensesH.CategoryBreakdown)
 			r.Get("/cashflow/categories", expensesH.ListCategories)
@@ -338,6 +341,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 			r.Get("/ai/coach/thread", aiH.GetCoachThread)
 			r.With(idem.Handler("ai.coach")).Post("/ai/coach/messages", aiH.Coach)
 			r.Post("/ai/coach/messages/stream", aiH.CoachStream)
+			r.With(idem.Handler("ai.extract_account")).Post("/bank-profiles/extract", aiH.ExtractAccount)
 			r.Get("/bank-links/status", bankLinkH.Status)
 			r.Get("/bank-links", bankLinkH.List)
 			r.With(idem.Handler("banklink.session")).Post("/bank-links/session", bankLinkH.CreateSession)

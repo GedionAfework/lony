@@ -30,6 +30,7 @@ import {
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { api, DISCLAIMER, setTokenRefresher, type AppNotification, type BankProfile, type BankProfileShare, type CashflowEntry, type Dashboard, type Friendship, type Loan, type LoanInstallment, type Repayment, type SearchHit, type User } from './src/api';
 import { formatMoney as formatMoneyLocale, stripAmount } from './src/amountFormat';
+import { formatDisplayDate, formatDisplayDateTime } from './src/calendarFormat';
 import { AnalyticsScreen } from './src/AnalyticsScreen';
 import { AppHeader } from './src/AppHeader';
 import { AuthScreens } from './src/AuthScreens';
@@ -55,7 +56,7 @@ import { PlanScreen } from './src/PlanScreen';
 import { IconBank, IconCamera, IconPlus, IconSearch } from './src/icons';
 import { resolveInstitutionLabel } from './src/institutions';
 import { scanReceiptWithCamera } from './src/receiptScan';
-import { syncBankSms } from './src/smsAutoIngest';
+import { activateAndSyncSms, syncBankSms } from './src/smsAutoIngest';
 import { LoansScreen } from './src/LoansScreen';
 import { NewLoanScreen } from './src/NewLoanScreen';
 import { PeerProfileScreen } from './src/PeerProfileScreen';
@@ -141,6 +142,23 @@ type Screen =
   | 'chat-search'
   | 'tos';
 
+function userDatePrefs(user?: User | null) {
+  return {
+    locale: user?.locale || 'en',
+    calendarId: (user?.calendar_id || 'gregorian') as import('./src/calendarFormat').CalendarId,
+    hourCycle: (user?.hour_cycle || '24h') as import('./src/calendarFormat').HourCycle,
+    timeZone: user?.timezone || 'UTC',
+  };
+}
+
+function formatUserDate(iso: string | null | undefined, user?: User | null) {
+  return formatDisplayDate(iso, userDatePrefs(user));
+}
+
+function formatUserDateTime(iso: string | null | undefined, user?: User | null) {
+  return formatDisplayDateTime(iso, userDatePrefs(user));
+}
+
 export default function App() {
   const [manropeLoaded] = useManrope({
     Manrope_400Regular,
@@ -219,6 +237,11 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [dashCurrency, setDashCurrency] = useState('');
   const [loanFilter, setLoanFilter] = useState('');
+  const [peerLoanFilter, setPeerLoanFilter] = useState<{
+    peerId: string;
+    peerName: string;
+    loanIds: string[];
+  } | null>(null);
   const [bankProfiles, setBankProfiles] = useState<BankProfile[]>([]);
   const [outgoingShares, setOutgoingShares] = useState<BankProfileShare[]>([]);
   const [incomingShares, setIncomingShares] = useState<BankProfileShare[]>([]);
@@ -861,8 +884,10 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         if (cancelled) return;
         const accountId = acc.accounts?.[0]?.id;
         const res = await syncBankSms(token, accountId);
-        if (!cancelled && res.imported > 0) {
+        if (!cancelled && (res.imported > 0 || res.accountsAdded > 0)) {
           setCashflowReload((n) => n + 1);
+          setWealthReload((n) => n + 1);
+          setAccountsReload((n) => n + 1);
         }
       } catch {
         /* silent — SMS sync is best-effort */
@@ -872,6 +897,26 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
       cancelled = true;
     };
   }, [screen, token]);
+
+  async function onActivateSmsImport() {
+    if (!token || !user) return;
+    setBusy(true);
+    try {
+      const res = await activateAndSyncSms(
+        token,
+        (profileCurrency || user.default_currency_code || 'USD').toUpperCase(),
+      );
+      if (res.imported > 0 || res.accountsAdded > 0) {
+        setCashflowReload((n) => n + 1);
+        setWealthReload((n) => n + 1);
+        setAccountsReload((n) => n + 1);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'SMS import failed');
+    } finally {
+      setBusy(false);
+    }
+  }
 
   useEffect(() => {
     if (user && token && !user.profile_complete && !['onboarding', 'tos', 'settings', 'login', 'register', 'verify'].includes(screen)) {
@@ -1716,6 +1761,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   }
 
   function onDrawerSelect(item: DrawerItem) {
+    setPeerLoanFilter(null);
     if (item === 'expenses') {
       setExpensesTab('dashboard');
       setScreen('home');
@@ -2078,12 +2124,29 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
           ) : null}
 
           {screen === 'loans' && user ? (
-            <LoansScreen
-              user={user}
-              loans={loans}
-              onOpenLoan={openLoan}
-              formatMoney={formatMoney}
-            />
+            <View style={{ gap: 12 }}>
+              {peerLoanFilter ? (
+                <ScreenHeader title={peerLoanFilter.peerName} onBack={() => setPeerLoanFilter(null)} />
+              ) : null}
+              <LoansScreen
+                user={user}
+                loans={
+                  peerLoanFilter
+                    ? loans.filter((l) => peerLoanFilter.loanIds.includes(l.id))
+                    : loans
+                }
+                onOpenLoan={openLoan}
+                formatMoney={formatMoney}
+                onOpenPeer={
+                  peerLoanFilter
+                    ? undefined
+                    : (peerId, peerName, loanIds) => {
+                        setPeerLoanFilter({ peerId, peerName, loanIds });
+                      }
+                }
+                peerDetail={Boolean(peerLoanFilter)}
+              />
+            </View>
           ) : null}
 
           {screen === 'analytics' && user && token ? (
@@ -2193,6 +2256,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               onAskRecurringReceived={(v) => {
                 void onSaveAskRecurring(v);
               }}
+              onActivateSmsImport={() => onActivateSmsImport()}
               onAuthPref={setProfileAuthPref}
               onSave={onSaveProfile}
               onSaveRegion={onSaveRegion}
@@ -2441,19 +2505,10 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                         >
                           <View style={{ flex: 1, gap: 2 }}>
                             <Text style={{ color: toneFg, fontFamily: fonts.uiSemi, fontSize: 14 }}>
-                              {due.toLocaleDateString(user?.locale || 'en', {
-                                month: 'short',
-                                year: 'numeric',
-                              })}
+                              {formatUserDate(inst.due_at, user)}
                             </Text>
                             <Text style={{ color: toneFg, fontFamily: fonts.ui, fontSize: 12, opacity: 0.85 }}>
-                              {paid
-                                ? 'Paid'
-                                : due.toLocaleDateString(user?.locale || 'en', {
-                                    weekday: 'short',
-                                    month: 'short',
-                                    day: 'numeric',
-                                  })}
+                              {paid ? 'Paid' : formatUserDate(inst.due_at, user)}
                             </Text>
                           </View>
                           <Text style={{ color: toneFg, fontFamily: fonts.uiSemi, fontSize: 14 }}>
@@ -2627,14 +2682,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                       <View key={ev.id} style={{ gap: 2, paddingVertical: 6 }}>
                         <Text style={styles.rowTitle}>{formatLoanEvent(ev.event_type)}</Text>
                         <Text style={styles.muted}>
-                          {new Date(ev.created_at).toLocaleString(user?.locale || 'en', {
-                            weekday: 'short',
-                            month: 'short',
-                            day: 'numeric',
-                            year: 'numeric',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })}
+                          {formatUserDateTime(ev.created_at, user)}
                         </Text>
                       </View>
                     ))}
@@ -2688,13 +2736,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                     {selectedInstallment.status === 'paid' ? 'Paid' : 'Unpaid'}
                   </Text>
                   <Text style={styles.muted}>
-                    Due{' '}
-                    {new Date(selectedInstallment.due_at).toLocaleDateString(user?.locale || 'en', {
-                      weekday: 'short',
-                      month: 'short',
-                      day: 'numeric',
-                      year: 'numeric',
-                    })}
+                    Due {formatUserDate(selectedInstallment.due_at, user)}
                   </Text>
                   {selectedLoan.institution_label ? (
                     <Text style={styles.muted}>{selectedLoan.institution_label}</Text>
@@ -2705,14 +2747,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               {selectedInstallment.status === 'paid' && selectedInstallment.paid_at ? (
                 <Card>
                   <Text style={styles.muted}>
-                    Marked paid{' '}
-                    {new Date(selectedInstallment.paid_at).toLocaleString(user?.locale || 'en', {
-                      month: 'short',
-                      day: 'numeric',
-                      year: 'numeric',
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
+                    Marked paid {formatUserDateTime(selectedInstallment.paid_at, user)}
                   </Text>
                 </Card>
               ) : null}

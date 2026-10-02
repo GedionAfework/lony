@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Alert, Platform, Pressable, Text, TextInput, View } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as ImagePicker from 'expo-image-picker';
 import * as WebBrowser from 'expo-web-browser';
 import { api, type AccountReconcile, type BankLinkConnection, type BankLinkStatus, type MoneyAccount, type User } from './api';
 import { stripAmount } from './amountFormat';
@@ -101,6 +102,11 @@ export function AccountsScreen({
   const [importResult, setImportResult] = useState<string | null>(null);
   const [bankStatus, setBankStatus] = useState<BankLinkStatus | null>(null);
   const [bankConnections, setBankConnections] = useState<BankLinkConnection[]>([]);
+  const [acceptId, setAcceptId] = useState<string | null>(null);
+  const [acceptFullName, setAcceptFullName] = useState('');
+  const [acceptAccountNumber, setAcceptAccountNumber] = useState('');
+  const [acceptProfit, setAcceptProfit] = useState('');
+  const [acceptBusy, setAcceptBusy] = useState(false);
 
   const accountTypes = useMemo(
     () => mergeOptions(remoteTypes, FALLBACK_ACCOUNT_TYPES),
@@ -354,6 +360,89 @@ export function AccountsScreen({
     }
   }
 
+  function startAccept(a: MoneyAccount) {
+    resetForm();
+    setTransferOpen(false);
+    setReconcileOpen(false);
+    setImportId(null);
+    setBalanceId(null);
+    setAcceptId(a.id);
+    setAcceptFullName(user.display_name || '');
+    setAcceptAccountNumber('');
+    setAcceptProfit(a.interest_rate_percent || '');
+  }
+
+  async function onScanAcceptStatement() {
+    if (!acceptId) return;
+    const cam = await ImagePicker.requestCameraPermissionsAsync();
+    if (!cam.granted) {
+      Alert.alert(
+        t(user.locale, 'accounts.cameraPermission') || 'Camera permission',
+        t(user.locale, 'accounts.cameraPermissionBody') || 'Allow camera to scan the statement.',
+      );
+      return;
+    }
+    const pick = await ImagePicker.launchCameraAsync({
+      quality: 0.45,
+      base64: true,
+      allowsEditing: false,
+      exif: false,
+    });
+    if (pick.canceled || !pick.assets?.[0]?.base64) return;
+    setAcceptBusy(true);
+    try {
+      const res = await api.extractBankProfile(token, {
+        mime: pick.assets[0].mimeType || 'image/jpeg',
+        image_base64: pick.assets[0].base64!,
+      });
+      const e = res.extract;
+      if (e.full_name) setAcceptFullName(e.full_name);
+      if (e.account_number) setAcceptAccountNumber(e.account_number);
+      if (e.profit_percent_yearly) setAcceptProfit(e.profit_percent_yearly);
+    } catch (err) {
+      onError(err instanceof Error ? err.message : t(user.locale, 'accounts.scanFailed') || 'Could not read statement');
+    } finally {
+      setAcceptBusy(false);
+    }
+  }
+
+  async function onConfirmAccept() {
+    if (!acceptId) return;
+    const name = acceptFullName.trim();
+    const number = acceptAccountNumber.trim();
+    if (!name) {
+      onError(t(user.locale, 'accounts.fullNameRequired') || 'Enter the account holder full name');
+      return;
+    }
+    if (!number) {
+      onError(t(user.locale, 'accounts.accountNumberRequired') || 'Enter the account number');
+      return;
+    }
+    setAcceptBusy(true);
+    try {
+      const profit = stripAmount(acceptProfit);
+      const res = await api.acceptAccountForLoans(token, acceptId, {
+        full_name: name,
+        account_identifier: number,
+        profit_percent_yearly: profit || undefined,
+      });
+      setAcceptId(null);
+      await reload();
+      onChanged?.();
+      if (res.account_number_masked) {
+        Alert.alert(
+          t(user.locale, 'accounts.maskedTitle') || 'Account number incomplete',
+          t(user.locale, 'accounts.maskedBody') ||
+            'Some digits were hidden. We’ll remind you in notifications to enter the full number before sharing for loan repayments.',
+        );
+      }
+    } catch (e) {
+      onError(e instanceof Error ? e.message : t(user.locale, 'accounts.acceptFailed') || 'Could not accept account');
+    } finally {
+      setAcceptBusy(false);
+    }
+  }
+
   async function onTransfer() {
     if (!fromId || !toId) {
       onError('Pick both accounts');
@@ -483,7 +572,8 @@ export function AccountsScreen({
   }
 
   const formOpen = creating || Boolean(editId);
-  const panelOpen = formOpen || transferOpen || reconcileOpen || Boolean(importId) || Boolean(balanceId);
+  const panelOpen =
+    formOpen || transferOpen || reconcileOpen || Boolean(importId) || Boolean(balanceId) || Boolean(acceptId);
   useEffect(() => {
     onPanelChange?.(Boolean(panelOpen));
   }, [panelOpen, onPanelChange]);
@@ -496,9 +586,11 @@ export function AccountsScreen({
     setBalanceId(null);
     setNewBalance('');
     setReconcileRows([]);
+    setAcceptId(null);
   }
 
   function panelTitle() {
+    if (acceptId) return t(user.locale, 'accounts.acceptTitle') || 'Accept for loan repayments';
     if (importId) return 'Import statement';
     if (reconcileOpen) return 'Reconcile';
     if (transferOpen) return 'Transfer';
@@ -841,6 +933,50 @@ export function AccountsScreen({
           </Card>
         ) : null}
 
+        {acceptId ? (
+          <Card>
+            <SectionLabel>{t(user.locale, 'accounts.acceptTitle') || 'Accept for loan repayments'}</SectionLabel>
+            <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
+              {t(user.locale, 'accounts.acceptHint') ||
+                'Scan a statement or fill in the holder name, account number, and yearly profit %. You can then share this account when someone owes you.'}
+            </Text>
+            <SecondaryButton
+              label={acceptBusy ? t(user.locale, 'common.loading') || 'Working…' : t(user.locale, 'accounts.scanStatement') || 'Scan statement'}
+              onPress={() => void onScanAcceptStatement()}
+              disabled={acceptBusy}
+            />
+            <Field
+              label={t(user.locale, 'accounts.fullName') || 'Full name'}
+              value={acceptFullName}
+              onChange={setAcceptFullName}
+              placeholder="Account holder name"
+            />
+            <Field
+              label={t(user.locale, 'accounts.accountNumber') || 'Account number'}
+              value={acceptAccountNumber}
+              onChange={setAcceptAccountNumber}
+              placeholder="Full number if known"
+            />
+            <Field
+              label={t(user.locale, 'accounts.profitYearly') || 'Profit % per year'}
+              value={acceptProfit}
+              onChange={setAcceptProfit}
+              keyboardType="decimal-pad"
+              placeholder="e.g. 7.5"
+            />
+            <PrimaryButton
+              label={acceptBusy ? t(user.locale, 'common.loading') || 'Saving…' : t(user.locale, 'accounts.acceptConfirm') || 'Accept account'}
+              onPress={() => void onConfirmAccept()}
+              disabled={acceptBusy}
+            />
+            <SecondaryButton
+              label={t(user.locale, 'common.cancel') || 'Cancel'}
+              onPress={() => setAcceptId(null)}
+              disabled={acceptBusy}
+            />
+          </Card>
+        ) : null}
+
       {!panelOpen ? (
       <Card>
         <SectionLabel>Your accounts</SectionLabel>
@@ -882,11 +1018,33 @@ export function AccountsScreen({
                 </Text>
               ) : null}
               <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+                {!a.bank_profile_id && a.account_type !== 'cash' ? (
+                  <Pressable
+                    onPress={() => startAccept(a)}
+                    style={{
+                      paddingHorizontal: 12,
+                      paddingVertical: 8,
+                      borderRadius: radii.md,
+                      backgroundColor: colors.primarySoft,
+                      borderWidth: 1,
+                      borderColor: colors.primary,
+                    }}
+                  >
+                    <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 12 }}>
+                      {t(user.locale, 'accounts.accept') || 'Accept'}
+                    </Text>
+                  </Pressable>
+                ) : a.bank_profile_id ? (
+                  <Text style={{ color: colors.success, fontFamily: fonts.ui, fontSize: 12, alignSelf: 'center' }}>
+                    {t(user.locale, 'accounts.acceptedForLoans') || 'Ready for loan repayments'}
+                  </Text>
+                ) : null}
                 <IconAction
                   accessibilityLabel="Update balance"
                   onPress={() => {
                     setEditId(null);
                     setCreating(false);
+                    setAcceptId(null);
                     setBalanceId(a.id);
                     setNewBalance(a.balance);
                   }}

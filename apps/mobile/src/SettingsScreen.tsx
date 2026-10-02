@@ -79,6 +79,8 @@ type Props = {
   onLoanRequireApproval: (v: boolean) => void;
   askRecurringReceived: boolean;
   onAskRecurringReceived: (v: boolean) => void;
+  /** When SMS auto-import is turned on: permission + full inbox scan + account prompts. */
+  onActivateSmsImport?: () => Promise<void> | void;
   onAuthPref: (v: 'email' | 'google' | 'telegram') => void;
   onSave: () => void;
   onSaveRegion?: () => void;
@@ -329,7 +331,17 @@ export function SettingsScreen(props: Props) {
               value={smsAutoImport}
               onValueChange={(v) => {
                 setSmsAutoImport(v);
-                void setSmsAutoImportEnabled(v);
+                void (async () => {
+                  if (v) {
+                    if (props.onActivateSmsImport) {
+                      await props.onActivateSmsImport();
+                    } else {
+                      await setSmsAutoImportEnabled(true);
+                    }
+                  } else {
+                    await setSmsAutoImportEnabled(false);
+                  }
+                })();
               }}
               trackColor={{ false: colors.borderStrong, true: colors.primarySoft }}
               thumbColor={smsAutoImport ? colors.primary : colors.muted}

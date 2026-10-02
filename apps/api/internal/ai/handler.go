@@ -127,3 +127,22 @@ func (h *Handler) CoachStream(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, err)
 	}
 }
+
+type extractAccountBody struct {
+	Mime        string `json:"mime"`
+	ImageBase64 string `json:"image_base64"`
+}
+
+func (h *Handler) ExtractAccount(w http.ResponseWriter, r *http.Request) {
+	var body extractAccountBody
+	if err := httpx.Decode(r, &body); err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	out, err := h.svc.ExtractAccountDetails(r.Context(), auth.UserIDFrom(r.Context()), body.Mime, body.ImageBase64)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"extract": out})
+}

@@ -28,7 +28,7 @@
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#0F766E"
+        "backgroundColor": "#FFFFFF"
       },
       "package": "io.lony.app",
       "softwareKeyboardLayoutMode": "resize",

@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import { api, type Dashboard, type Loan, type User } from './api';
 import { IconAnalytics } from './icons';
+import { t } from './i18n';
+import { TrustGradeModal } from './TrustGradeModal';
 import { fonts, radii, space, useTheme } from './theme';
 import { Banner, Card, DueDatePill, EmptyState, Money } from './ui';
 
@@ -44,6 +46,7 @@ export function DashboardHome({
     displayCurrency ? { [displayCurrency]: 1 } : {},
   );
   const [lonyScore, setLonyScore] = useState<string | null>(null);
+  const [gradeModalOpen, setGradeModalOpen] = useState(false);
 
   useEffect(() => {
     if (!displayCurrency || !token) return;
@@ -159,7 +162,7 @@ export function DashboardHome({
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
           {lonyScore != null ? (
             <Pressable
-              onPress={onOpenAnalytics}
+              onPress={() => setGradeModalOpen(true)}
               style={{
                 paddingHorizontal: 10,
                 paddingVertical: 6,
@@ -170,7 +173,7 @@ export function DashboardHome({
               }}
             >
               <Text style={{ color: colors.primary, fontFamily: fonts.uiBold, fontSize: 13 }}>
-                Trust {lonyScore}
+                {(t(user.locale, 'trust.badge') || 'Trust {grade}').replace('{grade}', lonyScore)}
               </Text>
             </Pressable>
           ) : null}
@@ -344,6 +347,12 @@ export function DashboardHome({
           ) : null}
         </>
       )}
+      <TrustGradeModal
+        visible={gradeModalOpen}
+        grade={lonyScore}
+        onClose={() => setGradeModalOpen(false)}
+        locale={user.locale}
+      />
     </View>
   );
 }

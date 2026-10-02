@@ -26,6 +26,7 @@ const (
 	TypeBillDue              = "bill_due"
 	TypeBillUpcoming         = "bill_upcoming"
 	TypeSMSIngest            = "sms_ingest"
+	TypeAccountNumberNeeded  = "account_number_needed"
 
 	KindDueSoon7d     = "due_soon_7d"
 	KindDueSoon3d     = "due_soon_3d"

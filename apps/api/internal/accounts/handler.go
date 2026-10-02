@@ -197,6 +197,39 @@ func (h *Handler) Transfer(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusCreated, map[string]any{"transfer": out})
 }
 
+type acceptForLoansBody struct {
+	FullName            string  `json:"full_name"`
+	AccountIdentifier   string  `json:"account_identifier"`
+	ProfitPercentYearly *string `json:"profit_percent_yearly"`
+	InstitutionName     *string `json:"institution_name"`
+	ProfileType         string  `json:"profile_type"`
+}
+
+func (h *Handler) AcceptForLoans(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	var body acceptForLoansBody
+	if err := httpx.Decode(r, &body); err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	out, err := h.svc.AcceptForLoans(r.Context(), auth.UserIDFrom(r.Context()), id, AcceptForLoansInput{
+		FullName:            body.FullName,
+		AccountIdentifier:   body.AccountIdentifier,
+		ProfitPercentYearly: body.ProfitPercentYearly,
+		InstitutionName:     body.InstitutionName,
+		ProfileType:         body.ProfileType,
+	})
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, out)
+}
+
 func parseID(r *http.Request) (uuid.UUID, error) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {
