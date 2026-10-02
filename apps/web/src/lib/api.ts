@@ -440,6 +440,16 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ url }),
     }, token),
+  extractGoalDraft: (token: string, text: string) =>
+    request<{ draft: GoalDraft }>('/goals/extract', {
+      method: 'POST',
+      body: JSON.stringify({ text }),
+    }, token),
+  refreshGoalPrices: (token: string) =>
+    request<{ updated: Goal[]; changes: GoalPriceChange[] }>('/goals/refresh-prices', {
+      method: 'POST',
+      body: '{}',
+    }, token),
   updateGoal: (token: string, id: string, body: UpdateGoalBody) =>
     request<{ goal: Goal }>(`/goals/${id}`, {
       method: 'PATCH',
@@ -1096,6 +1106,9 @@ export type Goal = {
   note?: string | null;
   cover_image_url?: string | null;
   type_label?: string | null;
+  source_url?: string | null;
+  last_seen_price?: string | null;
+  last_price_checked_at?: string | null;
   status: 'active' | 'completed' | 'archived';
   eta_months?: number | null;
   monthly_rate?: string | null;
@@ -1134,6 +1147,26 @@ export type GoalUrlPreview = {
   site_name?: string;
 };
 
+export type GoalDraft = {
+  title?: string;
+  goal_type?: Goal['goal_type'];
+  currency_code?: string;
+  target_amount?: string;
+  target_date?: string;
+  note?: string;
+  source_url?: string;
+  image_url?: string;
+  type_label?: string;
+};
+
+export type GoalPriceChange = {
+  goal_id: string;
+  title: string;
+  old_price: string;
+  new_price: string;
+  direction: 'up' | 'down' | 'same';
+};
+
 export type CreateGoalBody = {
   title: string;
   goal_type: Goal['goal_type'];
@@ -1145,6 +1178,7 @@ export type CreateGoalBody = {
   linked_loan_id?: string;
   note?: string;
   type_label?: string;
+  source_url?: string;
 };
 
 export type UpdateGoalBody = {

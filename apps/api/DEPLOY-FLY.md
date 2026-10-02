@@ -180,6 +180,7 @@ Or set `APP_ENV=production` in `fly.toml` and `fly deploy`.
 - [ ] `fly deploy` → `/health` OK
 - [ ] Mobile `.env` → Fly URL
 - [ ] `npx expo start -c` → register works
+- [ ] Web beta: see `apps/web/DEPLOY-FLY.md` → `fly deploy` from `apps/web`
 
 ## Later: VPS
 

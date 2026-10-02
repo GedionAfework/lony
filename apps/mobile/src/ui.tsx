@@ -372,6 +372,7 @@ export function Field({
   onFocus,
   inputRef,
   money,
+  multiline,
 }: {
   label: string;
   value: string;
@@ -383,6 +384,7 @@ export function Field({
   inputRef?: Ref<TextInput>;
   /** Format with thousands commas and at most 2 decimal places while typing. */
   money?: boolean;
+  multiline?: boolean;
 }) {
   const { colors } = useTheme();
   return (
@@ -409,12 +411,15 @@ export function Field({
         placeholder={placeholder}
         placeholderTextColor={colors.muted}
         onFocus={onFocus}
+        multiline={multiline}
+        textAlignVertical={multiline ? 'top' : 'center'}
         style={{
           backgroundColor: colors.surfaceMuted,
           color: colors.text,
           borderRadius: radii.md,
           paddingHorizontal: 14,
-          paddingVertical: 14,
+          paddingVertical: multiline ? 12 : 14,
+          minHeight: multiline ? 88 : undefined,
           fontSize: 16,
           fontFamily: fonts.ui,
           borderWidth: StyleSheet.hairlineWidth,

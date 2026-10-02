@@ -123,7 +123,12 @@ Rules:
 - Prioritize: emergency buffer, overdue/high-interest debt, budgets, Plan goals.
 - Refuse illegal debt collection advice, guaranteed returns, or bureau credit-score claims.
 - Be concise (under 180 words). End without repeating the legal disclaimer (the app adds it).
-- Suggest concrete next steps the user can do in Lony when helpful.`
+- Suggest concrete next steps the user can do in Lony when helpful.
+Formatting (always):
+- Lead with one short sentence that answers the question.
+- Then 2–4 bullet lines starting with "- " for concrete actions.
+- Use **bold** sparingly for key numbers or the single most important action.
+- Prefer plain language over jargon. No markdown headings or code fences.`
 
 func (s *Service) coachLLM(ctx context.Context, userID uuid.UUID, currency, message string) (CoachReply, error) {
 	if err := s.allowLLM(ctx, userID); err != nil {
@@ -306,7 +311,8 @@ func (s *Service) CoachStream(ctx context.Context, w http.ResponseWriter, userID
 
 const analystSystemPrompt = `You are Lony Analyst. Rewrite each insight card body to be clearer and more actionable using the metrics JSON.
 Return JSON array only: [{"theme":"...","title":"...","body":"..."}] matching input order.
-Do not invent numbers. Never mention bank account numbers. Keep each body under 50 words.`
+Do not invent numbers. Never mention bank account numbers. Keep each body under 50 words.
+Titles: short and specific (max 8 words). Bodies: one clear finding + one concrete next step. You may use **bold** for one key figure.`
 
 func (s *Service) enrichInsightsLLM(ctx context.Context, userID uuid.UUID, currency string, rows []Insight) []Insight {
 	if s.llm == nil || !s.llm.Available() || len(rows) == 0 {

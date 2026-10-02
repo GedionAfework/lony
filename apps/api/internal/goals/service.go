@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -27,6 +28,7 @@ type Service struct {
 	store      Store
 	accounts   AccountDebiter
 	milestones MilestoneNotifier
+	extractor  PlanExtractor
 	now        func() time.Time
 }
 
@@ -104,11 +106,34 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, in CreateInput) 
 	if err != nil {
 		return GoalDTO{}, err
 	}
+	srcURL, err := normalizeSourceURL(in.SourceURL)
+	if err != nil {
+		return GoalDTO{}, err
+	}
 	now := s.now().UTC()
 	status := StatusActive
 	if current.GreaterThanOrEqual(target) {
 		status = StatusCompleted
 		current = target
+	}
+	var lastSeen *decimal.Decimal
+	var checkedAt *time.Time
+	if srcURL != nil {
+		lastSeen = &target
+		checkedAt = &now
+		if in.LastSeenPrice != nil && strings.TrimSpace(*in.LastSeenPrice) != "" {
+			p, err := parsePositive(*in.LastSeenPrice)
+			if err != nil {
+				return GoalDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+					"last_seen_price": "must be a positive decimal",
+				})
+			}
+			lastSeen = &p
+		}
+		if in.LastPriceCheckedAt != nil {
+			t := in.LastPriceCheckedAt.UTC()
+			checkedAt = &t
+		}
 	}
 	rec := Goal{
 		UserID:          userID,
@@ -125,6 +150,10 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, in CreateInput) 
 		Status:          status,
 		CreatedAt:       now,
 		UpdatedAt:       now,
+
+		SourceURL:          srcURL,
+		LastSeenPrice:      lastSeen,
+		LastPriceCheckedAt: checkedAt,
 	}
 	saved, err := s.store.Insert(ctx, rec)
 	if err != nil {
@@ -206,6 +235,40 @@ func (s *Service) Update(ctx context.Context, userID, id uuid.UUID, in UpdateInp
 			return GoalDTO{}, err
 		}
 		rec.Status = st
+	}
+	if in.SourceURL != nil {
+		srcURL, err := normalizeSourceURL(in.SourceURL)
+		if err != nil {
+			return GoalDTO{}, err
+		}
+		changed := (srcURL == nil) != (rec.SourceURL == nil) || (srcURL != nil && rec.SourceURL != nil && *srcURL != *rec.SourceURL)
+		rec.SourceURL = srcURL
+		if srcURL == nil {
+			rec.LastSeenPrice = nil
+			rec.LastPriceCheckedAt = nil
+		} else if changed {
+			seen := rec.TargetAmount
+			now := s.now().UTC()
+			rec.LastSeenPrice = &seen
+			rec.LastPriceCheckedAt = &now
+		}
+	}
+	if in.LastSeenPrice != nil {
+		if strings.TrimSpace(*in.LastSeenPrice) == "" {
+			rec.LastSeenPrice = nil
+		} else {
+			p, err := parsePositive(*in.LastSeenPrice)
+			if err != nil {
+				return GoalDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+					"last_seen_price": "must be a positive decimal",
+				})
+			}
+			rec.LastSeenPrice = &p
+		}
+	}
+	if in.LastPriceCheckedAt != nil {
+		t := in.LastPriceCheckedAt.UTC()
+		rec.LastPriceCheckedAt = &t
 	}
 	if rec.CurrentAmount.GreaterThanOrEqual(rec.TargetAmount) && rec.Status == StatusActive {
 		rec.Status = StatusCompleted
@@ -481,6 +544,32 @@ func parseOptionalDate(in *string) (*time.Time, error) {
 	}
 	u := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
 	return &u, nil
+}
+
+const maxSourceURLLen = 2000
+
+// normalizeSourceURL validates an optional http(s) URL. Empty input yields nil.
+func normalizeSourceURL(in *string) (*string, error) {
+	if in == nil {
+		return nil, nil
+	}
+	raw := strings.TrimSpace(*in)
+	if raw == "" {
+		return nil, nil
+	}
+	bad := func(msg string) error {
+		return httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"source_url": msg,
+		})
+	}
+	if utf8.RuneCountInString(raw) > maxSourceURLLen {
+		return nil, bad("max 2000 characters")
+	}
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return nil, bad("must be a valid http(s) URL")
+	}
+	return &raw, nil
 }
 
 func cleanOpt(in *string, max int) *string {

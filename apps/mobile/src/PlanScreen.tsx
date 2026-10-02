@@ -77,7 +77,9 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
   const [accountId, setAccountId] = useState('');
   const [note, setNote] = useState('');
   const [productUrl, setProductUrl] = useState('');
+  const [describeText, setDescribeText] = useState('');
   const [urlBusy, setUrlBusy] = useState(false);
+  const [extractBusy, setExtractBusy] = useState(false);
   const [pendingCover, setPendingCover] = useState<{
     filename: string;
     mime: string;
@@ -144,6 +146,7 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
     setAccountId('');
     setNote('');
     setProductUrl('');
+    setDescribeText('');
     setPendingCover(null);
   }
 
@@ -209,6 +212,53 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
     }
   }
 
+  async function applyDraft(d: {
+    title?: string;
+    goal_type?: Goal['goal_type'];
+    currency_code?: string;
+    target_amount?: string;
+    target_date?: string;
+    note?: string;
+    source_url?: string;
+    image_url?: string;
+    type_label?: string;
+  }) {
+    if (d.title) setTitle(d.title.slice(0, 120));
+    if (d.target_amount) setTarget(d.target_amount);
+    if (d.currency_code && d.currency_code.length === 3) setCurrency(d.currency_code.toUpperCase());
+    if (d.goal_type) {
+      if (d.goal_type === 'custom') {
+        setGoalType('other');
+        if (d.type_label) setOtherType(d.type_label);
+      } else {
+        setGoalType(d.goal_type);
+      }
+    } else if (!goalType || goalType === 'savings') {
+      setGoalType('purchase');
+    }
+    if (d.target_date) setTargetDate(d.target_date);
+    if (d.note && !note.trim()) setNote(d.note.slice(0, 400));
+    if (d.source_url) setProductUrl(d.source_url);
+    if (d.image_url) await fetchCoverFromUrl(d.image_url);
+  }
+
+  async function onExtractDescribe() {
+    const text = describeText.trim() || productUrl.trim();
+    if (!text) {
+      onError('Describe what you want, or paste a product link');
+      return;
+    }
+    setExtractBusy(true);
+    try {
+      const res = await api.extractGoalDraft(token, text);
+      await applyDraft(res.draft ?? {});
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Could not extract plan details');
+    } finally {
+      setExtractBusy(false);
+    }
+  }
+
   async function onFetchProductUrl() {
     const url = productUrl.trim();
     if (!url) {
@@ -217,14 +267,23 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
     }
     setUrlBusy(true);
     try {
-      const res = await api.previewGoalUrl(token, url);
-      const p = res.preview;
-      if (p.title) setTitle(p.title.slice(0, 120));
-      if (p.price) setTarget(p.price);
-      if (p.currency && p.currency.length === 3) setCurrency(p.currency.toUpperCase());
-      if (!goalType || goalType === 'savings') setGoalType('purchase');
-      if (p.description && !note.trim()) setNote(p.description.slice(0, 400));
-      if (p.image_url) await fetchCoverFromUrl(p.image_url);
+      // Prefer AI extract so URL + surrounding text fill the form; falls back to scrape-only.
+      try {
+        const res = await api.extractGoalDraft(token, url);
+        await applyDraft(res.draft ?? {});
+      } catch {
+        const res = await api.previewGoalUrl(token, url);
+        const p = res.preview;
+        await applyDraft({
+          title: p.title,
+          target_amount: p.price,
+          currency_code: p.currency,
+          note: p.description,
+          source_url: p.url || url,
+          image_url: p.image_url,
+          goal_type: 'purchase',
+        });
+      }
     } catch (e) {
       onError(e instanceof Error ? e.message : 'Could not read that link');
     } finally {
@@ -259,6 +318,7 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
         linked_account_id: accountId || undefined,
         note: note.trim() || undefined,
         type_label: goalType === 'other' ? otherType.trim() : undefined,
+        source_url: productUrl.trim() || undefined,
       });
       if (pendingCover && res.goal?.id) {
         await api.uploadGoalCover(token, res.goal.id, {
@@ -348,12 +408,27 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
       <View style={{ gap: space.md }}>
         <ScreenHeader title="New plan" onBack={goIndex} />
         <Card>
+          <SectionLabel>Describe with AI</SectionLabel>
+          <Field
+            label="What do you want?"
+            value={describeText}
+            onChange={setDescribeText}
+            placeholder="MacBook Pro 14&quot; around $2,000 by June, or paste a store link…"
+            multiline
+          />
+          <SecondaryButton
+            label={extractBusy ? 'Extracting…' : 'Fill form with AI'}
+            onPress={() => void onExtractDescribe()}
+            disabled={extractBusy || urlBusy || busy}
+          />
+          <SectionLabel>Or paste a link</SectionLabel>
           <Field label="Product link" value={productUrl} onChange={setProductUrl} placeholder="https://…" />
           <SecondaryButton
             label={urlBusy ? 'Reading link…' : 'Fetch from link'}
             onPress={() => void onFetchProductUrl()}
-            disabled={urlBusy || busy}
+            disabled={urlBusy || extractBusy || busy}
           />
+          <SectionLabel>Details</SectionLabel>
           <Field label="Title" value={title} onChange={setTitle} />
           <SearchSelect label="Type" value={goalType} onChange={setGoalType} options={goalTypes} />
           {goalType === 'other' ? <Field label="Type name" value={otherType} onChange={setOtherType} /> : null}
@@ -424,6 +499,11 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
           </Text>
           {selected.note ? (
             <Text style={{ color: colors.textSecondary, fontFamily: fonts.ui, fontSize: 14 }}>{selected.note}</Text>
+          ) : null}
+          {selected.source_url ? (
+            <Text style={{ color: colors.primary, fontFamily: fonts.ui, fontSize: 12 }} numberOfLines={2}>
+              Tracking price from {selected.source_url}
+            </Text>
           ) : null}
 
           {!done && selected.status === 'active' ? (

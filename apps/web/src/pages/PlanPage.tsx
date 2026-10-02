@@ -7,7 +7,7 @@ import { CURRENCIES } from '../lib/catalogs';
 import { PageHeader } from '../components/PageHeader';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
-import { Field, SelectField } from '../components/Field';
+import { Field, SelectField, TextAreaField } from '../components/Field';
 import { Modal } from '../components/Modal';
 import { EmptyState } from '../components/EmptyState';
 import { useToast } from '../components/Toast';
@@ -48,7 +48,9 @@ export function PlanPage() {
   const [accountId, setAccountId] = useState('');
   const [note, setNote] = useState('');
   const [productUrl, setProductUrl] = useState('');
+  const [describeText, setDescribeText] = useState('');
   const [urlBusy, setUrlBusy] = useState(false);
+  const [extractBusy, setExtractBusy] = useState(false);
   const [pendingCover, setPendingCover] = useState<{
     filename: string;
     mime: string;
@@ -99,7 +101,81 @@ export function PlanPage() {
     setAccountId('');
     setNote('');
     setProductUrl('');
+    setDescribeText('');
     setPendingCover(null);
+  }
+
+  async function applyImageUrl(imageUrl?: string) {
+    if (!imageUrl) return;
+    try {
+      const imgRes = await fetch(imageUrl);
+      if (!imgRes.ok) return;
+      const blob = await imgRes.blob();
+      const dataUrl: string = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(new Error('read failed'));
+        reader.readAsDataURL(blob);
+      });
+      const idx = dataUrl.indexOf(',');
+      const b64 = idx >= 0 ? dataUrl.slice(idx + 1) : dataUrl;
+      setPendingCover({
+        filename: 'product.jpg',
+        mime: blob.type || 'image/jpeg',
+        attachment_base64: b64,
+        preview: imageUrl,
+      });
+    } catch {
+      /* cover best-effort */
+    }
+  }
+
+  function applyDraft(d: {
+    title?: string;
+    goal_type?: Goal['goal_type'];
+    currency_code?: string;
+    target_amount?: string;
+    target_date?: string;
+    note?: string;
+    source_url?: string;
+    image_url?: string;
+    type_label?: string;
+  }) {
+    if (d.title) setTitle(d.title.slice(0, 120));
+    if (d.target_amount) setTarget(d.target_amount);
+    if (d.currency_code && d.currency_code.length === 3) setCurrency(d.currency_code.toUpperCase());
+    if (d.goal_type) {
+      if (d.goal_type === 'custom') {
+        setGoalType('other');
+        if (d.type_label) setOtherType(d.type_label);
+      } else {
+        setGoalType(d.goal_type);
+      }
+    } else if (!goalType || goalType === 'savings') {
+      setGoalType('purchase');
+    }
+    if (d.target_date) setTargetDate(d.target_date);
+    if (d.note && !note.trim()) setNote(d.note.slice(0, 400));
+    if (d.source_url) setProductUrl(d.source_url);
+    void applyImageUrl(d.image_url);
+  }
+
+  async function onExtractDescribe() {
+    if (!token) return;
+    const text = describeText.trim() || productUrl.trim();
+    if (!text) {
+      showError('Describe what you want, or paste a product link');
+      return;
+    }
+    setExtractBusy(true);
+    try {
+      const res = await api.extractGoalDraft(token, text);
+      applyDraft(res.draft ?? {});
+    } catch (e) {
+      showError(e instanceof Error ? e.message : 'Could not extract plan details');
+    } finally {
+      setExtractBusy(false);
+    }
   }
 
   async function onFetchProductUrl() {
@@ -111,36 +187,21 @@ export function PlanPage() {
     }
     setUrlBusy(true);
     try {
-      const res = await api.previewGoalUrl(token, url);
-      const p = res.preview;
-      if (p.title) setTitle(p.title.slice(0, 120));
-      if (p.price) setTarget(p.price);
-      if (p.currency && p.currency.length === 3) setCurrency(p.currency.toUpperCase());
-      if (!goalType || goalType === 'savings') setGoalType('purchase');
-      if (p.description && !note.trim()) setNote(p.description.slice(0, 400));
-      if (p.image_url) {
-        try {
-          const imgRes = await fetch(p.image_url);
-          if (imgRes.ok) {
-            const blob = await imgRes.blob();
-            const dataUrl: string = await new Promise((resolve, reject) => {
-              const reader = new FileReader();
-              reader.onload = () => resolve(String(reader.result || ''));
-              reader.onerror = () => reject(new Error('read failed'));
-              reader.readAsDataURL(blob);
-            });
-            const idx = dataUrl.indexOf(',');
-            const b64 = idx >= 0 ? dataUrl.slice(idx + 1) : dataUrl;
-            setPendingCover({
-              filename: 'product.jpg',
-              mime: blob.type || 'image/jpeg',
-              attachment_base64: b64,
-              preview: p.image_url,
-            });
-          }
-        } catch {
-          /* cover best-effort */
-        }
+      try {
+        const res = await api.extractGoalDraft(token, url);
+        applyDraft(res.draft ?? {});
+      } catch {
+        const res = await api.previewGoalUrl(token, url);
+        const p = res.preview;
+        applyDraft({
+          title: p.title,
+          target_amount: p.price,
+          currency_code: p.currency,
+          note: p.description,
+          source_url: p.url || url,
+          image_url: p.image_url,
+          goal_type: 'purchase',
+        });
       }
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Could not read that link');
@@ -185,6 +246,7 @@ export function PlanPage() {
         linked_account_id: accountId || undefined,
         note: note.trim() || undefined,
         type_label: goalType === 'other' ? otherType.trim() : undefined,
+        source_url: productUrl.trim() || undefined,
       }).then(async (res) => {
         if (pendingCover && res.goal?.id) {
           await api.uploadGoalCover(token, res.goal.id, {
@@ -397,11 +459,30 @@ export function PlanPage() {
       </div>
 
       <Modal open={createOpen} title="New plan" onClose={() => setCreateOpen(false)}>
+        <div className="muted" style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4 }}>
+          Describe with AI
+        </div>
+        <TextAreaField
+          label="What do you want?"
+          value={describeText}
+          onChange={setDescribeText}
+          rows={3}
+          placeholder='MacBook Pro 14" around $2,000 by June, or paste a store link…'
+        />
+        <Button variant="secondary" onClick={() => void onExtractDescribe()} busy={extractBusy} disabled={extractBusy || urlBusy || busy} block>
+          {extractBusy ? 'Extracting…' : 'Fill form with AI'}
+        </Button>
+        <div className="muted" style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, marginTop: 8 }}>
+          Or paste a link
+        </div>
         <Field label="Product link" value={productUrl} onChange={setProductUrl} placeholder="https://…" />
-        <Button variant="secondary" onClick={() => void onFetchProductUrl()} busy={urlBusy} disabled={urlBusy || busy} block>
+        <Button variant="secondary" onClick={() => void onFetchProductUrl()} busy={urlBusy} disabled={urlBusy || extractBusy || busy} block>
           {urlBusy ? 'Reading link…' : 'Fetch from link'}
         </Button>
         {pendingCover ? <img src={pendingCover.preview} alt="" className="cover-image" style={{ height: 120 }} /> : null}
+        <div className="muted" style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, marginTop: 8 }}>
+          Details
+        </div>
         <Field label="Title" value={title} onChange={setTitle} />
         <SelectField label="Type" value={goalType} onChange={setGoalType} options={goalTypes} />
         {goalType === 'other' ? <Field label="Type name" value={otherType} onChange={setOtherType} /> : null}

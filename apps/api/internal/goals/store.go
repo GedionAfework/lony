@@ -39,6 +39,10 @@ type Goal struct {
 	Status          string
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
+
+	SourceURL          *string
+	LastSeenPrice      *decimal.Decimal
+	LastPriceCheckedAt *time.Time
 }
 
 type Contribution struct {
@@ -73,6 +77,13 @@ type GoalDTO struct {
 	MonthlyRate     *string    `json:"monthly_rate,omitempty"`
 	CreatedAt       time.Time  `json:"created_at"`
 	UpdatedAt       time.Time  `json:"updated_at"`
+
+	SourceURL          *string    `json:"source_url,omitempty"`
+	LastSeenPrice      *string    `json:"last_seen_price,omitempty"`
+	LastPriceCheckedAt *time.Time `json:"last_price_checked_at,omitempty"`
+	// Set only when prices were refreshed (not on regular list/get).
+	PriceDelta     *string `json:"price_delta,omitempty"`
+	PriceDirection *string `json:"price_direction,omitempty"` // up | down | same
 }
 
 type ContributionDTO struct {
@@ -107,6 +118,10 @@ type CreateInput struct {
 	LinkedLoanID    *uuid.UUID
 	Note            *string
 	TypeLabel       *string
+
+	SourceURL          *string
+	LastSeenPrice      *string
+	LastPriceCheckedAt *time.Time
 }
 
 type UpdateInput struct {
@@ -123,6 +138,10 @@ type UpdateInput struct {
 	Note            *string
 	TypeLabel       *string
 	Status          *string
+
+	SourceURL          *string // empty string clears
+	LastSeenPrice      *string // empty string clears
+	LastPriceCheckedAt *time.Time
 }
 
 type ContributeInput struct {
@@ -180,6 +199,12 @@ func toDTO(rec Goal, monthlyRate *decimal.Decimal) GoalDTO {
 	if rec.TargetDate != nil {
 		s := rec.TargetDate.Format("2006-01-02")
 		dto.TargetDate = &s
+	}
+	dto.SourceURL = rec.SourceURL
+	dto.LastPriceCheckedAt = rec.LastPriceCheckedAt
+	if rec.LastSeenPrice != nil {
+		s := rec.LastSeenPrice.StringFixed(Scale)
+		dto.LastSeenPrice = &s
 	}
 	if monthlyRate != nil && monthlyRate.GreaterThan(decimal.Zero) && remaining.GreaterThan(decimal.Zero) {
 		months := remaining.Div(*monthlyRate).Ceil().IntPart()

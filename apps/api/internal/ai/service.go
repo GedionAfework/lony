@@ -118,6 +118,7 @@ type Service struct {
 	score      ScoreAPI
 	gate       Gate
 	llm        *llm.Client
+	prices     GoalPriceRefresher
 	dailyCap   int
 	now        func() time.Time
 }
@@ -129,6 +130,7 @@ func NewService(store Store) *Service {
 func (s *Service) SetInsights(i InsightsAPI) { s.data = i }
 func (s *Service) SetScore(sc ScoreAPI)     { s.score = sc }
 func (s *Service) SetGate(g Gate)           { s.gate = g }
+func (s *Service) SetGoalPrices(r GoalPriceRefresher) { s.prices = r }
 func (s *Service) SetLLM(c *llm.Client, dailyCap int) {
 	s.llm = c
 	if dailyCap > 0 {
@@ -184,6 +186,7 @@ func (s *Service) RefreshInsights(ctx context.Context, userID uuid.UUID, currenc
 	if s.data == nil {
 		return nil, httpx.E(http.StatusServiceUnavailable, "UNAVAILABLE", "insights unavailable")
 	}
+	priceChanges := s.refreshGoalPrices(ctx, userID)
 	now := s.now().UTC()
 	from := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
 	to := from.AddDate(0, 1, 0)
@@ -267,6 +270,11 @@ func (s *Service) RefreshInsights(ctx context.Context, userID uuid.UUID, currenc
 		add("goals", "info", "Goals need contributions",
 			fmt.Sprintf("Average goal progress is %.0f%%. A small contribution this week moves the needle.", *ov.GoalsProgressAvg),
 			map[string]any{"goals_progress_avg": *ov.GoalsProgressAvg})
+	}
+
+	if len(priceChanges) > 0 {
+		sev, title, body := priceChangeInsight(priceChanges)
+		add("goals", sev, title, body, map[string]any{"changes": priceChanges})
 	}
 
 	if len(rows) == 0 {

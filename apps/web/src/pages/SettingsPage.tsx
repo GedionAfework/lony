@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Camera } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { api, type AppCalendar, type AppLocale } from '../lib/api';
-import { COUNTRIES, CURRENCIES, TIMEZONES } from '../lib/catalogs';
+import { COUNTRIES, TIMEZONES } from '../lib/catalogs';
 import { applyDocumentDirection, parseLocaleMessages, setActivePack, t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
 import { Card } from '../components/Card';
@@ -43,7 +43,7 @@ export function SettingsPage() {
   const [lastName, setLastName] = useState(user?.last_name || '');
   const [displayName, setDisplayName] = useState(user?.display_name || '');
   const [country, setCountry] = useState(user?.country_code || '');
-  const [currency, setCurrency] = useState(user?.default_currency_code || '');
+  const [currency] = useState(user?.default_currency_code || '');
   const [locale, setLocale] = useState(user?.locale || 'en');
   const [timezone, setTimezone] = useState(user?.timezone || 'UTC');
   const [calendarId, setCalendarId] = useState(user?.calendar_id || 'gregorian');

@@ -13,8 +13,9 @@ import {
   type LonyScore,
   type User,
 } from './api';
+import { RichText } from './RichText';
 import { fonts, radii, space, useTheme } from './theme';
-import { Card, EmptyState, Field, Money, PrimaryButton } from './ui';
+import { Card, EmptyState, Field, Money, PrimaryButton, SecondaryButton } from './ui';
 
 type Tab = 'overview' | 'cashflow' | 'debts' | 'goals' | 'analysis' | 'reports' | 'coach';
 
@@ -43,6 +44,15 @@ function fmtPct(v: number | null | undefined): string {
   return `${sign}${v.toFixed(0)}%`;
 }
 
+function LegendDot({ color, label }: { color: string; label: string }) {
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+      <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: color }} />
+      <Text style={{ color, fontFamily: fonts.ui, fontSize: 11 }}>{label}</Text>
+    </View>
+  );
+}
+
 function MonthBars({
   series,
   formatMoney,
@@ -62,61 +72,70 @@ function MonthBars({
     ...series.map((s) => Math.max(Number(s.income) || 0, Number(s.expense) || 0, Math.abs(Number(s.net) || 0))),
   );
   return (
-    <View style={{ gap: 10 }}>
+    <View
+      style={{
+        gap: 12,
+        padding: 12,
+        borderRadius: radii.lg,
+        backgroundColor: colors.surfaceMuted,
+        borderWidth: 1,
+        borderColor: colors.border,
+      }}
+    >
       {series.map((row) => {
         const income = Number(row.income) || 0;
         const expense = Number(row.expense) || 0;
         const net = Number(row.net) || income - expense;
-        const iH = Math.max(income > 0 ? 4 : 0, Math.round((income / max) * 72));
-        const eH = Math.max(expense > 0 ? 4 : 0, Math.round((expense / max) * 72));
-        const nH = Math.max(Math.abs(net) > 0 ? 3 : 0, Math.round((Math.abs(net) / max) * 72));
+        const iH = Math.max(income > 0 ? 6 : 0, Math.round((income / max) * 88));
+        const eH = Math.max(expense > 0 ? 6 : 0, Math.round((expense / max) * 88));
+        const nH = Math.max(Math.abs(net) > 0 ? 4 : 0, Math.round((Math.abs(net) / max) * 88));
         const label = row.month.slice(5);
         return (
           <View key={row.month} style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 10 }}>
-            <Text style={{ width: 36, color: colors.muted, fontFamily: fonts.ui, fontSize: 11 }}>{label}</Text>
-            <View style={{ flex: 1, flexDirection: 'row', alignItems: 'flex-end', gap: 4, height: 76 }}>
+            <Text style={{ width: 36, color: colors.muted, fontFamily: fonts.uiSemi, fontSize: 11 }}>{label}</Text>
+            <View style={{ flex: 1, flexDirection: 'row', alignItems: 'flex-end', gap: 5, height: 92 }}>
               <View
                 style={{
                   flex: 1,
                   height: iH,
-                  borderRadius: 4,
+                  borderTopLeftRadius: 8,
+                  borderTopRightRadius: 8,
                   backgroundColor: colors.success,
-                  opacity: 0.85,
                 }}
               />
               <View
                 style={{
                   flex: 1,
                   height: eH,
-                  borderRadius: 4,
+                  borderTopLeftRadius: 8,
+                  borderTopRightRadius: 8,
                   backgroundColor: colors.warning,
-                  opacity: 0.85,
                 }}
               />
               {showNet ? (
                 <View
                   style={{
-                    width: 6,
+                    width: 7,
                     height: nH,
-                    borderRadius: 3,
+                    borderTopLeftRadius: 4,
+                    borderTopRightRadius: 4,
                     backgroundColor: net >= 0 ? colors.primary : colors.error,
-                    opacity: 0.9,
                   }}
                 />
               ) : null}
             </View>
-            <View style={{ width: 88, alignItems: 'flex-end' }}>
-              <Text style={{ color: colors.success, fontFamily: fonts.ui, fontSize: 10 }} numberOfLines={1}>
+            <View style={{ width: 92, alignItems: 'flex-end', gap: 1 }}>
+              <Text style={{ color: colors.success, fontFamily: fonts.uiSemi, fontSize: 10 }} numberOfLines={1}>
                 {formatMoney(row.income, currency, locale)}
               </Text>
-              <Text style={{ color: colors.warning, fontFamily: fonts.ui, fontSize: 10 }} numberOfLines={1}>
+              <Text style={{ color: colors.warning, fontFamily: fonts.uiSemi, fontSize: 10 }} numberOfLines={1}>
                 {formatMoney(row.expense, currency, locale)}
               </Text>
               {showNet ? (
                 <Text
                   style={{
                     color: net >= 0 ? colors.primary : colors.warning,
-                    fontFamily: fonts.uiSemi,
+                    fontFamily: fonts.uiBold,
                     fontSize: 10,
                   }}
                   numberOfLines={1}
@@ -128,12 +147,10 @@ function MonthBars({
           </View>
         );
       })}
-      <View style={{ flexDirection: 'row', gap: 16, marginTop: 4, flexWrap: 'wrap' }}>
-        <Text style={{ color: colors.success, fontFamily: fonts.ui, fontSize: 11 }}>Income</Text>
-        <Text style={{ color: colors.warning, fontFamily: fonts.ui, fontSize: 11 }}>Expense</Text>
-        {showNet ? (
-          <Text style={{ color: colors.primary, fontFamily: fonts.ui, fontSize: 11 }}>Net</Text>
-        ) : null}
+      <View style={{ flexDirection: 'row', gap: 14, marginTop: 2, flexWrap: 'wrap' }}>
+        <LegendDot color={colors.success} label="Income" />
+        <LegendDot color={colors.warning} label="Expense" />
+        {showNet ? <LegendDot color={colors.primary} label="Net" /> : null}
       </View>
     </View>
   );
@@ -144,23 +161,45 @@ function NetSparkline({ series }: { series: InsightsMonthPoint[] }) {
   if (series.length === 0) return null;
   const nets = series.map((s) => Number(s.net) || Number(s.income) - Number(s.expense) || 0);
   const maxAbs = Math.max(1, ...nets.map((n) => Math.abs(n)));
+  const last = nets[nets.length - 1] ?? 0;
   return (
-    <View style={{ gap: 6 }}>
-      <Text style={{ color: colors.muted, fontFamily: fonts.uiSemi, fontSize: 11, textTransform: 'uppercase' }}>
-        Net trend
-      </Text>
-      <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 4, height: 48 }}>
+    <View
+      style={{
+        gap: 8,
+        padding: 12,
+        borderRadius: radii.lg,
+        backgroundColor: colors.surfaceMuted,
+        borderWidth: 1,
+        borderColor: colors.border,
+      }}
+    >
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+        <Text style={{ color: colors.muted, fontFamily: fonts.uiSemi, fontSize: 11, textTransform: 'uppercase', letterSpacing: 0.6 }}>
+          Net trend
+        </Text>
+        <Text
+          style={{
+            color: last >= 0 ? colors.success : colors.warning,
+            fontFamily: fonts.uiBold,
+            fontSize: 12,
+          }}
+        >
+          {last >= 0 ? '▲' : '▼'} latest
+        </Text>
+      </View>
+      <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: 5, height: 56 }}>
         {nets.map((n, i) => {
-          const h = Math.max(4, Math.round((Math.abs(n) / maxAbs) * 44));
+          const h = Math.max(6, Math.round((Math.abs(n) / maxAbs) * 50));
           return (
             <View
               key={series[i]?.month ?? i}
               style={{
                 flex: 1,
                 height: h,
-                borderRadius: 3,
+                borderTopLeftRadius: 6,
+                borderTopRightRadius: 6,
                 backgroundColor: n >= 0 ? colors.success : colors.warning,
-                opacity: 0.8,
+                opacity: i === nets.length - 1 ? 1 : 0.72,
               }}
             />
           );
@@ -829,10 +868,24 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError, 
                   <View
                     key={card.id}
                     style={{
-                      gap: 4,
-                      paddingVertical: 12,
-                      borderBottomWidth: 1,
-                      borderBottomColor: colors.border,
+                      gap: 6,
+                      padding: 14,
+                      borderRadius: radii.lg,
+                      backgroundColor: colors.surfaceMuted,
+                      borderWidth: 1,
+                      borderColor:
+                        card.severity === 'critical' || card.severity === 'warning'
+                          ? colors.warning + '55'
+                          : card.severity === 'positive'
+                            ? colors.success + '55'
+                            : colors.border,
+                      borderLeftWidth: 3,
+                      borderLeftColor:
+                        card.severity === 'critical' || card.severity === 'warning'
+                          ? colors.warning
+                          : card.severity === 'positive'
+                            ? colors.success
+                            : colors.primary,
                     }}
                   >
                     <Text
@@ -846,13 +899,14 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError, 
                         fontFamily: fonts.uiSemi,
                         fontSize: 11,
                         textTransform: 'uppercase',
+                        letterSpacing: 0.5,
                       }}
                     >
                       {card.severity} · {card.theme}
-                      {card.source === 'llm_analyst' ? ' · AI' : ''}
+                      {card.source?.includes('llm') ? ' · AI' : ''}
                     </Text>
-                    <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>{card.title}</Text>
-                    <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>{card.body}</Text>
+                    <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>{card.title}</Text>
+                    <RichText text={card.body} muted />
                   </View>
                 ))
               )}
@@ -932,34 +986,108 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError, 
 
           {tab === 'coach' ? (
             <Card>
-              <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>Coach</Text>
-              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13, marginBottom: 8 }}>
-                Ask where to cut spending, how debt looks, or how to improve your score. Never suggests new borrowing.
-              </Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+                <View
+                  style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: 12,
+                    backgroundColor: colors.primarySoft,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <Text style={{ color: colors.primary, fontFamily: fonts.uiBold, fontSize: 16 }}>✦</Text>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>Coach</Text>
+                  <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
+                    Cut spending, debt health, score tips — never new borrowing.
+                  </Text>
+                </View>
+              </View>
               {coachMessages.length === 0 ? (
-                <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13, marginBottom: 8 }}>
-                  No messages yet — ask a question below.
-                </Text>
-              ) : (
-                <View style={{ gap: 8, marginBottom: 12 }}>
-                  {coachMessages.map((m) => (
-                    <View
-                      key={m.id}
+                <View
+                  style={{
+                    padding: 16,
+                    borderRadius: radii.lg,
+                    backgroundColor: colors.surfaceMuted,
+                    borderWidth: 1,
+                    borderColor: colors.border,
+                    gap: 10,
+                    marginBottom: 12,
+                  }}
+                >
+                  <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }}>Try asking</Text>
+                  {[
+                    'Where can I cut spending this month?',
+                    'How does my debt look?',
+                    'Am I on track for my goals?',
+                  ].map((q) => (
+                    <Pressable
+                      key={q}
+                      onPress={() => {
+                        setCoachMsg(q);
+                      }}
                       style={{
-                        alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
-                        maxWidth: '92%',
-                        backgroundColor: m.role === 'user' ? colors.primary + '22' : colors.surfaceMuted,
+                        paddingVertical: 10,
+                        paddingHorizontal: 12,
                         borderRadius: radii.md,
-                        paddingHorizontal: 10,
-                        paddingVertical: 8,
+                        backgroundColor: colors.surface,
+                        borderWidth: 1,
+                        borderColor: colors.border,
                       }}
                     >
-                      <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 10, marginBottom: 2 }}>
-                        {m.role === 'user' ? 'You' : 'Coach'}
-                      </Text>
-                      <Text style={{ color: colors.text, fontFamily: fonts.ui, fontSize: 14 }}>{m.content}</Text>
-                    </View>
+                      <Text style={{ color: colors.primary, fontFamily: fonts.ui, fontSize: 13 }}>{q}</Text>
+                    </Pressable>
                   ))}
+                </View>
+              ) : (
+                <View style={{ gap: 10, marginBottom: 12 }}>
+                  {coachMessages.map((m) => {
+                    const isUser = m.role === 'user';
+                    return (
+                      <View
+                        key={m.id}
+                        style={{
+                          alignSelf: isUser ? 'flex-end' : 'flex-start',
+                          maxWidth: '92%',
+                          backgroundColor: isUser ? colors.primary : colors.surfaceMuted,
+                          borderRadius: isUser ? 18 : 16,
+                          borderBottomRightRadius: isUser ? 6 : 16,
+                          borderBottomLeftRadius: isUser ? 18 : 6,
+                          paddingHorizontal: 14,
+                          paddingVertical: 10,
+                          borderWidth: isUser ? 0 : 1,
+                          borderColor: colors.border,
+                        }}
+                      >
+                        {!isUser ? (
+                          <Text
+                            style={{
+                              color: colors.primary,
+                              fontFamily: fonts.uiSemi,
+                              fontSize: 10,
+                              marginBottom: 4,
+                              letterSpacing: 0.4,
+                              textTransform: 'uppercase',
+                            }}
+                          >
+                            Coach
+                          </Text>
+                        ) : null}
+                        {isUser ? (
+                          <Text style={{ color: colors.onPrimary, fontFamily: fonts.ui, fontSize: 14, lineHeight: 20 }}>
+                            {m.content}
+                          </Text>
+                        ) : m.content ? (
+                          <RichText text={m.content} />
+                        ) : (
+                          <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>Thinking…</Text>
+                        )}
+                      </View>
+                    );
+                  })}
                 </View>
               )}
               {coachActions.length > 0 && onOpenDeepLink ? (
@@ -989,10 +1117,19 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError, 
                 placeholder="Where can I cut spending?"
               />
               <PrimaryButton
-                label={coachBusy ? 'Thinking…' : 'Ask'}
+                label={coachBusy ? 'Thinking…' : 'Ask Coach'}
                 onPress={onAskCoach}
                 disabled={coachBusy}
               />
+              {coachMessages.length > 0 ? (
+                <SecondaryButton
+                  label="Clear chat view"
+                  onPress={() => {
+                    setCoachMessages([]);
+                    setCoachActions([]);
+                  }}
+                />
+              ) : null}
               <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 11, marginTop: 10 }}>
                 {disclaimer ||
                   'Lony insights are educational estimates, not credit scores, investment advice, or guaranteed outcomes.'}

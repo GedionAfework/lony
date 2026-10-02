@@ -168,7 +168,10 @@ func applyLaterMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	if err := applyMigration(ctx, pool, "00038", "migrations/00038_loan_require_approval.sql"); err != nil {
 		return err
 	}
-	return applyMigration(ctx, pool, "00039", "migrations/00039_calendar_hourcycle_fix.sql")
+	if err := applyMigration(ctx, pool, "00039", "migrations/00039_calendar_hourcycle_fix.sql"); err != nil {
+		return err
+	}
+	return applyMigration(ctx, pool, "00040", "migrations/00040_goal_source_url.sql")
 }
 
 func applyMigration(ctx context.Context, pool *pgxpool.Pool, version, path string) error {

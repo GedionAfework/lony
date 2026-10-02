@@ -3,6 +3,7 @@ package goals
 import (
 	"net/http"
 	"strings"
+	"time"
 
 	"equilend/api/internal/auth"
 	"equilend/api/internal/httpx"
@@ -35,6 +36,10 @@ type createBody struct {
 	LinkedLoanID    *uuid.UUID `json:"linked_loan_id"`
 	Note            *string    `json:"note"`
 	TypeLabel       *string    `json:"type_label"`
+
+	SourceURL          *string    `json:"source_url"`
+	LastSeenPrice      *string    `json:"last_seen_price"`
+	LastPriceCheckedAt *time.Time `json:"last_price_checked_at"`
 }
 
 type updateBody struct {
@@ -51,6 +56,10 @@ type updateBody struct {
 	Note            *string    `json:"note"`
 	TypeLabel       *string    `json:"type_label"`
 	Status          *string    `json:"status"`
+
+	SourceURL          *string    `json:"source_url"`
+	LastSeenPrice      *string    `json:"last_seen_price"`
+	LastPriceCheckedAt *time.Time `json:"last_price_checked_at"`
 }
 
 type contributeBody struct {

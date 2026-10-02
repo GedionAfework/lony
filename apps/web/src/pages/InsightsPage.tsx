@@ -22,6 +22,7 @@ import { Segmented } from '../components/Segmented';
 import { Button } from '../components/Button';
 import { Field } from '../components/Field';
 import { EmptyState } from '../components/EmptyState';
+import { RichText } from '../components/RichText';
 import { useToast } from '../components/Toast';
 
 type Tab = 'overview' | 'cashflow' | 'debts' | 'goals' | 'analysis' | 'reports' | 'coach';
@@ -65,20 +66,40 @@ function Mini({ label, value, hint, tone }: { label: string; value: string; hint
 function CashflowChart({ series, locale }: { series: InsightsMonthPoint[]; locale?: string }) {
   const data = series.map((s) => ({ month: s.month.slice(5), income: Number(s.income) || 0, expense: Number(s.expense) || 0, net: Number(s.net) || 0 }));
   return (
-    <ResponsiveContainer width="100%" height={220}>
-      <ComposedChart data={data}>
-        <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
-        <XAxis dataKey="month" tick={{ fontSize: 11, fill: 'var(--muted)' }} />
-        <YAxis tick={{ fontSize: 11, fill: 'var(--muted)' }} />
-        <Tooltip
-          contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', fontSize: 12 }}
-          formatter={(v) => formatMoney(String(Number(v) || 0), undefined, locale)}
-        />
-        <Bar dataKey="income" fill="var(--success)" radius={4} />
-        <Bar dataKey="expense" fill="var(--warning)" radius={4} />
-        <Line dataKey="net" stroke="var(--primary)" strokeWidth={2} dot={false} />
-      </ComposedChart>
-    </ResponsiveContainer>
+    <div
+      style={{
+        padding: 12,
+        borderRadius: 16,
+        background: 'var(--surface-muted)',
+        border: '1px solid var(--border)',
+      }}
+    >
+      <ResponsiveContainer width="100%" height={240}>
+        <ComposedChart data={data} barGap={4} barCategoryGap="28%">
+          <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
+          <XAxis dataKey="month" tick={{ fontSize: 11, fill: 'var(--muted)' }} axisLine={false} tickLine={false} />
+          <YAxis tick={{ fontSize: 11, fill: 'var(--muted)' }} axisLine={false} tickLine={false} width={48} />
+          <Tooltip
+            contentStyle={{
+              background: 'var(--surface)',
+              border: '1px solid var(--border)',
+              borderRadius: 12,
+              fontSize: 12,
+              boxShadow: 'var(--shadow-md)',
+            }}
+            formatter={(v) => formatMoney(String(Number(v) || 0), undefined, locale)}
+          />
+          <Bar dataKey="income" fill="var(--success)" radius={[8, 8, 0, 0]} maxBarSize={28} />
+          <Bar dataKey="expense" fill="var(--warning)" radius={[8, 8, 0, 0]} maxBarSize={28} />
+          <Line dataKey="net" stroke="var(--primary)" strokeWidth={2.5} dot={{ r: 3, fill: 'var(--primary)' }} />
+        </ComposedChart>
+      </ResponsiveContainer>
+      <div style={{ display: 'flex', gap: 16, marginTop: 8, fontSize: 11, color: 'var(--muted)' }}>
+        <span style={{ color: 'var(--success)' }}>● Income</span>
+        <span style={{ color: 'var(--warning)' }}>● Expense</span>
+        <span style={{ color: 'var(--primary)' }}>— Net</span>
+      </div>
+    </div>
   );
 }
 
@@ -86,7 +107,16 @@ function CategoryBars({ rows, locale }: { rows: InsightsCategoryPoint[]; locale?
   const max = Math.max(1, ...rows.map((r) => Number(r.amount) || 0));
   if (rows.length === 0) return <EmptyState title="No spending yet" body="Category bars appear after confirmed expenses." />;
   return (
-    <div className="flex-col">
+    <div
+      className="flex-col"
+      style={{
+        gap: 12,
+        padding: 12,
+        borderRadius: 16,
+        background: 'var(--surface-muted)',
+        border: '1px solid var(--border)',
+      }}
+    >
       {rows.slice(0, 8).map((row) => {
         const amt = Number(row.amount) || 0;
         const pct = Math.max(4, Math.round((amt / max) * 100));
@@ -98,8 +128,8 @@ function CategoryBars({ rows, locale }: { rows: InsightsCategoryPoint[]; locale?
                 {formatMoney(row.amount, row.currency_code, locale)} · {row.share_percent.toFixed(0)}%
               </span>
             </div>
-            <div className="bar-track">
-              <div className="bar-fill" style={{ width: `${pct}%`, background: 'var(--warning)' }} />
+            <div className="bar-track" style={{ height: 10, borderRadius: 8, background: 'var(--surface)' }}>
+              <div className="bar-fill" style={{ width: `${pct}%`, borderRadius: 8, background: 'var(--warning)' }} />
             </div>
           </div>
         );
@@ -439,16 +469,46 @@ export function InsightsPage() {
           {insights.length === 0 ? (
             <EmptyState title="No cards yet" body="Tap Refresh to run rule-based analysis on this month's numbers." />
           ) : (
-            insights.map((card) => (
-              <div key={card.id} style={{ paddingBottom: 12, borderBottom: '1px solid var(--border)' }}>
-                <div style={{ fontSize: 11, fontWeight: 700, textTransform: 'uppercase', color: card.severity === 'critical' || card.severity === 'warning' ? 'var(--warning)' : card.severity === 'positive' ? 'var(--success)' : 'var(--muted)' }}>
-                  {card.severity} · {card.theme}
-                  {card.source === 'llm_analyst' ? ' · AI' : ''}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {insights.map((card) => (
+                <div
+                  key={card.id}
+                  style={{
+                    padding: '14px 16px',
+                    borderRadius: 14,
+                    background: 'var(--surface-muted)',
+                    border: '1px solid var(--border)',
+                    borderLeft: `3px solid ${
+                      card.severity === 'critical' || card.severity === 'warning'
+                        ? 'var(--warning)'
+                        : card.severity === 'positive'
+                          ? 'var(--success)'
+                          : 'var(--primary)'
+                    }`,
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 700,
+                      textTransform: 'uppercase',
+                      letterSpacing: 0.4,
+                      color:
+                        card.severity === 'critical' || card.severity === 'warning'
+                          ? 'var(--warning)'
+                          : card.severity === 'positive'
+                            ? 'var(--success)'
+                            : 'var(--muted)',
+                    }}
+                  >
+                    {card.severity} · {card.theme}
+                    {card.source?.includes('llm') ? ' · AI' : ''}
+                  </div>
+                  <div style={{ fontWeight: 700, fontSize: 16, marginTop: 4 }}>{card.title}</div>
+                  <RichText text={card.body} muted />
                 </div>
-                <div style={{ fontWeight: 700, fontSize: 15 }}>{card.title}</div>
-                <div className="muted" style={{ fontSize: 13 }}>{card.body}</div>
-              </div>
-            ))
+              ))}
+            </div>
           )}
           <div className="muted" style={{ fontSize: 11, marginTop: 10 }}>
             {disclaimer || 'Lony insights are educational estimates, not credit scores, investment advice, or guaranteed outcomes.'}
@@ -520,27 +580,91 @@ export function InsightsPage() {
 
       {tab === 'coach' ? (
         <Card>
-          <div className="section-label">Coach</div>
-          <p className="muted" style={{ fontSize: 13 }}>Ask where to cut spending, how debt looks, or how to improve your score. Never suggests new borrowing.</p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+            <div
+              style={{
+                width: 40,
+                height: 40,
+                borderRadius: 14,
+                background: 'var(--primary-soft)',
+                color: 'var(--primary)',
+                display: 'grid',
+                placeItems: 'center',
+                fontWeight: 800,
+                fontSize: 18,
+              }}
+            >
+              ✦
+            </div>
+            <div>
+              <div className="section-label" style={{ margin: 0 }}>Coach</div>
+              <p className="muted" style={{ fontSize: 13, margin: 0 }}>
+                Cut spending, debt health, score tips — never new borrowing.
+              </p>
+            </div>
+          </div>
           {coachMessages.length === 0 ? (
-            <div className="muted" style={{ fontSize: 13, marginBottom: 8 }}>No messages yet — ask a question below.</div>
-          ) : (
-            <div className="flex-col" style={{ marginBottom: 12 }}>
-              {coachMessages.map((m) => (
-                <div
-                  key={m.id}
-                  style={{
-                    alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start',
-                    maxWidth: '85%',
-                    background: m.role === 'user' ? 'var(--primary-soft)' : 'var(--surface-muted)',
-                    borderRadius: 12,
-                    padding: '8px 12px',
-                  }}
+            <div
+              style={{
+                padding: 16,
+                borderRadius: 14,
+                background: 'var(--surface-muted)',
+                border: '1px solid var(--border)',
+                marginBottom: 12,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
+              }}
+            >
+              <div style={{ fontWeight: 700, fontSize: 14 }}>Try asking</div>
+              {[
+                'Where can I cut spending this month?',
+                'How does my debt look?',
+                'Am I on track for my goals?',
+              ].map((q) => (
+                <button
+                  key={q}
+                  type="button"
+                  className="pill pill-muted"
+                  style={{ cursor: 'pointer', border: '1px solid var(--border)', textAlign: 'left' }}
+                  onClick={() => setCoachMsg(q)}
                 >
-                  <div className="muted" style={{ fontSize: 10 }}>{m.role === 'user' ? 'You' : 'Coach'}</div>
-                  <div style={{ fontSize: 14 }}>{m.content}</div>
-                </div>
+                  {q}
+                </button>
               ))}
+            </div>
+          ) : (
+            <div className="flex-col" style={{ marginBottom: 12, gap: 10 }}>
+              {coachMessages.map((m) => {
+                const isUser = m.role === 'user';
+                return (
+                  <div
+                    key={m.id}
+                    style={{
+                      alignSelf: isUser ? 'flex-end' : 'flex-start',
+                      maxWidth: '85%',
+                      background: isUser ? 'var(--primary)' : 'var(--surface-muted)',
+                      color: isUser ? 'var(--on-primary)' : 'var(--text)',
+                      borderRadius: isUser ? '18px 18px 6px 18px' : '16px 16px 16px 6px',
+                      padding: '10px 14px',
+                      border: isUser ? 'none' : '1px solid var(--border)',
+                    }}
+                  >
+                    {!isUser ? (
+                      <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--primary)', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 }}>
+                        Coach
+                      </div>
+                    ) : null}
+                    {isUser ? (
+                      <div style={{ fontSize: 14, lineHeight: 1.45 }}>{m.content}</div>
+                    ) : m.content ? (
+                      <RichText text={m.content} />
+                    ) : (
+                      <div className="muted" style={{ fontSize: 13 }}>Thinking…</div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
           {coachActions.length > 0 ? (
@@ -566,7 +690,7 @@ export function InsightsPage() {
           ) : null}
           <Field label="Your question" value={coachMsg} onChange={setCoachMsg} placeholder="Where can I cut spending?" />
           <Button onClick={onAskCoach} disabled={coachBusy || !coachMsg.trim()} busy={coachBusy}>
-            {coachBusy ? 'Thinking…' : 'Ask'}
+            {coachBusy ? 'Thinking…' : 'Ask Coach'}
           </Button>
           <div className="muted" style={{ fontSize: 11, marginTop: 10 }}>
             {disclaimer || 'Lony insights are educational estimates, not credit scores, investment advice, or guaranteed outcomes.'}
