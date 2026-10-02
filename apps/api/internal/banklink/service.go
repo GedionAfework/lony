@@ -49,6 +49,7 @@ type Store interface {
 
 type AccountCreator interface {
 	Create(ctx context.Context, userID uuid.UUID, in AccountCreateInput) (AccountRef, error)
+	FindByInstitution(ctx context.Context, userID uuid.UUID, institution, currency string) (*AccountRef, error)
 }
 
 type CashflowCreator interface {

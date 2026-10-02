@@ -112,6 +112,7 @@
     "accounts.profitYearly": "Profit % per year",
     "accounts.acceptConfirm": "Accept account",
     "accounts.acceptedForLoans": "Ready for loan repayments",
+    "accounts.forLoans": "For loans",
     "accounts.fullNameRequired": "Enter the account holder full name",
     "accounts.accountNumberRequired": "Enter the account number",
     "accounts.acceptFailed": "Could not accept account",

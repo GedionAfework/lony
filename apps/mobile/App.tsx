@@ -243,6 +243,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     loanIds: string[];
   } | null>(null);
   const [bankProfiles, setBankProfiles] = useState<BankProfile[]>([]);
+  const [moneyAccounts, setMoneyAccounts] = useState<import('./src/api').MoneyAccount[]>([]);
   const [outgoingShares, setOutgoingShares] = useState<BankProfileShare[]>([]);
   const [incomingShares, setIncomingShares] = useState<BankProfileShare[]>([]);
   const [paymentProfile, setPaymentProfile] = useState<BankProfile | null>(null);
@@ -751,6 +752,8 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     setDashboard(null);
     setLoanFilter('');
     setSelectedLoan(null);
+    setBankProfiles([]);
+    setMoneyAccounts([]);
     setRepayments([]);
     setNotifications([]);
     setUnreadCount(0);
@@ -826,24 +829,27 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     if (!access) {
       return;
     }
-    const [friendRes, incomingRes, loanRes, dashRes, bankRes, shareRes, inShareRes, notifyRes] = await Promise.all([
-      api.listFriends(access),
-      api.listIncoming(access),
-      api.listLoans(access, {
-        ...(loanFilter ? { filter: loanFilter } : {}),
-      }),
-      api.dashboard(access),
-      api.listBankProfiles(access),
-      api.listBankShares(access, false),
-      api.listBankShares(access, true),
-      api.listNotifications(access),
-    ]);
+    const [friendRes, incomingRes, loanRes, dashRes, bankRes, shareRes, inShareRes, notifyRes, accountsRes] =
+      await Promise.all([
+        api.listFriends(access),
+        api.listIncoming(access),
+        api.listLoans(access, {
+          ...(loanFilter ? { filter: loanFilter } : {}),
+        }),
+        api.dashboard(access),
+        api.listBankProfiles(access),
+        api.listBankShares(access, false),
+        api.listBankShares(access, true),
+        api.listNotifications(access),
+        api.listAccounts(access).catch(() => ({ accounts: [] })),
+      ]);
     setFriends(friendRes.friends ?? []);
     setIncoming(incomingRes.requests ?? []);
     setLoans(loanRes.loans ?? []);
     setDashboard(dashRes.dashboard);
     syncDashCurrency(dashRes.dashboard, user?.default_currency_code);
     setBankProfiles(bankRes.bank_profiles ?? []);
+    setMoneyAccounts(accountsRes.accounts ?? []);
     setOutgoingShares(shareRes.shares ?? []);
     setIncomingShares(inShareRes.shares ?? []);
     setNotifications(notifyRes.notifications ?? []);
@@ -2594,57 +2600,68 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               selectedLoan.borrower.id !== selectedLoan.lender.id &&
               (selectedLoan.status === 'active' || selectedLoan.status === 'overdue') ? (
                 <Card>
-                  <SectionLabel>Payment profile</SectionLabel>
-                  {bankProfiles.length === 0 ? (
-                    <Pressable
-                      onPress={() => setScreen('banks')}
-                      style={{
-                        flexDirection: 'row',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: 10,
-                        minHeight: 52,
-                        borderRadius: radii.md,
-                        backgroundColor: colors.primarySoft,
-                        borderWidth: 1,
-                        borderColor: colors.primary,
-                      }}
-                    >
-                      <IconBank size={18} color={colors.primary} />
-                      <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 15 }}>
-                        Add a payment profile
-                      </Text>
-                    </Pressable>
-                  ) : (
-                    bankProfiles.map((profile) => (
-                      <Pressable
-                        key={profile.id}
-                        onPress={() => onShareBank(profile.id, selectedLoan.borrower.id, selectedLoan.id)}
-                        disabled={busy}
-                        style={{
-                          flexDirection: 'row',
-                          alignItems: 'center',
-                          gap: 12,
-                          minHeight: 56,
-                          paddingHorizontal: 16,
-                          borderRadius: radii.md,
-                          backgroundColor: colors.primary,
-                          opacity: busy ? 0.5 : 1,
-                          marginBottom: 8,
-                        }}
-                      >
-                        <IconBank size={20} color={colors.onPrimary} />
-                        <View style={{ flex: 1 }}>
-                          <Text style={{ color: colors.onPrimary, fontFamily: fonts.uiSemi, fontSize: 15 }}>
-                            Share {profile.label}
+                  <SectionLabel>Send account for repayment</SectionLabel>
+                  {(() => {
+                    const acceptedIds = new Set(
+                      moneyAccounts.map((a) => a.bank_profile_id).filter(Boolean) as string[],
+                    );
+                    const shareable = bankProfiles.filter((p) => acceptedIds.has(p.id));
+                    if (shareable.length === 0) {
+                      return (
+                        <Pressable
+                          onPress={() => setScreen('accounts')}
+                          style={{
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: 10,
+                            minHeight: 52,
+                            borderRadius: radii.md,
+                            backgroundColor: colors.primarySoft,
+                            borderWidth: 1,
+                            borderColor: colors.primary,
+                          }}
+                        >
+                          <IconBank size={18} color={colors.primary} />
+                          <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 15 }}>
+                            Accept an account first
                           </Text>
-                          <Text style={{ color: colors.onPrimary, opacity: 0.8, fontFamily: fonts.ui, fontSize: 12 }}>
-                            â€¢â€¢â€¢â€¢ {profile.account_last4} â†’ {selectedLoan.borrower.display_name}
-                          </Text>
-                        </View>
-                      </Pressable>
-                    ))
-                  )}
+                        </Pressable>
+                      );
+                    }
+                    return shareable.map((profile) => {
+                      const linked = moneyAccounts.find((a) => a.bank_profile_id === profile.id);
+                      return (
+                        <Pressable
+                          key={profile.id}
+                          onPress={() => onShareBank(profile.id, selectedLoan.borrower.id, selectedLoan.id)}
+                          disabled={busy}
+                          style={{
+                            flexDirection: 'row',
+                            alignItems: 'center',
+                            gap: 12,
+                            minHeight: 56,
+                            paddingHorizontal: 16,
+                            borderRadius: radii.md,
+                            backgroundColor: colors.primary,
+                            opacity: busy ? 0.5 : 1,
+                            marginBottom: 8,
+                          }}
+                        >
+                          <IconBank size={20} color={colors.onPrimary} />
+                          <View style={{ flex: 1 }}>
+                            <Text style={{ color: colors.onPrimary, fontFamily: fonts.uiSemi, fontSize: 15 }}>
+                              Share {linked?.name || profile.label}
+                            </Text>
+                            <Text style={{ color: colors.onPrimary, opacity: 0.8, fontFamily: fonts.ui, fontSize: 12 }}>
+                              {(linked?.account_type || profile.profile_type).replace(/_/g, ' ')} · ••••{' '}
+                              {profile.account_last4} → {selectedLoan.borrower.display_name}
+                            </Text>
+                          </View>
+                        </Pressable>
+                      );
+                    });
+                  })()}
                 </Card>
               ) : null}
 

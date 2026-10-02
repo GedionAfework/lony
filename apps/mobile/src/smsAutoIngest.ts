@@ -134,10 +134,14 @@ function accountKey(last4: string, currency: string): string {
 
 function accountAlreadyExists(accounts: MoneyAccount[], last4: string, currency: string): MoneyAccount | undefined {
   const c = currency.toUpperCase();
+  const want = last4.slice(-4);
   return accounts.find((a) => {
     if (a.currency_code.toUpperCase() !== c) return false;
+    if (a.account_type === 'cash') return false;
+    const digits = `${a.name} ${a.institution_label || ''}`.replace(/\D/g, '');
+    if (digits.length >= 4 && digits.slice(-4) === want) return true;
     const hay = `${a.name} ${a.institution_label || ''}`.toLowerCase();
-    return hay.includes(last4);
+    return hay.includes(want);
   });
 }
 

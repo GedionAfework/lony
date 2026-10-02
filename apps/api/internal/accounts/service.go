@@ -47,6 +47,9 @@ func (s *Service) SetPrefs(p PrefsReader) {
 }
 
 func (s *Service) List(ctx context.Context, userID uuid.UUID, includeArchived bool) ([]AccountDTO, error) {
+	if !includeArchived {
+		_, _ = s.MergeDuplicates(ctx, userID)
+	}
 	rows, err := s.store.List(ctx, userID, includeArchived)
 	if err != nil {
 		return nil, err
@@ -110,6 +113,11 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, in CreateInput) 
 		BankProfileID:       in.BankProfileID,
 		CreatedAt:           now,
 		UpdatedAt:           now,
+	}
+	if existing, err := s.findExistingDuplicate(ctx, userID, rec); err != nil {
+		return AccountDTO{}, err
+	} else if existing != nil {
+		return toDTO(*existing), nil
 	}
 	event := BalanceEvent{
 		UserID:    userID,
@@ -351,6 +359,47 @@ func (s *Service) PickAccount(ctx context.Context, userID uuid.UUID, currency st
 	return nil, nil
 }
 
+// FindByInstitution returns an open bank/wallet account matching institution + currency.
+func (s *Service) FindByInstitution(ctx context.Context, userID uuid.UUID, institution, currency string) (*AccountDTO, error) {
+	institution = strings.TrimSpace(institution)
+	currency = strings.ToUpper(strings.TrimSpace(currency))
+	if institution == "" {
+		return nil, nil
+	}
+	rows, err := s.store.List(ctx, userID, false)
+	if err != nil {
+		return nil, err
+	}
+	want := strings.ToLower(institution)
+	for _, a := range rows {
+		if a.AccountType == TypeCash {
+			continue
+		}
+		if currency != "" && !strings.EqualFold(a.CurrencyCode, currency) {
+			continue
+		}
+		hay := strings.ToLower(a.Name)
+		if a.InstitutionLabel != nil {
+			hay += " " + strings.ToLower(*a.InstitutionLabel)
+		}
+		if strings.Contains(hay, want) || strings.Contains(want, strings.ToLower(a.Name)) {
+			dto := toDTO(a)
+			return &dto, nil
+		}
+		draft := Account{
+			Name:             institution,
+			AccountType:      a.AccountType,
+			CurrencyCode:     a.CurrencyCode,
+			InstitutionLabel: &institution,
+		}
+		if accountFingerprint(a) == accountFingerprint(draft) {
+			dto := toDTO(a)
+			return &dto, nil
+		}
+	}
+	return nil, nil
+}
+
 // FindAccountByLast4 returns an account that mentions the last4 digits in name or institution label.
 func (s *Service) FindAccountByLast4(ctx context.Context, userID uuid.UUID, currency, last4 string) (*uuid.UUID, error) {
 	last4 = strings.TrimSpace(last4)
@@ -366,6 +415,14 @@ func (s *Service) FindAccountByLast4(ctx context.Context, userID uuid.UUID, curr
 	for _, a := range rows {
 		if currency != "" && !strings.EqualFold(a.CurrencyCode, currency) {
 			continue
+		}
+		got := extractLast4(a.Name)
+		if got == "" && a.InstitutionLabel != nil {
+			got = extractLast4(*a.InstitutionLabel)
+		}
+		if got == last4 {
+			id := a.ID
+			return &id, nil
 		}
 		hay := strings.ToLower(a.Name)
 		if a.InstitutionLabel != nil {

@@ -141,6 +141,14 @@ func (s *SQLStore) ArchiveMoneyAccount(ctx context.Context, userID, id uuid.UUID
 	return nil
 }
 
+func (s *SQLStore) ReassignCashflowAccounts(ctx context.Context, fromAccountID, toAccountID uuid.UUID) error {
+	_, err := s.pool.Exec(ctx, `
+		UPDATE cashflow_entries SET account_id = $2
+		WHERE account_id = $1
+	`, fromAccountID, toAccountID)
+	return err
+}
+
 func (s *SQLStore) MoneyAccountLedgerSince(ctx context.Context, userID, accountID uuid.UUID, currency string) (accounts.LedgerSlice, error) {
 	var out accounts.LedgerSlice
 	var baselineStr string
@@ -340,6 +348,9 @@ func (a moneyAccountStoreAdapter) Transfer(ctx context.Context, userID, fromID, 
 }
 func (a moneyAccountStoreAdapter) LedgerSince(ctx context.Context, userID, accountID uuid.UUID, currency string) (accounts.LedgerSlice, error) {
 	return a.Inner.MoneyAccountLedgerSince(ctx, userID, accountID, currency)
+}
+func (a moneyAccountStoreAdapter) ReassignCashflows(ctx context.Context, fromAccountID, toAccountID uuid.UUID) error {
+	return a.Inner.ReassignCashflowAccounts(ctx, fromAccountID, toAccountID)
 }
 
 // MoneyAccountsAdapter exposes SQLStore as accounts.Store.

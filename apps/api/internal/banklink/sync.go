@@ -68,18 +68,25 @@ func (s *Service) Sync(ctx context.Context, userID, connectionID uuid.UUID) (Syn
 		if label == "" {
 			label = "Linked bank"
 		}
-		acct, cerr := s.accounts.Create(ctx, userID, AccountCreateInput{
-			Name:             label,
-			AccountType:      "bank",
-			CurrencyCode:     currency,
-			Balance:          "0",
-			InstitutionLabel: &label,
-		})
-		if cerr != nil {
-			return SyncResult{}, cerr
+		// Prefer an existing same-institution bank account over creating a duplicate.
+		existing, _ := s.accounts.FindByInstitution(ctx, userID, label, currency)
+		if existing != nil {
+			accountID = &existing.ID
+			currency = existing.CurrencyCode
+		} else {
+			acct, cerr := s.accounts.Create(ctx, userID, AccountCreateInput{
+				Name:             label,
+				AccountType:      "bank",
+				CurrencyCode:     currency,
+				Balance:          "0",
+				InstitutionLabel: &label,
+			})
+			if cerr != nil {
+				return SyncResult{}, cerr
+			}
+			accountID = &acct.ID
+			currency = acct.CurrencyCode
 		}
-		accountID = &acct.ID
-		currency = acct.CurrencyCode
 	}
 
 	cursor, _ := s.store.GetSyncCursor(ctx, userID, connectionID)

@@ -1309,7 +1309,15 @@ export function CashflowShowScreen({
                 textTransform: 'uppercase',
               }}
             >
-              {expected ? (income ? 'Expected' : 'Due') : income ? 'Income' : 'Expense'}
+              {(() => {
+                const cat = (current.category || '').toLowerCase();
+                const note = (current.note || '').toLowerCase();
+                if (expected) return income ? 'Expected' : 'Due';
+                if (cat.includes('transfer') || note.includes('transfer')) return 'Transfer';
+                if (cat.includes('import') || note.startsWith('plaid:') || note.startsWith('sms:')) return 'Imported';
+                if (current.linked_loan_id) return income ? 'Loan repayment' : 'Loan payment';
+                return income ? 'Received' : 'Spent';
+              })()}
             </Text>
             <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 28 }}>
               {income ? '+' : '−'}

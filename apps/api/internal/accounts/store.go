@@ -169,6 +169,7 @@ type Store interface {
 	AdjustBalance(ctx context.Context, userID, accountID uuid.UUID, delta decimal.Decimal, note string, at time.Time) (Account, error)
 	Transfer(ctx context.Context, userID, fromID, toID uuid.UUID, amount decimal.Decimal, currency, note string, occurredAt, now time.Time) (uuid.UUID, error)
 	LedgerSince(ctx context.Context, userID, accountID uuid.UUID, currency string) (LedgerSlice, error)
+	ReassignCashflows(ctx context.Context, fromAccountID, toAccountID uuid.UUID) error
 }
 
 func toDTO(rec Account) AccountDTO {

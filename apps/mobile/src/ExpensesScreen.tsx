@@ -28,6 +28,18 @@ import { listCashflowDrafts, removeCashflowDraft, type CashflowDraft } from './o
 import { fonts, radii, space, useTheme } from './theme';
 import { Card, EmptyState, Field, Money, PrimaryButton, SecondaryButton, SectionLabel } from './ui';
 
+function cashflowActionLabel(entry: CashflowEntry): string {
+  const cat = (entry.category || '').toLowerCase();
+  const note = (entry.note || '').toLowerCase();
+  const expected = entry.status === 'expected' || entry.is_template;
+  if (expected) return entry.kind === 'income' ? 'Expected' : 'Due';
+  if (cat.includes('transfer') || note.includes('transfer')) return 'Transfer';
+  if (cat.includes('import') || note.startsWith('plaid:') || note.startsWith('sms:')) return 'Imported';
+  if (entry.linked_loan_id) return entry.kind === 'income' ? 'Loan repayment' : 'Loan payment';
+  if (entry.kind === 'income') return 'Received';
+  return 'Spent';
+}
+
 export type ExpensesTab = 'dashboard' | 'income' | 'expenses';
 
 type Props = {
@@ -632,7 +644,7 @@ export function ExpensesScreen({
                     <View style={{ flex: 1, gap: 2 }}>
                       <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }}>{e.title}</Text>
                       <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
-                        {e.kind === 'income' ? 'Income' : 'Expense'}
+                        {cashflowActionLabel(e)}
                         {e.category ? ` · ${e.category}` : ''}
                       </Text>
                     </View>
@@ -979,8 +991,8 @@ function EntryRow({
           {recurring || entry.is_template ? <IconRepeat size={12} color={colors.muted} /> : null}
         </View>
         <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }} numberOfLines={1}>
-          {entry.category}
-          {expected ? (income ? '  Expected' : '  Due') : ''}
+          {cashflowActionLabel(entry)}
+          {entry.category ? ` · ${entry.category}` : ''}
           {` · ${dateLabel}`}
         </Text>
       </View>

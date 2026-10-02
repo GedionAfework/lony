@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Platform, Pressable, Text, TextInput, View } from 'react-native';
+import { Alert, Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
@@ -572,8 +572,7 @@ export function AccountsScreen({
   }
 
   const formOpen = creating || Boolean(editId);
-  const panelOpen =
-    formOpen || transferOpen || reconcileOpen || Boolean(importId) || Boolean(balanceId) || Boolean(acceptId);
+  const panelOpen = formOpen || transferOpen || reconcileOpen || Boolean(importId) || Boolean(balanceId);
   useEffect(() => {
     onPanelChange?.(Boolean(panelOpen));
   }, [panelOpen, onPanelChange]);
@@ -590,7 +589,6 @@ export function AccountsScreen({
   }
 
   function panelTitle() {
-    if (acceptId) return t(user.locale, 'accounts.acceptTitle') || 'Accept for loan repayments';
     if (importId) return 'Import statement';
     if (reconcileOpen) return 'Reconcile';
     if (transferOpen) return 'Transfer';
@@ -933,50 +931,6 @@ export function AccountsScreen({
           </Card>
         ) : null}
 
-        {acceptId ? (
-          <Card>
-            <SectionLabel>{t(user.locale, 'accounts.acceptTitle') || 'Accept for loan repayments'}</SectionLabel>
-            <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
-              {t(user.locale, 'accounts.acceptHint') ||
-                'Scan a statement or fill in the holder name, account number, and yearly profit %. You can then share this account when someone owes you.'}
-            </Text>
-            <SecondaryButton
-              label={acceptBusy ? t(user.locale, 'common.loading') || 'Working…' : t(user.locale, 'accounts.scanStatement') || 'Scan statement'}
-              onPress={() => void onScanAcceptStatement()}
-              disabled={acceptBusy}
-            />
-            <Field
-              label={t(user.locale, 'accounts.fullName') || 'Full name'}
-              value={acceptFullName}
-              onChange={setAcceptFullName}
-              placeholder="Account holder name"
-            />
-            <Field
-              label={t(user.locale, 'accounts.accountNumber') || 'Account number'}
-              value={acceptAccountNumber}
-              onChange={setAcceptAccountNumber}
-              placeholder="Full number if known"
-            />
-            <Field
-              label={t(user.locale, 'accounts.profitYearly') || 'Profit % per year'}
-              value={acceptProfit}
-              onChange={setAcceptProfit}
-              keyboardType="decimal-pad"
-              placeholder="e.g. 7.5"
-            />
-            <PrimaryButton
-              label={acceptBusy ? t(user.locale, 'common.loading') || 'Saving…' : t(user.locale, 'accounts.acceptConfirm') || 'Accept account'}
-              onPress={() => void onConfirmAccept()}
-              disabled={acceptBusy}
-            />
-            <SecondaryButton
-              label={t(user.locale, 'common.cancel') || 'Cancel'}
-              onPress={() => setAcceptId(null)}
-              disabled={acceptBusy}
-            />
-          </Card>
-        ) : null}
-
       {!panelOpen ? (
       <Card>
         <SectionLabel>Your accounts</SectionLabel>
@@ -986,7 +940,10 @@ export function AccountsScreen({
             body="Add cash, bank, mobile money, or wallet balances for net worth."
           />
         ) : (
-          accounts.map((a) => (
+          accounts.map((a) => {
+            const typeLabel = accountTypes.find((t) => t.id === a.account_type)?.label || a.account_type;
+            const last4 = `${a.name} ${a.institution_label || ''}`.match(/(\d{4})\b/)?.[1];
+            return (
             <View
               key={a.id}
               style={{
@@ -997,12 +954,63 @@ export function AccountsScreen({
               }}
             >
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 8 }}>
-                <View style={{ flex: 1, gap: 2 }}>
+                <View style={{ flex: 1, gap: 6 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <View
+                      style={{
+                        paddingHorizontal: 8,
+                        paddingVertical: 3,
+                        borderRadius: radii.sm,
+                        backgroundColor:
+                          a.account_type === 'cash'
+                            ? colors.surfaceMuted
+                            : a.account_type === 'mobile_money'
+                              ? colors.warningSoft
+                              : colors.primarySoft,
+                        borderWidth: 1,
+                        borderColor:
+                          a.account_type === 'cash'
+                            ? colors.border
+                            : a.account_type === 'mobile_money'
+                              ? colors.warning
+                              : colors.primary,
+                      }}
+                    >
+                      <Text
+                        style={{
+                          color:
+                            a.account_type === 'cash'
+                              ? colors.muted
+                              : a.account_type === 'mobile_money'
+                                ? colors.warning
+                                : colors.primary,
+                          fontFamily: fonts.uiSemi,
+                          fontSize: 11,
+                        }}
+                      >
+                        {typeLabel}
+                      </Text>
+                    </View>
+                    {a.bank_profile_id ? (
+                      <View
+                        style={{
+                          paddingHorizontal: 8,
+                          paddingVertical: 3,
+                          borderRadius: radii.sm,
+                          backgroundColor: colors.successSoft,
+                        }}
+                      >
+                        <Text style={{ color: colors.success, fontFamily: fonts.uiSemi, fontSize: 11 }}>
+                          {t(user.locale, 'accounts.forLoans') || 'For loans'}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </View>
                   <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>{a.name}</Text>
                   <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
-                    {accountTypes.find((t) => t.id === a.account_type)?.label || a.account_type}
-                    {a.institution_label ? ` · ${a.institution_label}` : ''}
-                    {` · ${a.currency_code}`}
+                    {a.institution_label && a.institution_label !== a.name ? `${a.institution_label} · ` : ''}
+                    {a.currency_code}
+                    {last4 ? ` · ••••${last4}` : ''}
                   </Text>
                 </View>
                 <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>
@@ -1034,10 +1042,6 @@ export function AccountsScreen({
                       {t(user.locale, 'accounts.accept') || 'Accept'}
                     </Text>
                   </Pressable>
-                ) : a.bank_profile_id ? (
-                  <Text style={{ color: colors.success, fontFamily: fonts.ui, fontSize: 12, alignSelf: 'center' }}>
-                    {t(user.locale, 'accounts.acceptedForLoans') || 'Ready for loan repayments'}
-                  </Text>
                 ) : null}
                 <IconAction
                   accessibilityLabel="Update balance"
@@ -1074,10 +1078,87 @@ export function AccountsScreen({
                 </IconAction>
               </View>
             </View>
-          ))
+            );
+          })
         )}
       </Card>
       ) : null}
+
+      <Modal visible={Boolean(acceptId)} transparent animationType="slide" onRequestClose={() => setAcceptId(null)}>
+        <Pressable
+          onPress={() => !acceptBusy && setAcceptId(null)}
+          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' }}
+        >
+          <Pressable
+            onPress={(e) => e.stopPropagation()}
+            style={{
+              backgroundColor: colors.surface,
+              borderTopLeftRadius: radii.xl,
+              borderTopRightRadius: radii.xl,
+              padding: space.lg,
+              maxHeight: '88%',
+              gap: space.md,
+              borderWidth: 1,
+              borderColor: colors.border,
+            }}
+          >
+            <View style={{ alignItems: 'center', marginBottom: 4 }}>
+              <View style={{ width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border }} />
+            </View>
+            <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 20 }}>
+              {t(user.locale, 'accounts.acceptTitle') || 'Accept for loan repayments'}
+            </Text>
+            <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
+              {t(user.locale, 'accounts.acceptHint') ||
+                'Scan a statement or fill in the holder name, account number, and yearly profit %. You can then share this account when someone owes you.'}
+            </Text>
+            <ScrollView contentContainerStyle={{ gap: space.md }} keyboardShouldPersistTaps="handled">
+              <SecondaryButton
+                label={
+                  acceptBusy
+                    ? t(user.locale, 'common.loading') || 'Working…'
+                    : t(user.locale, 'accounts.scanStatement') || 'Scan statement'
+                }
+                onPress={() => void onScanAcceptStatement()}
+                disabled={acceptBusy}
+              />
+              <Field
+                label={t(user.locale, 'accounts.fullName') || 'Full name'}
+                value={acceptFullName}
+                onChange={setAcceptFullName}
+                placeholder="Account holder name"
+              />
+              <Field
+                label={t(user.locale, 'accounts.accountNumber') || 'Account number'}
+                value={acceptAccountNumber}
+                onChange={setAcceptAccountNumber}
+                placeholder="Full number if known"
+              />
+              <Field
+                label={t(user.locale, 'accounts.profitYearly') || 'Profit % per year'}
+                value={acceptProfit}
+                onChange={setAcceptProfit}
+                keyboardType="decimal-pad"
+                placeholder="e.g. 7.5"
+              />
+            </ScrollView>
+            <PrimaryButton
+              label={
+                acceptBusy
+                  ? t(user.locale, 'common.loading') || 'Saving…'
+                  : t(user.locale, 'accounts.acceptConfirm') || 'Accept account'
+              }
+              onPress={() => void onConfirmAccept()}
+              disabled={acceptBusy}
+            />
+            <SecondaryButton
+              label={t(user.locale, 'common.cancel') || 'Cancel'}
+              onPress={() => setAcceptId(null)}
+              disabled={acceptBusy}
+            />
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }

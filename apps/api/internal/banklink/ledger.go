@@ -27,6 +27,14 @@ func (b AccountsBridge) Create(ctx context.Context, userID uuid.UUID, in Account
 	return AccountRef{ID: dto.ID, CurrencyCode: dto.CurrencyCode}, nil
 }
 
+func (b AccountsBridge) FindByInstitution(ctx context.Context, userID uuid.UUID, institution, currency string) (*AccountRef, error) {
+	dto, err := b.Svc.FindByInstitution(ctx, userID, institution, currency)
+	if err != nil || dto == nil {
+		return nil, err
+	}
+	return &AccountRef{ID: dto.ID, CurrencyCode: dto.CurrencyCode}, nil
+}
+
 type CashflowBridge struct {
 	Svc   *expenses.Service
 	Notes NoteChecker
