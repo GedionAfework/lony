@@ -12,12 +12,12 @@ type Props = {
   onSelect: (item: DrawerItem) => void;
 };
 
-const ITEM_KEYS: { id: DrawerItem; key: 'expenses' | 'accounts' | 'loans' | 'insights' | 'plan' | 'settings' }[] = [
+const ITEM_KEYS: { id: DrawerItem; key: string }[] = [
   { id: 'expenses', key: 'expenses' },
   { id: 'accounts', key: 'accounts' },
   { id: 'loans', key: 'loans' },
   { id: 'analytics', key: 'insights' },
-  { id: 'plan', key: 'plan' },
+  { id: 'plan', key: 'plan.title' },
   { id: 'settings', key: 'settings' },
 ];
 
@@ -92,7 +92,13 @@ export function DrawerMenu({ open, active, locale, onClose, onSelect }: Props) {
                     fontSize: 16,
                   }}
                 >
-                  {t(locale, item.key)}
+                  {item.id === 'plan'
+                    ? t(locale, 'plan.title') !== 'plan.title'
+                      ? t(locale, 'plan.title')
+                      : t(locale, 'plan') !== 'plan'
+                        ? t(locale, 'plan')
+                        : 'Financial Plan'
+                    : t(locale, item.key)}
                 </Text>
               </Pressable>
             );

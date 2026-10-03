@@ -11,8 +11,16 @@ import {
   getBiometricsAvailability,
   getBiometricsLockEnabled,
 } from './biometricsLock';
+import {
+  clearAppLock,
+  getAppLockMethod,
+  setAppLockMethod,
+  setBiometricsAsLockMethod,
+  type AppLockMethod,
+} from './appLock';
 import { applyNativeDirection, parseLocaleMessages, setActivePack, t } from './i18n';
 import { IconCamera } from './icons';
+import { PatternPad } from './PatternPad';
 import { PhoneField } from './PhoneField';
 import { SearchSelect } from './SearchSelect';
 import { ThemesScreen } from './ThemesScreen';
@@ -34,6 +42,7 @@ type SettingsPage =
   | 'notifications'
   | 'privacy'
   | 'security'
+  | 'extraFactor'
   | 'themes'
   | 'legal'
   | 'admin';
@@ -82,8 +91,8 @@ type Props = {
   /** When SMS auto-import is turned on: permission + full inbox scan + account prompts. */
   onActivateSmsImport?: () => Promise<void> | void;
   onAuthPref: (v: 'email' | 'google' | 'telegram') => void;
-  onSave: () => void;
-  onSaveRegion?: () => void;
+  onSave: () => void | Promise<void>;
+  onSaveRegion?: () => void | Promise<void>;
   onAvatar: () => void;
   onTos: () => void;
   onBanks: () => void;
@@ -143,6 +152,11 @@ export function SettingsScreen(props: Props) {
   const [biometricsLabel, setBiometricsLabel] = useState('Biometrics');
   const [biometricsSupported, setBiometricsSupported] = useState(false);
   const [biometricsBusy, setBiometricsBusy] = useState(false);
+  const [lockMethod, setLockMethod] = useState<AppLockMethod>('none');
+  const [mfaEnabled, setMfaEnabled] = useState(false);
+  const [mfaKind, setMfaKind] = useState<'pin' | 'pattern' | 'password'>('pin');
+  const [mfaDraft, setMfaDraft] = useState('');
+  const [mfaBusy, setMfaBusy] = useState(false);
   const [locales, setLocales] = useState<AppLocale[]>([]);
   const [calendars, setCalendars] = useState<AppCalendar[]>([]);
 
@@ -160,16 +174,24 @@ export function SettingsScreen(props: Props) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const [enabled, avail] = await Promise.all([getBiometricsLockEnabled(), getBiometricsAvailability()]);
+      const [enabled, avail, method] = await Promise.all([
+        getBiometricsLockEnabled(),
+        getBiometricsAvailability(),
+        getAppLockMethod(),
+      ]);
       if (cancelled) return;
-      setBiometricsLock(enabled);
+      setBiometricsLock(enabled || method === 'biometrics');
       setBiometricsLabel(avail.label);
       setBiometricsSupported(avail.available && avail.enrolled);
+      setLockMethod(method === 'none' && enabled ? 'biometrics' : method);
+      const secretOn = method === 'pin' || method === 'pattern' || method === 'password';
+      setMfaEnabled(secretOn);
+      if (secretOn) setMfaKind(method);
     })();
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [page]);
 
   useEffect(() => {
     let cancelled = false;
@@ -187,6 +209,18 @@ export function SettingsScreen(props: Props) {
               messages: parseLocaleMessages(loc.messages),
             });
           }
+          // Keep the user's locale active (loop above would leave the last pack active).
+          const current = (locRes.locales ?? []).find((l) => l.code === props.locale);
+          if (current) {
+            setActivePack({
+              locale: current.code,
+              name: current.name,
+              dir: current.dir,
+              messages: parseLocaleMessages(current.messages),
+            });
+          } else {
+            setActivePack({ locale: props.locale || 'en' });
+          }
         }
         setCalendars(calRes.calendars ?? []);
       } catch {
@@ -196,7 +230,7 @@ export function SettingsScreen(props: Props) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [props.locale]);
 
   function goHub() {
     setPage('hub');
@@ -210,18 +244,22 @@ export function SettingsScreen(props: Props) {
 
   function confirmDelete() {
     Alert.alert(
-      'Delete account?',
-      'This permanently disables your login and redacts your profile. Loan history for counterparties is kept.',
+      t(props.locale, 'settings.deleteConfirmTitle'),
+      t(props.locale, 'settings.deleteConfirmBody'),
       [
-        { text: 'Cancel', style: 'cancel' },
+        { text: t(props.locale, 'common.cancel'), style: 'cancel' },
         {
-          text: 'Continue',
+          text: t(props.locale, 'common.continue'),
           style: 'destructive',
           onPress: () => {
-            Alert.alert('Confirm deletion', 'Your account will be deleted immediately.', [
-              { text: 'Cancel', style: 'cancel' },
-              { text: 'Delete forever', style: 'destructive', onPress: props.onDeleteAccount },
-            ]);
+            Alert.alert(
+              t(props.locale, 'settings.deleteConfirmTitle2'),
+              t(props.locale, 'settings.deleteConfirmBody2'),
+              [
+                { text: t(props.locale, 'common.cancel'), style: 'cancel' },
+                { text: t(props.locale, 'settings.deleteForever'), style: 'destructive', onPress: props.onDeleteAccount },
+              ],
+            );
           },
         },
       ],
@@ -259,23 +297,28 @@ export function SettingsScreen(props: Props) {
     }));
     return (
       <View style={{ gap: space.md }}>
-        <Back title="Preferences" />
+        <Back title={t(props.locale, 'settings.region')} />
         <Card>
           <SearchSelect
             label={t(props.locale, 'settings.language')}
             value={props.locale}
             onChange={(code) => {
               props.onLocale(code);
+              // Always flip the active pack immediately — bundled en/fr/am-ET packs
+              // already cover every key, so the UI switches even if the API's
+              // locale list hasn't loaded yet or is missing this code.
               const pack = locales.find((l) => l.code === code);
-              if (pack) {
-                setActivePack({
-                  locale: pack.code,
-                  name: pack.name,
-                  dir: pack.dir,
-                  messages: parseLocaleMessages(pack.messages),
-                });
-                applyNativeDirection(pack.code);
-              }
+              setActivePack(
+                pack
+                  ? {
+                      locale: pack.code,
+                      name: pack.name,
+                      dir: pack.dir,
+                      messages: parseLocaleMessages(pack.messages),
+                    }
+                  : { locale: code },
+              );
+              applyNativeDirection(code);
             }}
             options={localeOpts}
           />
@@ -360,57 +403,6 @@ export function SettingsScreen(props: Props) {
           >
             <View style={{ flex: 1 }}>
               <Text style={{ color: colors.text, fontFamily: fonts.ui, fontSize: 15 }}>
-                {t(props.locale, 'settings.biometricsLock')}
-              </Text>
-              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12, marginTop: 2 }}>
-                {t(props.locale, 'settings.biometricsLockHint') ||
-                  `Require ${biometricsLabel} when opening Lony`}
-              </Text>
-            </View>
-            <Switch
-              value={biometricsLock}
-              disabled={biometricsBusy || (!biometricsSupported && !biometricsLock)}
-              onValueChange={(v) => {
-                void (async () => {
-                  setBiometricsBusy(true);
-                  try {
-                    if (v) {
-                      const res = await enableBiometricsLock();
-                      if (!res.ok) {
-                        Alert.alert('Screen lock', res.error || `Could not enable ${biometricsLabel}`);
-                        setBiometricsLock(false);
-                        return;
-                      }
-                      setBiometricsLock(true);
-                    } else {
-                      const res = await disableBiometricsLock();
-                      if (!res.ok) {
-                        Alert.alert('Screen lock', res.error || `Could not disable ${biometricsLabel}`);
-                        setBiometricsLock(true);
-                        return;
-                      }
-                      setBiometricsLock(false);
-                    }
-                  } finally {
-                    setBiometricsBusy(false);
-                  }
-                })();
-              }}
-              trackColor={{ false: colors.borderStrong, true: colors.primarySoft }}
-              thumbColor={biometricsLock ? colors.primary : colors.muted}
-            />
-          </View>
-          <View
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              paddingVertical: 12,
-              gap: 12,
-            }}
-          >
-            <View style={{ flex: 1 }}>
-              <Text style={{ color: colors.text, fontFamily: fonts.ui, fontSize: 15 }}>
                 {t(props.locale, 'settings.loanApproval')}
               </Text>
             </View>
@@ -423,12 +415,22 @@ export function SettingsScreen(props: Props) {
           </View>
           {I18nManager.isRTL ? (
             <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
-              RTL layout is active. Reload the app if the layout looks mirrored incorrectly.
+              {t(props.locale, 'settings.rtlNotice')}
             </Text>
           ) : null}
           <PrimaryButton
-            label={props.busy ? 'Saving…' : t(props.locale, 'save')}
-            onPress={props.onSaveRegion ?? props.onSave}
+            label={props.busy ? t(props.locale, 'common.loading') : t(props.locale, 'save')}
+            onPress={() => {
+              void (async () => {
+                try {
+                  if (props.onSaveRegion) await props.onSaveRegion();
+                  else await props.onSave?.();
+                  goHub();
+                } catch {
+                  /* error surfaced by parent */
+                }
+              })();
+            }}
             disabled={props.busy}
           />
         </Card>
@@ -442,7 +444,7 @@ export function SettingsScreen(props: Props) {
         <Back title={t(props.locale, 'profile')} />
         {!props.profileComplete ? (
           <Text style={{ color: colors.error, fontFamily: fonts.ui, fontSize: 14 }}>
-            Finish your account details to use Lony fully.
+            {t(props.locale, 'settings.profileIncomplete')}
           </Text>
         ) : null}
         <Card>
@@ -457,7 +459,7 @@ export function SettingsScreen(props: Props) {
             <Pressable
               onPress={props.onAvatar}
               disabled={props.busy}
-              accessibilityLabel="Change photo"
+              accessibilityLabel={t(props.locale, 'profile.changePhoto')}
               style={{
                 flexDirection: 'row',
                 alignItems: 'center',
@@ -473,24 +475,28 @@ export function SettingsScreen(props: Props) {
             >
               <IconCamera size={16} color={colors.primary} />
               <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 14 }}>
-                {props.busy ? 'Uploading…' : props.avatarUrl || props.avatarLocalUri ? 'Change photo' : 'Add photo'}
+                {props.busy
+                  ? t(props.locale, 'profile.uploading')
+                  : props.avatarUrl || props.avatarLocalUri
+                    ? t(props.locale, 'profile.changePhoto')
+                    : t(props.locale, 'profile.addPhoto')}
               </Text>
             </Pressable>
           </View>
           <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 14 }}>{props.email}</Text>
-          <Field label="Username" value={props.username} onChange={props.onUsername} />
-          <Field label="First name" value={props.firstName} onChange={props.onFirstName} />
-          <Field label="Middle name" value={props.middleName} onChange={props.onMiddleName} />
-          <Field label="Last name" value={props.lastName} onChange={props.onLastName} />
-          <Field label="Display name" value={props.displayName} onChange={props.onDisplayName} />
+          <Field label={t(props.locale, 'profile.username')} value={props.username} onChange={props.onUsername} />
+          <Field label={t(props.locale, 'profile.firstName')} value={props.firstName} onChange={props.onFirstName} />
+          <Field label={t(props.locale, 'profile.middleName')} value={props.middleName} onChange={props.onMiddleName} />
+          <Field label={t(props.locale, 'profile.lastName')} value={props.lastName} onChange={props.onLastName} />
+          <Field label={t(props.locale, 'profile.displayName')} value={props.displayName} onChange={props.onDisplayName} />
           <PhoneField
             value={props.phone}
             country={props.country}
             onCountryChange={props.onCountry}
             onChange={props.onPhone}
           />
-          <SearchSelect label="Country" value={props.country} onChange={props.onCountry} options={COUNTRIES} />
-          <SectionLabel>Sign-in preference</SectionLabel>
+          <SearchSelect label={t(props.locale, 'profile.country')} value={props.country} onChange={props.onCountry} options={COUNTRIES} />
+          <SectionLabel>{t(props.locale, 'profile.signInPreference')}</SectionLabel>
           <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
             {(['email', 'google', 'telegram'] as const).map((p) => {
               const active = props.authPref === p;
@@ -500,7 +506,7 @@ export function SettingsScreen(props: Props) {
             })}
           </View>
           <PrimaryButton
-            label={props.busy ? 'Saving…' : t(props.locale, 'save')}
+            label={props.busy ? t(props.locale, 'common.saving') : t(props.locale, 'save')}
             onPress={props.onSave}
             disabled={props.busy || !props.username.trim() || !props.firstName.trim() || !props.lastName.trim()}
           />
@@ -515,9 +521,9 @@ export function SettingsScreen(props: Props) {
         <Back title={t(props.locale, 'payments')} />
         <Card>
           <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
-            Banks and wallets used when sharing how to get paid on loans.
+            {t(props.locale, 'settings.paymentsHint')}
           </Text>
-          <PrimaryButton label="Manage banks & wallets" onPress={props.onBanks} />
+          <PrimaryButton label={t(props.locale, 'settings.manageBanks')} onPress={props.onBanks} />
         </Card>
       </View>
     );
@@ -529,7 +535,7 @@ export function SettingsScreen(props: Props) {
         <Back title={t(props.locale, 'notifications')} />
         <Card>
           <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13, marginBottom: 8 }}>
-            Choose what you want to hear about. Device push still requires a registered token.
+            {t(props.locale, 'settings.notificationsHint')}
           </Text>
           <View
             style={{
@@ -544,10 +550,10 @@ export function SettingsScreen(props: Props) {
           >
             <View style={{ flex: 1 }}>
               <Text style={{ color: colors.text, fontFamily: fonts.ui, fontSize: 15 }}>
-                Ask received for recurring payments
+                {t(props.locale, 'settings.askRecurringReceived')}
               </Text>
               <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12, marginTop: 2 }}>
-                When on, we’ll ask if you got today’s recurring income (or paid a bill). Turn off to auto-apply the amount.
+                {t(props.locale, 'settings.askRecurringReceivedHint')}
               </Text>
             </View>
             <Switch
@@ -559,10 +565,10 @@ export function SettingsScreen(props: Props) {
           </View>
           {(
             [
-              { label: 'Loan & repayment alerts', value: pushLoans, onChange: setPushLoans },
-              { label: 'Expense splits', value: pushSplits, onChange: setPushSplits },
-              { label: 'Goal reminders', value: pushGoals, onChange: setPushGoals },
-              { label: 'In-app inbox', value: inAppAll, onChange: setInAppAll },
+              { label: t(props.locale, 'settings.notifyLoanAlerts'), value: pushLoans, onChange: setPushLoans },
+              { label: t(props.locale, 'settings.notifySplits'), value: pushSplits, onChange: setPushSplits },
+              { label: t(props.locale, 'settings.notifyGoals'), value: pushGoals, onChange: setPushGoals },
+              { label: t(props.locale, 'settings.notifyInbox'), value: inAppAll, onChange: setInAppAll },
             ] as { label: string; value: boolean; onChange: (v: boolean) => void }[]
           ).map(({ label, value, onChange }) => (
             <View
@@ -596,26 +602,26 @@ export function SettingsScreen(props: Props) {
         <Back title={t(props.locale, 'privacy')} />
         <Card>
           <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
-            Download a copy of your Lony data, clear AI insight history, or delete your account.
+            {t(props.locale, 'settings.privacyHint')}
           </Text>
           <SecondaryButton
-            label={props.busy ? 'Working…' : 'Export my data'}
+            label={props.busy ? t(props.locale, 'common.working') : t(props.locale, 'settings.exportData')}
             onPress={props.onExportData}
             disabled={props.busy}
           />
           {props.onExportLedger ? (
             <SecondaryButton
-              label={props.busy ? 'Working…' : 'Export ledger CSV'}
+              label={props.busy ? t(props.locale, 'common.working') : t(props.locale, 'settings.exportLedger')}
               onPress={props.onExportLedger}
               disabled={props.busy}
             />
           ) : null}
           <SecondaryButton
-            label={props.busy ? 'Working…' : 'Clear AI insights'}
+            label={props.busy ? t(props.locale, 'common.working') : t(props.locale, 'settings.clearAiInsights')}
             onPress={props.onClearAI}
             disabled={props.busy}
           />
-          <SecondaryButton label="Delete account" onPress={confirmDelete} disabled={props.busy} />
+          <SecondaryButton label={t(props.locale, 'settings.deleteAccount')} onPress={confirmDelete} disabled={props.busy} />
         </Card>
       </View>
     );
@@ -626,26 +632,276 @@ export function SettingsScreen(props: Props) {
       <View style={{ gap: space.md }}>
         <Back title={t(props.locale, 'settings.security')} />
         <Card>
+          <SectionLabel>{t(props.locale, 'settings.appLock')}</SectionLabel>
+          <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13, marginBottom: 8 }}>
+            {t(props.locale, 'settings.appLockHint')}
+          </Text>
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              paddingVertical: 12,
+              borderBottomWidth: 1,
+              borderBottomColor: colors.border,
+              gap: 12,
+            }}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: colors.text, fontFamily: fonts.ui, fontSize: 15 }}>
+                {biometricsLabel}
+              </Text>
+              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12, marginTop: 2 }}>
+                {t(props.locale, 'settings.biometricsHint')}
+              </Text>
+            </View>
+            <Switch
+              value={biometricsLock}
+              disabled={biometricsBusy || (!biometricsSupported && !biometricsLock)}
+              onValueChange={(v) => {
+                void (async () => {
+                  setBiometricsBusy(true);
+                  try {
+                    if (v) {
+                      const res = await enableBiometricsLock();
+                      if (!res.ok) {
+                        Alert.alert('Screen lock', res.error || `Could not enable ${biometricsLabel}`);
+                        setBiometricsLock(false);
+                        return;
+                      }
+                      await setBiometricsAsLockMethod();
+                      setBiometricsLock(true);
+                      setLockMethod('biometrics');
+                    } else {
+                      const res = await disableBiometricsLock();
+                      if (!res.ok) {
+                        Alert.alert('Screen lock', res.error || `Could not disable ${biometricsLabel}`);
+                        setBiometricsLock(true);
+                        return;
+                      }
+                      if (lockMethod === 'biometrics') {
+                        await clearAppLock();
+                        setLockMethod('none');
+                      }
+                      setBiometricsLock(false);
+                    }
+                  } finally {
+                    setBiometricsBusy(false);
+                  }
+                })();
+              }}
+              trackColor={{ false: colors.borderStrong, true: colors.primarySoft }}
+              thumbColor={biometricsLock ? colors.primary : colors.muted}
+            />
+          </View>
+
+          <Pressable
+            onPress={() => goPage('extraFactor')}
+            style={{
+              marginTop: 12,
+              paddingVertical: 12,
+              borderTopWidth: 1,
+              borderTopColor: colors.border,
+              gap: 4,
+            }}
+          >
+            <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>
+              {t(props.locale, 'settings.extraFactor')}
+            </Text>
+            <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
+              {mfaEnabled
+                ? t(props.locale, 'settings.extraFactorOn').replace('{method}', mfaKind)
+                : t(props.locale, 'settings.extraFactorOff')}
+            </Text>
+          </Pressable>
+          {lockMethod !== 'none' || biometricsLock ? (
+            <SecondaryButton
+              label={t(props.locale, 'settings.turnOffLock')}
+              onPress={() => {
+                void (async () => {
+                  await clearAppLock();
+                  await disableBiometricsLock().catch(() => undefined);
+                  setLockMethod('none');
+                  setBiometricsLock(false);
+                  setMfaEnabled(false);
+                })();
+              }}
+            />
+          ) : null}
+        </Card>
+        <Card>
+          <SectionLabel>{t(props.locale, 'settings.accountPassword')}</SectionLabel>
           <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
-            Change the password for {props.email}.
+            {t(props.locale, 'settings.changePasswordHint').replace('{email}', props.email)}
           </Text>
           <Field
-            label="Current password"
+            label={t(props.locale, 'settings.currentPassword')}
             value={props.currentPassword ?? ''}
             onChange={props.onCurrentPassword ?? (() => undefined)}
             secure
           />
           <Field
-            label="New password"
+            label={t(props.locale, 'settings.newPassword')}
             value={props.changePasswordNew ?? ''}
             onChange={props.onChangePasswordNew ?? (() => undefined)}
             secure
           />
           <PrimaryButton
-            label={props.busy ? 'Working…' : 'Update password'}
+            label={props.busy ? t(props.locale, 'common.working') : t(props.locale, 'settings.updatePassword')}
             onPress={props.onChangePassword ?? (() => undefined)}
             disabled={props.busy || !props.onChangePassword}
           />
+        </Card>
+      </View>
+    );
+  }
+
+  if (page === 'extraFactor') {
+    return (
+      <View style={{ gap: space.md }}>
+        <Back title={t(props.locale, 'settings.extraFactor')} />
+        <Card>
+          <SectionLabel>{t(props.locale, 'settings.extraFactor')}</SectionLabel>
+          <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13, marginBottom: 8 }}>
+            {t(props.locale, 'settings.extraFactorHint')}
+          </Text>
+          <View
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              paddingVertical: 12,
+              borderBottomWidth: 1,
+              borderBottomColor: colors.border,
+              gap: 12,
+            }}
+          >
+            <Text style={{ color: colors.text, fontFamily: fonts.ui, fontSize: 15, flex: 1 }}>
+              {t(props.locale, 'settings.extraFactorToggle')}
+            </Text>
+            <Switch
+              value={mfaEnabled}
+              onValueChange={(v) => {
+                void (async () => {
+                  if (!v) {
+                    await clearAppLock();
+                    setMfaEnabled(false);
+                    if (lockMethod === 'pin' || lockMethod === 'pattern' || lockMethod === 'password') {
+                      setLockMethod(biometricsLock ? 'biometrics' : 'none');
+                      if (biometricsLock) await setBiometricsAsLockMethod();
+                    }
+                    setMfaDraft('');
+                    return;
+                  }
+                  setMfaEnabled(true);
+                  setMfaDraft('');
+                })();
+              }}
+              trackColor={{ false: colors.borderStrong, true: colors.primarySoft }}
+              thumbColor={mfaEnabled ? colors.primary : colors.muted}
+            />
+          </View>
+
+          {mfaEnabled ? (
+            <>
+              <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14, marginTop: 12 }}>
+                {t(props.locale, 'settings.chooseMethod')}
+              </Text>
+              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginVertical: 8 }}>
+                {(
+                  [
+                    ['pin', t(props.locale, 'settings.methodPin')],
+                    ['pattern', t(props.locale, 'settings.methodPattern')],
+                    ['password', t(props.locale, 'settings.methodPassword')],
+                  ] as const
+                ).map(([id, label]) => (
+                  <SecondaryButton
+                    key={id}
+                    label={label}
+                    onPress={() => {
+                      setMfaKind(id);
+                      setMfaDraft('');
+                    }}
+                  />
+                ))}
+              </View>
+              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12, marginBottom: 8 }}>
+                {t(props.locale, 'settings.activeMethod')}: {mfaKind}
+              </Text>
+
+              {mfaKind === 'pattern' ? (
+                <PatternPad
+                  disabled={mfaBusy}
+                  onComplete={(key) => {
+                    void (async () => {
+                      setMfaBusy(true);
+                      try {
+                        const res = await setAppLockMethod('pattern', key);
+                        if (!res.ok) {
+                          Alert.alert(t(props.locale, 'settings.extraFactor'), res.error || 'Could not save');
+                          return;
+                        }
+                        await disableBiometricsLock().catch(() => undefined);
+                        setBiometricsLock(false);
+                        setLockMethod('pattern');
+                        setMfaEnabled(true);
+                        Alert.alert(
+                          t(props.locale, 'settings.extraFactor'),
+                          t(props.locale, 'settings.extraFactorSaved'),
+                        );
+                        goPage('security');
+                      } finally {
+                        setMfaBusy(false);
+                      }
+                    })();
+                  }}
+                />
+              ) : (
+                <>
+                  <Field
+                    label={
+                      mfaKind === 'pin'
+                        ? t(props.locale, 'settings.methodPin')
+                        : t(props.locale, 'settings.methodPassword')
+                    }
+                    value={mfaDraft}
+                    onChange={setMfaDraft}
+                    secure
+                    keyboardType={mfaKind === 'pin' ? 'number-pad' : 'default'}
+                    placeholder={mfaKind === 'pin' ? '123456' : '••••••'}
+                  />
+                  <PrimaryButton
+                    label={mfaBusy ? t(props.locale, 'common.loading') : t(props.locale, 'save')}
+                    disabled={mfaBusy}
+                    onPress={() => {
+                      void (async () => {
+                        setMfaBusy(true);
+                        try {
+                          const res = await setAppLockMethod(mfaKind, mfaDraft);
+                          if (!res.ok) {
+                            Alert.alert(t(props.locale, 'settings.extraFactor'), res.error || 'Could not save');
+                            return;
+                          }
+                          await disableBiometricsLock().catch(() => undefined);
+                          setBiometricsLock(false);
+                          setLockMethod(mfaKind);
+                          setMfaEnabled(true);
+                          setMfaDraft('');
+                          Alert.alert(
+                            t(props.locale, 'settings.extraFactor'),
+                            t(props.locale, 'settings.extraFactorSaved'),
+                          );
+                          goPage('security');
+                        } finally {
+                          setMfaBusy(false);
+                        }
+                      })();
+                    }}
+                  />
+                </>
+              )}
+            </>
+          ) : null}
         </Card>
       </View>
     );
@@ -656,13 +912,15 @@ export function SettingsScreen(props: Props) {
       <View style={{ gap: space.md }}>
         <Back title={t(props.locale, 'legal')} />
         <Card>
-          <SecondaryButton label="Terms of Service" onPress={props.onTos} />
+          <SecondaryButton label={t(props.locale, 'settings.termsOfService')} onPress={props.onTos} />
           {props.tosAccepted ? (
             <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
-              Accepted · {props.tosVersion}
+              {t(props.locale, 'settings.accepted').replace('{version}', props.tosVersion || '')}
             </Text>
           ) : (
-            <Text style={{ color: colors.error, fontFamily: fonts.ui, fontSize: 13 }}>Terms not accepted yet</Text>
+            <Text style={{ color: colors.error, fontFamily: fonts.ui, fontSize: 13 }}>
+              {t(props.locale, 'settings.notAccepted')}
+            </Text>
           )}
         </Card>
       </View>
@@ -676,21 +934,25 @@ export function SettingsScreen(props: Props) {
       </Text>
       {!props.profileComplete ? (
         <Text style={{ color: colors.error, fontFamily: fonts.ui, fontSize: 14 }}>
-          Finish your profile to use Lony fully.
+          {t(props.locale, 'settings.finishProfile')}
         </Text>
       ) : null}
       {(props.planTier || 'free').toLowerCase() !== 'premium' && !props.isAdmin ? (
         <Card>
-          <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>Free plan</Text>
+          <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>
+            {t(props.locale, 'settings.freePlan')}
+          </Text>
           <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13, marginTop: 4 }}>
-            Insights AI (Analysis, Reports, Coach) requires Premium. Ask an admin to upgrade your account.
+            {t(props.locale, 'settings.freePlanHint')}
           </Text>
         </Card>
       ) : (
         <Card>
-          <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>Premium</Text>
+          <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>
+            {t(props.locale, 'settings.premium')}
+          </Text>
           <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13, marginTop: 4 }}>
-            AI personas are unlocked for this account.
+            {t(props.locale, 'settings.premiumUnlocked')}
           </Text>
         </Card>
       )}
@@ -701,20 +963,19 @@ export function SettingsScreen(props: Props) {
           onPress={() => goPage('profile')}
         />
         <HubRow
-          title="Preferences"
+          title={t(props.locale, 'settings.region')}
           subtitle={t(props.locale, 'settings.regionSubtitle')}
           onPress={() => goPage('region')}
         />
         <HubRow title={t(props.locale, 'themes')} subtitle={t(props.locale, 'settings.themesSubtitle')} onPress={() => goPage('themes')} />
         <HubRow title={t(props.locale, 'payments')} subtitle={t(props.locale, 'settings.paymentsSubtitle')} onPress={() => goPage('payments')} />
         <HubRow title={t(props.locale, 'notifications')} subtitle={t(props.locale, 'settings.notificationsSubtitle')} onPress={() => goPage('notifications')} />
-        <HubRow
-          title="Preferences"
-          subtitle="Recurring income prompts and related options"
-          onPress={() => goPage('notifications')}
-        />
         <HubRow title={t(props.locale, 'privacy')} subtitle={t(props.locale, 'settings.privacySubtitle')} onPress={() => goPage('privacy')} />
-        <HubRow title={t(props.locale, 'settings.security')} subtitle={t(props.locale, 'settings.securitySubtitle')} onPress={() => goPage('security')} />
+        <HubRow
+          title={t(props.locale, 'settings.security')}
+          subtitle={t(props.locale, 'settings.securitySubtitle')}
+          onPress={() => goPage('security')}
+        />
         <HubRow title={t(props.locale, 'legal')} subtitle={t(props.locale, 'settings.legalSubtitle')} onPress={() => goPage('legal')} />
         {props.isAdmin ? (
           <HubRow title={t(props.locale, 'admin')} subtitle={t(props.locale, 'settings.adminSubtitle')} onPress={() => goPage('admin')} />

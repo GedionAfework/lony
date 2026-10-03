@@ -41,6 +41,29 @@ const COMPOUNDING = [
   { id: 'yearly', label: 'Yearly compound' },
 ];
 
+/** Known account-type ids get a localized label; unknown (remote-catalog-only) ids keep their API label. */
+const ACCOUNT_TYPE_LABEL_KEYS: Record<string, string> = {
+  bank: 'accounts.typeBank',
+  cash: 'accounts.typeCash',
+  mobile_money: 'accounts.typeMobileMoney',
+  wallet: 'accounts.typeWallet',
+  other: 'accounts.typeOther',
+};
+
+const COMPOUNDING_LABEL_KEYS: Record<string, string> = {
+  none: 'accounts.compoundingSimple',
+  monthly: 'accounts.compoundingMonthly',
+  yearly: 'accounts.compoundingYearly',
+};
+
+function localizeOptionLabels(
+  options: CatalogOption[],
+  labelKeys: Record<string, string>,
+  locale?: string | null,
+): CatalogOption[] {
+  return options.map((o) => (labelKeys[o.id] ? { ...o, label: t(locale, labelKeys[o.id]) } : o));
+}
+
 function defaultCurrency(user: User): string {
   return (user.default_currency_code || 'USD').toUpperCase();
 }
@@ -109,8 +132,13 @@ export function AccountsScreen({
   const [acceptBusy, setAcceptBusy] = useState(false);
 
   const accountTypes = useMemo(
-    () => mergeOptions(remoteTypes, FALLBACK_ACCOUNT_TYPES),
-    [remoteTypes],
+    () => localizeOptionLabels(mergeOptions(remoteTypes, FALLBACK_ACCOUNT_TYPES), ACCOUNT_TYPE_LABEL_KEYS, user.locale),
+    [remoteTypes, user.locale],
+  );
+
+  const compoundingOptions = useMemo(
+    () => localizeOptionLabels(COMPOUNDING, COMPOUNDING_LABEL_KEYS, user.locale),
+    [user.locale],
   );
 
   const institutionOptions = useMemo(
@@ -135,9 +163,9 @@ export function AccountsScreen({
         if (st) setBankStatus(st);
       }
     } catch (e) {
-      onError(e instanceof Error ? e.message : 'Could not load accounts');
+      onError(e instanceof Error ? e.message : t(user.locale, 'accounts.loadError'));
     }
-  }, [token, onError]);
+  }, [token, onError, user.locale]);
 
   async function onConnectBank() {
     setBusy(true);
@@ -145,7 +173,7 @@ export function AccountsScreen({
       const session = await api.createBankLinkSession(token);
       const url = session.link_url;
       if (!url) {
-        onError('Bank link URL missing — set PUBLIC_BASE_URL on the API.');
+        onError(t(user.locale, 'accounts.bankLinkUrlMissing'));
         return;
       }
       const result = await WebBrowser.openAuthSessionAsync(url, 'lony://bank-link');
@@ -589,12 +617,12 @@ export function AccountsScreen({
   }
 
   function panelTitle() {
-    if (importId) return 'Import statement';
-    if (reconcileOpen) return 'Reconcile';
-    if (transferOpen) return 'Transfer';
-    if (balanceId) return 'Update balance';
-    if (editId) return 'Edit account';
-    return 'New account';
+    if (importId) return t(user.locale, 'accounts.importStatement');
+    if (reconcileOpen) return t(user.locale, 'accounts.reconcile');
+    if (transferOpen) return t(user.locale, 'accounts.transfer');
+    if (balanceId) return t(user.locale, 'accounts.updateBalance');
+    if (editId) return t(user.locale, 'accounts.editAccount');
+    return t(user.locale, 'accounts.newAccount');
   }
 
   const accountOptions = accounts.map((a) => ({
@@ -653,13 +681,13 @@ export function AccountsScreen({
                   onError(`Synced ${res.imported} new · skipped ${res.skipped}`);
                   await reload();
                 } catch (e) {
-                  onError(e instanceof Error ? e.message : 'Sync failed');
+                  onError(e instanceof Error ? e.message : t(user.locale, 'accounts.syncFailed'));
                 } finally {
                   setBusy(false);
                 }
               }}
               hitSlop={8}
-              accessibilityLabel="Sync bank"
+              accessibilityLabel={t(user.locale, 'accounts.syncBank')}
               disabled={busy || c.status !== 'active'}
               style={{
                 paddingHorizontal: 10,
@@ -673,7 +701,9 @@ export function AccountsScreen({
                 opacity: busy || c.status !== 'active' ? 0.45 : 1,
               }}
             >
-              <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 12 }}>Sync</Text>
+              <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 12 }}>
+                {t(user.locale, 'accounts.sync')}
+              </Text>
             </Pressable>
             <Pressable
               onPress={async () => {
@@ -681,7 +711,7 @@ export function AccountsScreen({
                   await api.disconnectBankLink(token, c.id);
                   await reload();
                 } catch (e) {
-                  onError(e instanceof Error ? e.message : 'Disconnect failed');
+                  onError(e instanceof Error ? e.message : t(user.locale, 'accounts.disconnectFailed'));
                 }
               }}
               hitSlop={8}
@@ -711,7 +741,7 @@ export function AccountsScreen({
         <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
           <View style={{ flex: 1, minWidth: 100 }}>
             <PrimaryButton
-              label="Add account"
+              label={t(user.locale, 'accounts.addAccount')}
               onPress={() => {
                 resetForm();
                 setCreating(true);
@@ -720,12 +750,12 @@ export function AccountsScreen({
           </View>
           {accounts.length >= 1 ? (
             <View style={{ flex: 1, minWidth: 100 }}>
-              <SecondaryButton label="Reconcile" onPress={() => void onReconcile()} />
+              <SecondaryButton label={t(user.locale, 'accounts.reconcile')} onPress={() => void onReconcile()} />
             </View>
           ) : null}
           {accounts.length >= 2 ? (
             <View style={{ flex: 1, minWidth: 100 }}>
-              <SecondaryButton label="Transfer" onPress={() => setTransferOpen(true)} />
+              <SecondaryButton label={t(user.locale, 'accounts.transfer')} onPress={() => setTransferOpen(true)} />
             </View>
           ) : null}
         </View>
@@ -735,10 +765,14 @@ export function AccountsScreen({
       {importId && importAccount ? (
         <Card>
           <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
-            CSV with Date + Amount (signed) or Debit/Credit columns. Re-uploads skip duplicates.
+            {t(user.locale, 'accounts.csvHint')}
           </Text>
           <SecondaryButton
-            label={importFileName ? `File: ${importFileName}` : 'Pick CSV file'}
+            label={
+              importFileName
+                ? t(user.locale, 'accounts.fileLabel').replace('{name}', importFileName)
+                : t(user.locale, 'accounts.pickCsvFile')
+            }
             onPress={() => void pickImportFile()}
             disabled={busy}
           />
@@ -752,7 +786,7 @@ export function AccountsScreen({
                 textTransform: 'uppercase',
               }}
             >
-              Or paste CSV
+              {t(user.locale, 'accounts.orPasteCsv')}
             </Text>
             <TextInput
               value={importCsv}
@@ -766,7 +800,7 @@ export function AccountsScreen({
               textAlignVertical="top"
               autoCapitalize="none"
               autoCorrect={false}
-              placeholder={'Date,Amount,Description\n2026-01-05,-12.50,Coffee'}
+              placeholder={t(user.locale, 'accounts.csvPlaceholder')}
               placeholderTextColor={colors.muted}
               style={{
                 backgroundColor: colors.surfaceMuted,
@@ -783,17 +817,17 @@ export function AccountsScreen({
             />
           </View>
           <Field
-            label="Ending balance (optional)"
+            label={t(user.locale, 'accounts.endingBalanceOptional')}
             value={importEndingBalance}
             onChange={setImportEndingBalance}
             money
-            placeholder="Set stated balance after import"
+            placeholder={t(user.locale, 'accounts.endingBalancePlaceholder')}
           />
           {importResult ? (
             <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 13 }}>{importResult}</Text>
           ) : null}
             <PrimaryButton
-              label={busy ? 'Importing…' : 'Import'}
+              label={busy ? t(user.locale, 'common.importing') : t(user.locale, 'accounts.import')}
               onPress={() => void onImportStatement()}
               disabled={busy}
             />
@@ -803,10 +837,13 @@ export function AccountsScreen({
         {reconcileOpen ? (
           <Card>
             <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
-              Stated balance vs ledger since your last manual set (income − expenses ± transfers).
+              {t(user.locale, 'accounts.reconcileHint')}
             </Text>
           {reconcileRows.length === 0 ? (
-            <EmptyState title="Nothing to compare" body="Add an account first." />
+            <EmptyState
+              title={t(user.locale, 'accounts.reconcileEmptyTitle')}
+              body={t(user.locale, 'accounts.reconcileEmptyBody')}
+            />
           ) : (
             reconcileRows.map((row) => (
               <View
@@ -820,8 +857,8 @@ export function AccountsScreen({
               >
                 <Text style={{ color: colors.text, fontFamily: fonts.uiSemi }}>{row.account_name}</Text>
                 <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
-                  Stated {formatMoney(row.stated_balance, row.currency_code, user.locale)} · Ledger{' '}
-                  {formatMoney(row.expected_balance, row.currency_code, user.locale)}
+                  {t(user.locale, 'accounts.stated')} {formatMoney(row.stated_balance, row.currency_code, user.locale)} ·{' '}
+                  {t(user.locale, 'accounts.ledger')} {formatMoney(row.expected_balance, row.currency_code, user.locale)}
                 </Text>
                 <Text
                   style={{
@@ -831,21 +868,30 @@ export function AccountsScreen({
                   }}
                 >
                   {row.in_sync
-                    ? 'In sync'
-                    : `Difference ${formatMoney(row.difference, row.currency_code, user.locale)}`}
+                    ? t(user.locale, 'accounts.inSync')
+                    : t(user.locale, 'accounts.difference').replace(
+                        '{amount}',
+                        formatMoney(row.difference, row.currency_code, user.locale),
+                      )}
                 </Text>
                 <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 11 }}>
-                  Since baseline: +{row.income_since} in · −{row.expense_since} out · transfers +
-                  {row.transfers_in_since}/−{row.transfers_out_since}
+                  {t(user.locale, 'accounts.sinceBaselineTemplate')
+                    .replace('{income}', String(row.income_since))
+                    .replace('{expense}', String(row.expense_since))
+                    .replace('{transfersIn}', String(row.transfers_in_since))
+                    .replace('{transfersOut}', String(row.transfers_out_since))}
                 </Text>
                 {Number(row.unassigned_confirmed) !== 0 ? (
                   <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 11 }}>
-                    Unassigned confirmed cashflow (same currency): {row.unassigned_confirmed}
+                    {t(user.locale, 'accounts.unassignedConfirmedTemplate').replace(
+                      '{amount}',
+                      String(row.unassigned_confirmed),
+                    )}
                   </Text>
                 ) : null}
                 {!row.in_sync ? (
                   <SecondaryButton
-                    label={busy ? 'Updating…' : 'Set balance to ledger'}
+                    label={busy ? t(user.locale, 'common.updating') : t(user.locale, 'accounts.setBalanceToLedger')}
                     onPress={() => void matchToLedger(row)}
                     disabled={busy}
                   />
@@ -858,23 +904,27 @@ export function AccountsScreen({
 
         {transferOpen ? (
           <Card>
-            <SearchSelect label="From" value={fromId} onChange={setFromId} options={accountOptions} />
+            <SearchSelect label={t(user.locale, 'accounts.from')} value={fromId} onChange={setFromId} options={accountOptions} />
           <SearchSelect
-            label="To"
+            label={t(user.locale, 'accounts.to')}
             value={toId}
             onChange={setToId}
             options={accountOptions.filter((o) => o.id !== fromId)}
           />
-          <Field label="Amount" value={transferAmount} onChange={setTransferAmount} money />
-            <Field label="Note (optional)" value={transferNote} onChange={setTransferNote} />
-            <PrimaryButton label={busy ? 'Moving…' : 'Transfer'} onPress={onTransfer} disabled={busy} />
+          <Field label={t(user.locale, 'cashflow.amount')} value={transferAmount} onChange={setTransferAmount} money />
+            <Field label={t(user.locale, 'accounts.noteOptional')} value={transferNote} onChange={setTransferNote} />
+            <PrimaryButton
+              label={busy ? t(user.locale, 'common.moving') : t(user.locale, 'accounts.transfer')}
+              onPress={onTransfer}
+              disabled={busy}
+            />
           </Card>
         ) : null}
 
         {formOpen ? (
           <Card>
             <SearchSelect
-              label="Type"
+              label={t(user.locale, 'accounts.type')}
               value={accountType}
               onChange={(id) => {
                 setAccountType(id);
@@ -886,38 +936,49 @@ export function AccountsScreen({
             {accountType !== 'cash' ? (
               <>
                 <SearchSelect
-                  label="Institution"
+                  label={t(user.locale, 'accounts.institution')}
                   value={institutionId}
                   onChange={setInstitutionId}
                   options={institutionOptions}
-                  placeholder="Search institution"
+                  placeholder={t(user.locale, 'accounts.searchInstitution')}
                 />
                 {needsOtherInstitution ? (
                   <Field
-                    label="Institution name"
+                    label={t(user.locale, 'accounts.institutionName')}
                     value={institutionOther}
                     onChange={setInstitutionOther}
-                    placeholder="Type the institution name"
+                    placeholder={t(user.locale, 'accounts.institutionNamePlaceholder')}
                   />
                 ) : null}
               </>
             ) : null}
-            <SearchSelect label="Currency" value={currency} onChange={setCurrency} options={CURRENCIES} />
+            <SearchSelect label={t(user.locale, 'common.currency')} value={currency} onChange={setCurrency} options={CURRENCIES} />
             {!editId ? (
-              <Field label="Current balance" value={balance} onChange={setBalance} money />
+              <Field label={t(user.locale, 'accounts.currentBalance')} value={balance} onChange={setBalance} money />
             ) : null}
             <Field
-              label="Interest rate % (optional)"
+              label={t(user.locale, 'accounts.interestRateOptional')}
               value={interest}
               onChange={setInterest}
               keyboardType="decimal-pad"
               placeholder="e.g. 8"
             />
             {interest.trim() ? (
-              <SearchSelect label="Compounding" value={compounding} onChange={setCompounding} options={COMPOUNDING} />
+              <SearchSelect
+                label={t(user.locale, 'accounts.compounding')}
+                value={compounding}
+                onChange={setCompounding}
+                options={compoundingOptions}
+              />
             ) : null}
             <PrimaryButton
-              label={busy ? 'Saving…' : editId ? 'Save changes' : 'Create'}
+              label={
+                busy
+                  ? t(user.locale, 'common.saving')
+                  : editId
+                    ? t(user.locale, 'accounts.saveChanges')
+                    : t(user.locale, 'common.create')
+              }
               onPress={editId ? onSaveEdit : onCreate}
               disabled={busy}
             />
@@ -926,18 +987,22 @@ export function AccountsScreen({
 
         {balanceId ? (
           <Card>
-            <Field label="New balance" value={newBalance} onChange={setNewBalance} money />
-            <PrimaryButton label={busy ? 'Saving…' : 'Save balance'} onPress={onSaveBalance} disabled={busy} />
+            <Field label={t(user.locale, 'accounts.newBalance')} value={newBalance} onChange={setNewBalance} money />
+            <PrimaryButton
+              label={busy ? t(user.locale, 'common.saving') : t(user.locale, 'accounts.saveBalance')}
+              onPress={onSaveBalance}
+              disabled={busy}
+            />
           </Card>
         ) : null}
 
       {!panelOpen ? (
       <Card>
-        <SectionLabel>Your accounts</SectionLabel>
+        <SectionLabel>{t(user.locale, 'accounts.yourAccounts')}</SectionLabel>
         {accounts.length === 0 ? (
           <EmptyState
-            title="No accounts yet"
-            body="Add cash, bank, mobile money, or wallet balances for net worth."
+            title={t(user.locale, 'accounts.noAccountsTitle')}
+            body={t(user.locale, 'accounts.noAccountsBody')}
           />
         ) : (
           accounts.map((a) => {
@@ -1044,7 +1109,7 @@ export function AccountsScreen({
                   </Pressable>
                 ) : null}
                 <IconAction
-                  accessibilityLabel="Update balance"
+                  accessibilityLabel={t(user.locale, 'accounts.updateBalance')}
                   onPress={() => {
                     setEditId(null);
                     setCreating(false);
@@ -1056,7 +1121,7 @@ export function AccountsScreen({
                   <IconBalance size={16} color={colors.primary} />
                 </IconAction>
                 <IconAction
-                  accessibilityLabel="Import statement"
+                  accessibilityLabel={t(user.locale, 'accounts.importStatement')}
                   onPress={() => {
                     resetForm();
                     setTransferOpen(false);
@@ -1070,10 +1135,10 @@ export function AccountsScreen({
                 >
                   <IconUpload size={16} color={colors.primary} />
                 </IconAction>
-                <IconAction accessibilityLabel="Edit" onPress={() => startEdit(a)}>
+                <IconAction accessibilityLabel={t(user.locale, 'common.edit')} onPress={() => startEdit(a)}>
                   <IconEdit size={16} color={colors.primary} />
                 </IconAction>
-                <IconAction accessibilityLabel="Archive" danger onPress={() => onArchive(a.id)}>
+                <IconAction accessibilityLabel={t(user.locale, 'accounts.archive')} danger onPress={() => onArchive(a.id)}>
                   <IconTrash size={16} color={colors.warning} />
                 </IconAction>
               </View>

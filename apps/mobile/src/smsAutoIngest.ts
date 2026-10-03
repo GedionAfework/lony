@@ -1,7 +1,21 @@
 import { Alert, PermissionsAndroid, Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import { api, type MoneyAccount } from './api';
-import { parseTransferSms, smsFingerprint, type ParsedSmsTransfer } from './smsParse';
+import {
+  accountTypeLabel,
+  parseTransferSms,
+  smsFingerprint,
+  type ParsedSmsTransfer,
+  type SmsAccountType,
+} from './smsParse';
+import { notifySmsTransfer } from './smsTransferNotify';
+
+function mapAccountType(t: SmsAccountType): MoneyAccount['account_type'] {
+  if (t === 'mobile_money') return 'mobile_money';
+  if (t === 'wallet') return 'wallet';
+  if (t === 'bank') return 'bank';
+  return 'other';
+}
 
 const PREF_KEY = 'lony.sms_auto_import';
 const SEEN_KEY = 'lony.sms_seen_fps';
@@ -163,6 +177,7 @@ export type SmsAutoSyncResult = {
   skipped: number;
   accountsAdded: number;
   duplicates: number;
+  permissionDenied?: boolean;
 };
 
 /**
@@ -191,24 +206,31 @@ export async function activateAndSyncSms(
 
     type Cand = { msg: RawSms; parsed: ParsedSmsTransfer; fp: string };
     const candidates: Cand[] = [];
-    const discovered = new Map<string, { last4: string; currency: string; label: string }>();
+    const discovered = new Map<
+      string,
+      { last4: string; currency: string; label: string; accountType: SmsAccountType; institution: string | null }
+    >();
 
     for (const msg of messages) {
       const parsed = parseTransferSms(msg.body);
       if (!parsed.amount || !parsed.kind || parsed.confidence < 0.45) continue;
       const fp = smsFingerprint(msg.body);
       candidates.push({ msg, parsed, fp });
-      const last4 = (parsed.accountLast4 || parsed.accountNumber || '').replace(/\D/g, '').slice(-4);
+      // Only discover *your* account — never the counterparty's digits.
+      const last4 = (parsed.accountLast4 || '').replace(/\D/g, '').slice(-4);
       if (last4.length === 4) {
+        if (parsed.otherAccountLast4 && parsed.otherAccountLast4 === last4) continue;
         const currency = (parsed.currency || defaultCurrency || 'USD').toUpperCase();
         const key = accountKey(last4, currency);
         if (!discovered.has(key)) {
+          const kindLabel = accountTypeLabel(parsed.accountType);
+          const inst = parsed.institutionHint || kindLabel;
           discovered.set(key, {
             last4,
             currency,
-            label: parsed.accountNumber
-              ? `Bank …${last4}`
-              : `Account …${last4}`,
+            accountType: parsed.accountType,
+            institution: inst,
+            label: `${inst} …${last4}`,
           });
         }
       }
@@ -238,10 +260,10 @@ export async function activateAndSyncSms(
       try {
         const created = await api.createAccount(token, {
           name: disc.label,
-          account_type: 'bank',
+          account_type: mapAccountType(disc.accountType),
           currency_code: disc.currency,
           balance: '0',
-          institution_label: disc.label,
+          institution_label: disc.institution || disc.label,
         });
         accounts = [...accounts, created.account];
         accountByKey.set(key, created.account.id);
@@ -279,6 +301,21 @@ export async function activateAndSyncSms(
         continue;
       }
       try {
+        // Money sent: notify and let the user complete the expense form (do not auto-create).
+        if (parsed.kind === 'expense') {
+          seen.add(fp);
+          await notifySmsTransfer({
+            kind: 'expense',
+            amount: parsed.amount!,
+            currency,
+            counterparty: parsed.counterparty,
+            accountLast4: last4.length === 4 ? last4 : parsed.accountLast4,
+            accountId,
+          });
+          imported++;
+          continue;
+        }
+
         const res = await api.ingestCashflowSms(token, {
           text: msg.body,
           account_id: accountId,
@@ -289,6 +326,14 @@ export async function activateAndSyncSms(
           duplicates++;
         } else if (res.entry) {
           imported++;
+          await notifySmsTransfer({
+            kind: 'income',
+            amount: parsed.amount!,
+            currency,
+            counterparty: parsed.counterparty,
+            accountLast4: last4.length === 4 ? last4 : parsed.accountLast4,
+            accountId,
+          });
         } else {
           skipped++;
         }
@@ -316,14 +361,30 @@ export async function activateAndSyncSms(
   }
 }
 
+export type SyncBankSmsOptions = {
+  /** Bypass the Settings toggle (used by the Home refresh button). */
+  force?: boolean;
+  /** How many inbox messages to scan (default 80; refresh uses more). */
+  maxCount?: number;
+};
+
 /** Incremental sync when opening Home (no account prompts). */
-export async function syncBankSms(token: string, accountId?: string): Promise<SmsAutoSyncResult> {
+export async function syncBankSms(
+  token: string,
+  accountId?: string,
+  opts?: SyncBankSmsOptions,
+): Promise<SmsAutoSyncResult> {
   const empty: SmsAutoSyncResult = { imported: 0, skipped: 0, accountsAdded: 0, duplicates: 0 };
   try {
     const enabled = await getSmsAutoImportEnabled();
-    if (!enabled) return empty;
+    if (!enabled && !opts?.force) return empty;
 
-    const messages = await collectCandidateSms(80);
+    if (opts?.force && Platform.OS === 'android') {
+      const ok = await ensureSmsPermission();
+      if (!ok) return { ...empty, permissionDenied: true };
+    }
+
+    const messages = await collectCandidateSms(opts?.maxCount ?? 80);
     if (!messages.length) return empty;
 
     const seen = await loadSeen();
@@ -343,15 +404,45 @@ export async function syncBankSms(token: string, accountId?: string): Promise<Sm
         continue;
       }
       try {
+        const currency = (local.currency || '').toUpperCase() || undefined;
+        const last4 = (local.accountLast4 || local.accountNumber || '').replace(/\D/g, '').slice(-4);
+
+        // Money sent → notify; user taps to fill expense details (no auto-create).
+        if (local.kind === 'expense') {
+          seen.add(fp);
+          await notifySmsTransfer({
+            kind: 'expense',
+            amount: local.amount,
+            currency,
+            counterparty: local.counterparty,
+            accountLast4: last4.length === 4 ? last4 : local.accountLast4,
+            accountId,
+          });
+          imported++;
+          continue;
+        }
+
         const res = await api.ingestCashflowSms(token, {
           text: msg.body,
           account_id: accountId,
           create: true,
         });
         seen.add(fp);
-        if (res.duplicate || res.matched_existing_id) duplicates++;
-        else if (res.entry) imported++;
-        else skipped++;
+        if (res.duplicate || res.matched_existing_id) {
+          duplicates++;
+        } else if (res.entry) {
+          imported++;
+          await notifySmsTransfer({
+            kind: 'income',
+            amount: local.amount,
+            currency,
+            counterparty: local.counterparty,
+            accountLast4: last4.length === 4 ? last4 : local.accountLast4,
+            accountId,
+          });
+        } else {
+          skipped++;
+        }
       } catch {
         skipped++;
       }

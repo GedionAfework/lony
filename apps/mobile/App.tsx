@@ -17,6 +17,7 @@ import {
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   AppState,
   type AppStateStatus,
   KeyboardAvoidingView,
@@ -41,7 +42,16 @@ import {
   isWithinBiometricsGrace,
   markBiometricsUnlocked,
 } from './src/biometricsLock';
-import { BiometricsLockScreen } from './src/BiometricsLockScreen';
+import {
+  getAppLockMethod,
+  isAppLockEnabled,
+  isWithinAppLockGrace,
+  markAppLockUnlocked,
+  verifyAppLockSecret,
+  type AppLockMethod,
+} from './src/appLock';
+import { AppLockScreen } from './src/AppLockScreen';
+import { SeasonRecapScreen } from './src/SeasonRecapScreen';
 import { BottomNav, type TabId } from './src/BottomNav';
 import { COUNTRIES, CURRENCIES } from './src/catalogs';
 import { ChatScreen } from './src/ChatScreen';
@@ -53,10 +63,15 @@ import { CashflowFormScreen, CashflowShowScreen } from './src/CashflowScreens';
 import { DatePrefsProvider } from './src/datePrefs';
 import { ExpensesScreen, type ExpensesTab } from './src/ExpensesScreen';
 import { PlanScreen } from './src/PlanScreen';
-import { IconBank, IconCamera, IconPlus, IconSearch } from './src/icons';
+import { IconBank, IconCamera, IconPlus, IconRefresh, IconSearch } from './src/icons';
 import { resolveInstitutionLabel } from './src/institutions';
 import { scanReceiptWithCamera } from './src/receiptScan';
 import { activateAndSyncSms, syncBankSms } from './src/smsAutoIngest';
+import {
+  configureSmsNotificationHandler,
+  parseSmsNotificationData,
+  smsNotifyToPrefill,
+} from './src/smsTransferNotify';
 import { LoansScreen } from './src/LoansScreen';
 import { NewLoanScreen } from './src/NewLoanScreen';
 import { PeerProfileScreen } from './src/PeerProfileScreen';
@@ -349,9 +364,11 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   }
 
   const [appLocked, setAppLocked] = useState(false);
+  const [lockMethod, setLockMethod] = useState<AppLockMethod>('none');
   const [bioLabel, setBioLabel] = useState('Screen lock');
   const [unlockError, setUnlockError] = useState<string | null>(null);
   const [unlocking, setUnlocking] = useState(false);
+  const [seasonRecap, setSeasonRecap] = useState<'month' | 'year' | null>(null);
   const appStateRef = useRef<AppStateStatus>(AppState.currentState);
   const unlockingRef = useRef(false);
   const appLockedRef = useRef(false);
@@ -373,28 +390,55 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     return unlockingRef.current || Date.now() < ignoreAppStateUntilRef.current;
   }
 
+  async function finishUnlock(genAtStart: number) {
+    unlockGenerationRef.current = genAtStart + 1;
+    await markAppLockUnlocked();
+    await markBiometricsUnlocked();
+    setLocked(false);
+    setUnlockError(null);
+    pauseAppStateHandling(4_000);
+  }
+
   async function promptUnlock() {
     if (unlockingRef.current) return;
     if (!appLockedRef.current) return;
+    const method = lockMethod !== 'none' ? lockMethod : await getAppLockMethod();
+    if (method !== 'biometrics' && method !== 'none') {
+      // PIN / pattern / password — wait for AppLockScreen secret submit.
+      return;
+    }
     unlockingRef.current = true;
     setUnlocking(true);
     setUnlockError(null);
-    // Fingerprint / Face ID UI temporarily backgrounds the app on Android/iOS.
     pauseAppStateHandling(20_000);
     const genAtStart = unlockGenerationRef.current;
     try {
       const ok = await authenticateWithBiometrics('Unlock Lony');
       if (ok) {
-        unlockGenerationRef.current = genAtStart + 1;
-        await markBiometricsUnlocked();
-        setLocked(false);
-        setUnlockError(null);
-        // Absorb the post-auth AppState bounce back to "active".
-        pauseAppStateHandling(4_000);
+        await finishUnlock(genAtStart);
       } else {
         setLocked(true);
         setUnlockError('Authentication failed. Try again.');
         pauseAppStateHandling(1_000);
+      }
+    } finally {
+      setUnlocking(false);
+      unlockingRef.current = false;
+    }
+  }
+
+  async function promptUnlockSecret(secret: string) {
+    if (unlockingRef.current) return;
+    unlockingRef.current = true;
+    setUnlocking(true);
+    setUnlockError(null);
+    const genAtStart = unlockGenerationRef.current;
+    try {
+      const ok = await verifyAppLockSecret(secret);
+      if (ok) {
+        await finishUnlock(genAtStart);
+      } else {
+        setUnlockError('Incorrect. Try again.');
       }
     } finally {
       setUnlocking(false);
@@ -409,27 +453,34 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     }
     let cancelled = false;
     (async () => {
-      const on = await getBiometricsLockEnabled();
+      const method = await getAppLockMethod();
+      const bioOn = await getBiometricsLockEnabled();
       if (cancelled) return;
-      if (!on) {
+      const enabled = method !== 'none' || bioOn;
+      if (!enabled) {
         setLocked(false);
+        setLockMethod('none');
         return;
       }
-      const avail = await getBiometricsAvailability();
-      if (cancelled) return;
-      if (!avail.available || !avail.enrolled) {
-        setLocked(false);
-        return;
+      const effective: AppLockMethod =
+        method !== 'none' ? method : bioOn ? 'biometrics' : 'none';
+      setLockMethod(effective);
+      if (effective === 'biometrics') {
+        const avail = await getBiometricsAvailability();
+        if (cancelled) return;
+        if (!avail.available || !avail.enrolled) {
+          setLocked(false);
+          return;
+        }
+        setBioLabel(avail.label);
       }
-      setBioLabel(avail.label);
-      // Stay unlocked for 1 hour after the last successful unlock.
-      if (await isWithinBiometricsGrace()) {
+      if ((await isWithinAppLockGrace()) || (await isWithinBiometricsGrace())) {
         if (cancelled) return;
         setLocked(false);
         return;
       }
       setLocked(true);
-      void promptUnlock();
+      if (effective === 'biometrics') void promptUnlock();
     })();
     return () => {
       cancelled = true;
@@ -443,15 +494,14 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
       if (!token) return;
       if (shouldIgnoreAppState()) return;
 
-      // Leaving the app: only lock if the 1-hour unlock grace already expired.
       if (next === 'background') {
         const genWhenBackgrounded = unlockGenerationRef.current;
         void (async () => {
-          const on = await getBiometricsLockEnabled();
-          if (!on) return;
+          const enabled = (await isAppLockEnabled()) || (await getBiometricsLockEnabled());
+          if (!enabled) return;
           if (unlockGenerationRef.current !== genWhenBackgrounded) return;
           if (shouldIgnoreAppState()) return;
-          if (await isWithinBiometricsGrace()) return;
+          if ((await isWithinAppLockGrace()) || (await isWithinBiometricsGrace())) return;
           setLocked(true);
         })();
         return;
@@ -464,14 +514,20 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         !shouldIgnoreAppState()
       ) {
         void (async () => {
-          const on = await getBiometricsLockEnabled();
-          if (!on) return;
-          if (await isWithinBiometricsGrace()) {
+          const enabled = (await isAppLockEnabled()) || (await getBiometricsLockEnabled());
+          if (!enabled) return;
+          if ((await isWithinAppLockGrace()) || (await isWithinBiometricsGrace())) {
             setLocked(false);
             return;
           }
+          const method = await getAppLockMethod();
+          const bioOn = await getBiometricsLockEnabled();
+          const effective: AppLockMethod =
+            method !== 'none' ? method : bioOn ? 'biometrics' : 'none';
+          if (effective === 'none') return;
+          setLockMethod(effective);
           if (!appLockedRef.current) setLocked(true);
-          void promptUnlock();
+          if (effective === 'biometrics') void promptUnlock();
         })();
       }
     });
@@ -881,10 +937,71 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     }
   }, [screen, token]);
 
+  const handledSmsNotifRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    void configureSmsNotificationHandler();
+  }, []);
+
+  useEffect(() => {
+    if (!token) return;
+    let sub: { remove: () => void } | undefined;
+    let cancelled = false;
+
+    const openFromData = (raw: Record<string, unknown> | undefined, dedupeKey?: string) => {
+      const data = parseSmsNotificationData(raw);
+      if (!data) return;
+      if (dedupeKey) {
+        if (handledSmsNotifRef.current === dedupeKey) return;
+        handledSmsNotifRef.current = dedupeKey;
+      }
+      if (data.kind === 'expense' || data.open_form === '1') {
+        setCashflowKind('expense');
+        setSelectedCashflow(null);
+        setCashflowPrefill(smsNotifyToPrefill(data as unknown as Record<string, unknown>));
+        setExpensesTab('expenses');
+        setScreen('cashflow-new');
+        return;
+      }
+      // Money received — entry already imported; open income list.
+      setExpensesTab('income');
+      setScreen('home');
+    };
+
+    (async () => {
+      try {
+        const Notifications = await import('expo-notifications');
+        if (cancelled) return;
+
+        const last = await Notifications.getLastNotificationResponseAsync();
+        if (last?.notification?.request?.content?.data) {
+          const id = last.notification.request.identifier || 'cold-start';
+          openFromData(last.notification.request.content.data as Record<string, unknown>, id);
+          try {
+            Notifications.clearLastNotificationResponse();
+          } catch {
+            /* older native module */
+          }
+        }
+
+        sub = Notifications.addNotificationResponseReceivedListener((response) => {
+          const id = response.notification.request.identifier || String(Date.now());
+          openFromData(response.notification.request.content.data as Record<string, unknown>, id);
+        });
+      } catch {
+        /* Expo Go / notifications unavailable */
+      }
+    })();
+    return () => {
+      cancelled = true;
+      sub?.remove();
+    };
+  }, [token]);
+
   useEffect(() => {
     if (screen !== 'home' || !token) return;
     let cancelled = false;
-    (async () => {
+    const run = async () => {
       try {
         const acc = await api.listAccounts(token);
         if (cancelled) return;
@@ -898,11 +1015,34 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
       } catch {
         /* silent — SMS sync is best-effort */
       }
-    })();
+    };
+    void run();
     return () => {
       cancelled = true;
     };
   }, [screen, token]);
+
+  useEffect(() => {
+    if (!token) return;
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next !== 'active') return;
+      void (async () => {
+        try {
+          const acc = await api.listAccounts(token);
+          const accountId = acc.accounts?.[0]?.id;
+          const res = await syncBankSms(token, accountId);
+          if (res.imported > 0 || res.accountsAdded > 0) {
+            setCashflowReload((n) => n + 1);
+            setWealthReload((n) => n + 1);
+            setAccountsReload((n) => n + 1);
+          }
+        } catch {
+          /* silent */
+        }
+      })();
+    });
+    return () => sub.remove();
+  }, [token]);
 
   async function onActivateSmsImport() {
     if (!token || !user) return;
@@ -1090,8 +1230,10 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
       applyUserProfile(res.user);
       setCurrency(res.user.default_currency_code ?? '');
       setDashCurrency(res.user.default_currency_code ?? '');
+      setSettingsDetailOpen(false);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not update preferences');
+      throw e;
     } finally {
       setBusy(false);
     }
@@ -1711,7 +1853,8 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     chatThreadOpen ||
     planDetailOpen ||
     accountsPanelOpen ||
-    settingsDetailOpen;
+    settingsDetailOpen ||
+    Boolean(peerLoanFilter);
 
   const showNav =
     authed &&
@@ -1807,57 +1950,109 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
       </Pressable>
     ) : undefined;
 
-  const headerCamera =
+  const headerHomeActions =
     showChrome && screen === 'home' && token ? (
-      <Pressable
-        onPress={async () => {
-          try {
-            setBusy(true);
-            let accountId: string | undefined;
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <Pressable
+          onPress={() => {
+            void (async () => {
+              try {
+                setBusy(true);
+                setError(null);
+                const acc = await api.listAccounts(token);
+                const accountId = acc.accounts?.[0]?.id;
+                const res = await syncBankSms(token, accountId, { force: true, maxCount: 200 });
+                setCashflowReload((n) => n + 1);
+                setWealthReload((n) => n + 1);
+                setAccountsReload((n) => n + 1);
+                if (res.permissionDenied) {
+                  Alert.alert('Messages', 'Allow SMS permission in system settings so Lony can recheck transfers.');
+                } else if (res.imported > 0) {
+                  Alert.alert(
+                    'Messages',
+                    `${res.imported} new transfer(s) found${res.duplicates ? ` · ${res.duplicates} already saved` : ''}.`,
+                  );
+                } else if (res.duplicates > 0) {
+                  Alert.alert('Messages', 'No new transfers — recent ones were already imported.');
+                } else {
+                  Alert.alert(
+                    'Messages',
+                    'No new money received/sent SMS found. You can also enable SMS auto-import in Settings → Preferences.',
+                  );
+                }
+              } catch (e) {
+                setError(e instanceof Error ? e.message : 'Could not refresh messages');
+              } finally {
+                setBusy(false);
+              }
+            })();
+          }}
+          accessibilityRole="button"
+          accessibilityLabel="Refresh messages"
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: radii.md,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: colors.surfaceMuted,
+            borderWidth: 1,
+            borderColor: colors.border,
+          }}
+        >
+          <IconRefresh size={18} color={colors.text} />
+        </Pressable>
+        <Pressable
+          onPress={async () => {
             try {
-              const acc = await api.listAccounts(token);
-              accountId = acc.accounts?.[0]?.id;
-            } catch {
-              /* optional */
+              setBusy(true);
+              let accountId: string | undefined;
+              try {
+                const acc = await api.listAccounts(token);
+                accountId = acc.accounts?.[0]?.id;
+              } catch {
+                /* optional */
+              }
+              const draft = await scanReceiptWithCamera(token, accountId);
+              if (draft) {
+                setCashflowKind(draft.kind === 'income' ? 'income' : 'expense');
+                setSelectedCashflow(null);
+                setCashflowPrefill({
+                  title: draft.title || 'Receipt',
+                  amount: draft.amount || '',
+                  currency_code: draft.currency_code || undefined,
+                  note: draft.note,
+                  occurred_at: draft.occurred_at,
+                  source: 'receipt',
+                });
+                setExpensesTab('expenses');
+                setScreen('cashflow-new');
+              }
+            } catch (e) {
+              setError(e instanceof Error ? e.message : 'Receipt scan failed');
+            } finally {
+              setBusy(false);
             }
-            const draft = await scanReceiptWithCamera(token, accountId);
-            if (draft) {
-              setCashflowKind(draft.kind === 'income' ? 'income' : 'expense');
-              setSelectedCashflow(null);
-              setCashflowPrefill({
-                title: draft.title || 'Receipt',
-                amount: draft.amount || '',
-                currency_code: draft.currency_code || undefined,
-                note: draft.note,
-                occurred_at: draft.occurred_at,
-              });
-              setExpensesTab('expenses');
-              setScreen('cashflow-new');
-            }
-          } catch (e) {
-            setError(e instanceof Error ? e.message : 'Receipt scan failed');
-          } finally {
-            setBusy(false);
-          }
-        }}
-        accessibilityRole="button"
-        accessibilityLabel="Scan receipt"
-        style={{
-          width: 40,
-          height: 40,
-          borderRadius: radii.md,
-          alignItems: 'center',
-          justifyContent: 'center',
-          backgroundColor: colors.surfaceMuted,
-          borderWidth: 1,
-          borderColor: colors.border,
-        }}
-      >
-        <IconCamera size={18} color={colors.text} />
-      </Pressable>
+          }}
+          accessibilityRole="button"
+          accessibilityLabel="Scan receipt"
+          style={{
+            width: 40,
+            height: 40,
+            borderRadius: radii.md,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: colors.surfaceMuted,
+            borderWidth: 1,
+            borderColor: colors.border,
+          }}
+        >
+          <IconCamera size={18} color={colors.text} />
+        </Pressable>
+      </View>
     ) : undefined;
 
-  const headerRight = headerSearch ?? headerCamera;
+  const headerRight = headerSearch ?? headerHomeActions;
 
   return (
     <DatePrefsProvider
@@ -1870,12 +2065,23 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     >
     <SafeAreaView style={styles.safe}>
       <StatusBar style={resolved === 'dark' ? 'light' : 'dark'} />
-      {token && appLocked ? (
-        <BiometricsLockScreen
+      {token && appLocked && lockMethod !== 'none' ? (
+        <AppLockScreen
           busy={unlocking}
+          method={lockMethod}
           label={bioLabel}
           error={unlockError}
-          onUnlock={() => void promptUnlock()}
+          onUnlockBiometrics={() => void promptUnlock()}
+          onUnlockSecret={(secret) => void promptUnlockSecret(secret)}
+        />
+      ) : null}
+      {token && user && seasonRecap ? (
+        <SeasonRecapScreen
+          user={user}
+          token={token}
+          season={seasonRecap}
+          formatMoney={formatMoney}
+          onClose={() => setSeasonRecap(null)}
         />
       ) : null}
       <KeyboardAvoidingView
@@ -1898,6 +2104,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               token={token}
               userId={user.id}
               selfInitial={selfInitial}
+              locale={user.locale}
               friends={friends}
               openLoanId={chatLoanId}
               openPeerId={chatPeerId}
@@ -2162,6 +2369,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               dashboard={dashboard}
               formatMoney={formatMoney}
               onError={(message) => setError(message)}
+              onOpenSeasonRecap={(season) => setSeasonRecap(season)}
               onOpenDeepLink={(link) => {
                 const path = link.replace(/^lony:\/\//i, '').replace(/^\//, '').toLowerCase();
                 if (path === 'expenses' || path === 'expenses/') {
@@ -2957,7 +3165,12 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         </ScrollView>
         )}
         {showNav ? (
-          <BottomNav active={tabFromScreen(screen)} unread={unreadCount} onChange={goTab} />
+          <BottomNav
+            active={tabFromScreen(screen)}
+            unread={unreadCount}
+            locale={user?.locale || profileLocale}
+            onChange={goTab}
+          />
         ) : null}
         {showNav && (screen === 'loans' || screen === 'home') ? (
           <Pressable

@@ -19,7 +19,12 @@ export function AppHeader({ onMenu, right }: Props) {
         alignItems: 'center',
         justifyContent: 'space-between',
         marginBottom: space.sm,
-        paddingVertical: 4,
+        paddingVertical: 10,
+        paddingHorizontal: 4,
+        borderWidth: 1,
+        borderColor: colors.border,
+        borderRadius: radii.lg,
+        backgroundColor: colors.surface,
       }}
     >
       <Pressable
@@ -32,15 +37,16 @@ export function AppHeader({ onMenu, right }: Props) {
           borderRadius: radii.md,
           alignItems: 'center',
           justifyContent: 'center',
-          backgroundColor: colors.surface,
+          backgroundColor: colors.surfaceMuted,
           borderWidth: 1,
           borderColor: colors.border,
+          marginLeft: 6,
         }}
       >
         <IconMenu size={18} color={colors.text} />
       </Pressable>
       <BrandMark compact />
-      {right ?? <View style={{ width: 42 }} />}
+      <View style={{ marginRight: 6 }}>{right ?? <View style={{ width: 42 }} />}</View>
     </View>
   );
 }

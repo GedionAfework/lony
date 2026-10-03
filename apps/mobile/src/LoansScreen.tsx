@@ -45,7 +45,7 @@ export function LoansScreen({ user, loans, onOpenLoan, onOpenPeer, peerDetail }:
     for (const loan of loans) {
       const peer = peerOf(loan);
       const id = peer?.id || loan.id;
-      const name = loan.institution_label || peer?.display_name || 'Someone';
+      const name = loan.institution_label || peer?.display_name || t(locale, 'loans.someone');
       const cur = (loan.currency_code || user.default_currency_code || 'USD').toUpperCase();
       const key = `${id}:${cur}`;
       let bucket = map.get(key);
@@ -58,7 +58,7 @@ export function LoansScreen({ user, loans, onOpenLoan, onOpenPeer, peerDetail }:
       bucket.net += loan.your_role === 'lender' ? amt : -amt;
     }
     return [...map.values()].sort((a, b) => Math.abs(b.net) - Math.abs(a.net));
-  }, [loans, user.default_currency_code]);
+  }, [loans, user.default_currency_code, locale]);
 
   return (
     <View style={{ gap: space.md }}>
@@ -89,7 +89,7 @@ export function LoansScreen({ user, loans, onOpenLoan, onOpenPeer, peerDetail }:
       ) : effectiveMode === 'all' ? (
         loans.map((loan) => {
           const peer = peerOf(loan);
-          const title = loan.institution_label || peer?.display_name || 'Loan';
+          const title = loan.institution_label || peer?.display_name || t(locale, 'loans.loanFallback');
           const initial = title.slice(0, 1).toUpperCase();
           const signed = formatSignedMoney(
             loan.expected_total,

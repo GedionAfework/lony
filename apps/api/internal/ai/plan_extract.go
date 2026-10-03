@@ -26,9 +26,13 @@ type GoalPriceRefresher interface {
 const planExtractSystemPrompt = `You turn a short note into a structured savings goal ("Plan") for a personal finance app.
 Return ONLY compact JSON with keys:
 title (max 80 chars), goal_type (one of: travel, purchase, savings, debt_payoff, custom), currency_code (3-letter, uppercase, empty if unknown),
-target_amount (positive decimal string without separators, empty if unknown), target_date (YYYY-MM-DD, only if stated), note (optional, max 200 chars), type_label (optional short label such as "Laptop" or "Trip to Dubai").
-Rules: never invent an amount or date that is not stated or clearly implied; use "purchase" for things to buy, "travel" for trips, "savings" for generic saving or emergency funds, "debt_payoff" for paying off debt.
-If a draft JSON is provided, keep its amount, currency, and URL and only improve title, goal_type, note, type_label, and target_date using the user's text.`
+target_amount (positive decimal string without separators, empty if unknown), target_date (YYYY-MM-DD when stated), note (optional, max 200 chars), type_label (optional short label such as "Laptop" or "Trip to Dubai").
+Rules:
+- Use "purchase" for things to buy, "travel" for trips, "savings" for generic saving or emergency funds, "debt_payoff" for paying off debt.
+- If the user (or prompt) asks to estimate a price, or gives a product/model/year without a stated price, you MUST fill target_amount with a realistic market estimate (no currency symbols, no commas). Put "Estimated price" in note.
+- Only leave target_amount empty when there is truly not enough detail to estimate (e.g. just "I want something").
+- Prefer the user's currency_code when mentioned; otherwise leave currency_code empty.
+If a draft JSON is provided, keep its URL/image; you may update title, goal_type, note, type_label, target_date, and target_amount when estimating.`}
 
 // ExtractPlan implements goals.PlanExtractor.
 func (s *Service) ExtractPlan(ctx context.Context, userID uuid.UUID, text string, base *PlanDraft) (PlanDraft, error) {

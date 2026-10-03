@@ -1,5 +1,7 @@
 import { I18nManager, Platform } from 'react-native';
 import enCatalog from './i18n/en.json';
+import frCatalog from './i18n/fr.json';
+import amEtCatalog from './i18n/am-ET.json';
 
 export type MessageMap = Record<string, string>;
 
@@ -10,15 +12,40 @@ type PackMeta = {
   messages: MessageMap;
 };
 
-const fallbackMessages: MessageMap = { ...((enCatalog as { messages?: MessageMap }).messages || {}) };
+type BundledCatalog = { locale?: string; name?: string; dir?: string; messages?: MessageMap };
+
+const fallbackMessages: MessageMap = { ...((enCatalog as BundledCatalog).messages || {}) };
 
 const cache = new Map<string, PackMeta>();
 cache.set('en', {
   locale: 'en',
-  name: (enCatalog as { name?: string }).name || 'English',
-  dir: (enCatalog as { dir?: string }).dir || 'ltr',
+  name: (enCatalog as BundledCatalog).name || 'English',
+  dir: (enCatalog as BundledCatalog).dir || 'ltr',
   messages: { ...fallbackMessages },
 });
+
+/**
+ * Registers a bundled (compiled-in) locale pack without changing the active locale.
+ * Bundled packs are merged over the English fallback so every en key resolves to
+ * *something* even if the pack is missing a translation — real translations always
+ * win over the English fallback.
+ */
+function registerBundledPack(catalog: BundledCatalog) {
+  const code = catalog.locale;
+  if (!code) return;
+  const messages: MessageMap = { ...fallbackMessages, ...(catalog.messages || {}) };
+  cache.set(code, {
+    locale: code,
+    name: catalog.name || code,
+    dir: catalog.dir || 'ltr',
+    messages,
+  });
+}
+
+// Bundle French and Amharic translations at boot so the UI can switch languages
+// immediately, even before (or if) the API's locale packs load / are complete.
+registerBundledPack(frCatalog as BundledCatalog);
+registerBundledPack(amEtCatalog as BundledCatalog);
 
 let activeCode = 'en';
 
@@ -58,12 +85,23 @@ export function setActivePack(pack: {
   const code = pack.locale || 'en';
   const prev = cache.get(code);
   const messages: MessageMap = { ...fallbackMessages, ...(prev?.messages || {}), ...(pack.messages || {}) };
-  // Force renamed keys so stale API/DB packs cannot keep old labels.
-  if (!messages['settings.region'] || /region/i.test(messages['settings.region'])) {
+  // Only rewrite stale English labels — never overwrite real translations.
+  if (messages['settings.region'] && /^region$/i.test(messages['settings.region'].trim())) {
     messages['settings.region'] = fallbackMessages['settings.region'] || 'Preferences';
   }
-  if (messages['settings.regionSubtitle'] && /region/i.test(messages['settings.regionSubtitle'])) {
-    messages['settings.regionSubtitle'] = fallbackMessages['settings.regionSubtitle'] || messages['settings.regionSubtitle'];
+  if (messages['settings.regionSubtitle'] && /^region\b/i.test(messages['settings.regionSubtitle'].trim())) {
+    messages['settings.regionSubtitle'] =
+      fallbackMessages['settings.regionSubtitle'] || messages['settings.regionSubtitle'];
+  }
+  // Stale short label "Plan" → Financial Plan (keep non-English translations).
+  if (!messages['plan'] || /^plan$/i.test(messages['plan'].trim())) {
+    messages['plan'] = fallbackMessages['plan'] || 'Financial Plan';
+  }
+  if (!messages['plan.title'] || /^plan$/i.test(messages['plan.title'].trim())) {
+    messages['plan.title'] = fallbackMessages['plan.title'] || 'Financial Plan';
+  }
+  if (!messages['nav.plan'] || /^plan$/i.test(messages['nav.plan'].trim())) {
+    messages['nav.plan'] = fallbackMessages['nav.plan'] || 'Financial Plan';
   }
   cache.set(code, {
     locale: code,

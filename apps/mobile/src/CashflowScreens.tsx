@@ -40,6 +40,8 @@ export type CashflowFormPrefill = {
   currency_code?: string;
   note?: string;
   occurred_at?: string;
+  account_id?: string;
+  source?: 'receipt' | 'sms';
 };
 
 type Props = {
@@ -140,7 +142,7 @@ export function CashflowFormScreen({
   );
   const [recurrence, setRecurrence] = useState<string>(editing?.recurrence || 'monthly');
   const [accounts, setAccounts] = useState<MoneyAccount[]>([]);
-  const [accountId, setAccountId] = useState(editing?.account_id ?? '');
+  const [accountId, setAccountId] = useState(editing?.account_id ?? prefill?.account_id ?? '');
 
   // Expense flow choices
   const [isLoanPayment, setIsLoanPayment] = useState('no');
@@ -681,19 +683,25 @@ export function CashflowFormScreen({
         title={
           editing
             ? 'Edit'
-            : prefill
+            : prefill?.source === 'sms'
               ? kind === 'income'
-                ? 'Receipt → income'
-                : 'Receipt → expense'
-              : kind === 'income'
-                ? 'New income'
-                : 'New expense'
+                ? 'SMS → income'
+                : 'SMS → expense'
+              : prefill
+                ? kind === 'income'
+                  ? 'Receipt → income'
+                  : 'Receipt → expense'
+                : kind === 'income'
+                  ? 'New income'
+                  : 'New expense'
         }
         onBack={onBack}
       />
       {prefill && !editing ? (
         <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
-          AI filled this from your photo. Review, choose “with friends” if you’re splitting, then save.
+          {prefill.source === 'sms'
+            ? 'Filled from your bank SMS. Add category and any missing details, then save.'
+            : 'AI filled this from your photo. Review, choose “with friends” if you’re splitting, then save.'}
         </Text>
       ) : null}
       <Card>

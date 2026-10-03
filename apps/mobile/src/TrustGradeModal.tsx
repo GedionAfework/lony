@@ -48,7 +48,7 @@ type Props = {
   locale?: string | null;
 };
 
-/** Explains what each Lony Trust grade means. */
+/** Explains what each Lony Trust grade means (A–E, scrollable). */
 export function TrustGradeModal({ visible, grade, onClose, locale }: Props) {
   const { colors } = useTheme();
   const highlight = (grade || '').toUpperCase();
@@ -56,18 +56,15 @@ export function TrustGradeModal({ visible, grade, onClose, locale }: Props) {
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable
-        onPress={onClose}
-        style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' }}
-      >
-        <Pressable
-          onPress={(e) => e.stopPropagation()}
+      <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' }}>
+        <Pressable style={{ flex: 1 }} onPress={onClose} accessibilityLabel="Dismiss" />
+        <View
           style={{
             backgroundColor: colors.surface,
             borderTopLeftRadius: radii.xl,
             borderTopRightRadius: radii.xl,
             padding: space.lg,
-            maxHeight: '78%',
+            maxHeight: '88%',
             gap: space.md,
             borderWidth: 1,
             borderColor: colors.border,
@@ -85,9 +82,16 @@ export function TrustGradeModal({ visible, grade, onClose, locale }: Props) {
             {t(loc, 'trust.gradesIntro') ||
               'Grades summarize how you use Lony — repayments, debt load, consistency, liquidity, savings, and goals.'}
           </Text>
-          <ScrollView style={{ maxHeight: 360 }} contentContainerStyle={{ gap: 10 }}>
+          <ScrollView
+            style={{ flexGrow: 0, maxHeight: 420 }}
+            contentContainerStyle={{ gap: 10, paddingBottom: 8 }}
+            showsVerticalScrollIndicator
+            nestedScrollEnabled
+          >
             {GRADES.map((g) => {
               const active = g.grade === highlight;
+              const title = t(loc, g.titleKey);
+              const body = t(loc, g.bodyKey);
               return (
                 <View
                   key={g.grade}
@@ -113,10 +117,10 @@ export function TrustGradeModal({ visible, grade, onClose, locale }: Props) {
                   </Text>
                   <View style={{ flex: 1, gap: 4 }}>
                     <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>
-                      {t(loc, g.titleKey) || g.title}
+                      {!title || title === g.titleKey ? g.title : title}
                     </Text>
                     <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
-                      {t(loc, g.bodyKey) || g.body}
+                      {!body || body === g.bodyKey ? g.body : body}
                     </Text>
                   </View>
                 </View>
@@ -124,8 +128,8 @@ export function TrustGradeModal({ visible, grade, onClose, locale }: Props) {
             })}
           </ScrollView>
           <PrimaryButton label={t(loc, 'common.done') || 'Got it'} onPress={onClose} />
-        </Pressable>
-      </Pressable>
+        </View>
+      </View>
     </Modal>
   );
 }

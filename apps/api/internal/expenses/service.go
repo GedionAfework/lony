@@ -1062,24 +1062,31 @@ func (s *Service) IngestSMS(ctx context.Context, userID uuid.UUID, in SMSIngestI
 		return out, nil
 	}
 
-	title := "Bank SMS"
+	title := "Transfer"
 	if parsed.Counterparty != "" {
+		cp := parsed.Counterparty
+		if utf8.RuneCountInString(cp) > 40 {
+			r := []rune(cp)
+			cp = string(r[:40])
+		}
 		if parsed.Kind == KindIncome {
-			title = "From " + parsed.Counterparty
+			title = "From " + cp
 		} else {
-			title = "To " + parsed.Counterparty
+			title = "To " + cp
 		}
+	} else if parsed.AccountLast4 != "" {
+		title = "Account …" + parsed.AccountLast4
 	}
-	note := text
-	if len(note) > 500 {
-		note = note[:500]
-	}
+	// Keep a short note — never store the full SMS body as the visible summary.
+	note := "Bank transfer"
 	if parsed.AccountLast4 != "" {
-		extra := "acct …" + parsed.AccountLast4
-		if parsed.AccountNumber != "" {
-			extra = "acct " + parsed.AccountNumber
-		}
-		note = extra + "\n" + note
+		note = "acct …" + parsed.AccountLast4
+	}
+	if parsed.Counterparty != "" {
+		note = note + " · " + parsed.Counterparty
+	}
+	if len(note) > 120 {
+		note = note[:120]
 	}
 
 	accountID := in.AccountID

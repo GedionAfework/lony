@@ -30,6 +30,7 @@ type Props = {
   formatMoney: (amount: string | null | undefined, currency: string | null | undefined, locale?: string) => string;
   onError?: (message: string) => void;
   onOpenDeepLink?: (deepLink: string) => void;
+  onOpenSeasonRecap?: (season: 'month' | 'year') => void;
 };
 
 function convert(amount: number, from: string, to: string, rates: Record<string, number>): number {
@@ -77,8 +78,8 @@ function MonthBars({
   return (
     <View style={{ gap: 10 }}>
       <View style={{ flexDirection: 'row', gap: 14, flexWrap: 'wrap', marginBottom: 2 }}>
-        <LegendDot color={colors.success} label="Income" />
-        <LegendDot color={colors.warning} label="Expense" />
+        <LegendDot color={colors.success} label={t(locale, 'cashflow.income')} />
+        <LegendDot color={colors.warning} label={t(locale, 'cashflow.expense')} />
         {showNet ? <LegendDot color={colors.primary} label="Net" /> : null}
       </View>
       {series.map((row) => {
@@ -117,7 +118,7 @@ function MonthBars({
             <View style={{ gap: 6 }}>
               <View style={{ gap: 3 }}>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                  <Text style={{ color: colors.success, fontFamily: fonts.ui, fontSize: 11 }}>Income</Text>
+                  <Text style={{ color: colors.success, fontFamily: fonts.ui, fontSize: 11 }}>{t(locale, 'cashflow.income')}</Text>
                   <Text style={{ color: colors.success, fontFamily: fonts.uiSemi, fontSize: 11 }}>
                     {formatMoney(row.income, currency, locale)}
                   </Text>
@@ -135,7 +136,7 @@ function MonthBars({
               </View>
               <View style={{ gap: 3 }}>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                  <Text style={{ color: colors.warning, fontFamily: fonts.ui, fontSize: 11 }}>Expense</Text>
+                  <Text style={{ color: colors.warning, fontFamily: fonts.ui, fontSize: 11 }}>{t(locale, 'cashflow.expense')}</Text>
                   <Text style={{ color: colors.warning, fontFamily: fonts.uiSemi, fontSize: 11 }}>
                     {formatMoney(row.expense, currency, locale)}
                   </Text>
@@ -296,7 +297,12 @@ function CategoryBars({
   const { colors } = useTheme();
   const max = Math.max(1, ...rows.map((r) => Number(r.amount) || 0));
   if (rows.length === 0) {
-    return <EmptyState title="No spending yet" body="Category bars appear after confirmed expenses." />;
+    return (
+      <EmptyState
+        title={t(locale, 'expenses.noExpenses')}
+        body={t(locale, 'expenses.categoryBarsBody')}
+      />
+    );
   }
   return (
     <View style={{ gap: 10 }}>
@@ -330,7 +336,15 @@ function CategoryBars({
   );
 }
 
-export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError, onOpenDeepLink }: Props) {
+export function AnalyticsScreen({
+  user,
+  token,
+  dashboard,
+  formatMoney,
+  onError,
+  onOpenDeepLink,
+  onOpenSeasonRecap,
+}: Props) {
   const { colors } = useTheme();
   const preferred = (user.default_currency_code || '').toUpperCase();
   const [tab, setTab] = useState<Tab>('overview');
@@ -439,15 +453,15 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError, 
   const friendMax = Math.max(...friends.map((f) => Math.abs(f.net)), 1);
 
   const tabs: { id: Tab; label: string }[] = [
-    { id: 'overview', label: 'Overview' },
-    { id: 'cashflow', label: 'Cashflow' },
-    { id: 'debts', label: 'Debts' },
-    { id: 'goals', label: 'Goals' },
+    { id: 'overview', label: t(user.locale, 'insights.tabOverview') },
+    { id: 'cashflow', label: t(user.locale, 'insights.tabCashflow') },
+    { id: 'debts', label: t(user.locale, 'insights.tabDebts') },
+    { id: 'goals', label: t(user.locale, 'insights.tabGoals') },
     ...(isPremium
       ? ([
-          { id: 'analysis', label: 'Analysis' },
-          { id: 'reports', label: 'Reports' },
-          { id: 'coach', label: 'Coach' },
+          { id: 'analysis', label: t(user.locale, 'insights.tabAnalysis') },
+          { id: 'reports', label: t(user.locale, 'insights.tabReports') },
+          { id: 'coach', label: t(user.locale, 'insights.tabCoach') },
         ] as { id: Tab; label: string }[])
       : []),
   ];
@@ -549,18 +563,18 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError, 
 
   return (
     <View style={{ gap: space.md }}>
-      <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>Insights</Text>
+      <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>{t(user.locale, 'insights.title')}</Text>
       {!isPremium ? (
         <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
-          AI Analysis, Reports, and Coach unlock with Premium.
+          {t(user.locale, 'insights.premiumHint')}
         </Text>
       ) : null}
 
       {!preferred ? (
         <Card>
           <EmptyState
-            title="Pick your currency"
-            body="Set a default currency in Settings so insights use your unit of choice."
+            title={t(user.locale, 'insights.pickCurrencyTitle')}
+            body={t(user.locale, 'insights.pickCurrencyBody')}
           />
         </Card>
       ) : (
@@ -657,7 +671,7 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError, 
                 <Text
                   style={{ color: colors.muted, fontFamily: fonts.uiSemi, fontSize: 12, textTransform: 'uppercase' }}
                 >
-                  This month
+                  {t(user.locale, 'common.thisMonth')}
                 </Text>
                 <Money
                   value={formatMoney(overview?.net ?? '0', preferred, user.locale)}
@@ -666,19 +680,19 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError, 
                 />
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginTop: 8 }}>
                   <Mini
-                    label="Income"
+                    label={t(user.locale, 'cashflow.income')}
                     value={formatMoney(overview?.income ?? '0', preferred, user.locale)}
                     hint={fmtPct(overview?.income_mom_percent)}
                     tone="positive"
                   />
                   <Mini
-                    label="Expense"
+                    label={t(user.locale, 'cashflow.expense')}
                     value={formatMoney(overview?.expense ?? '0', preferred, user.locale)}
                     hint={fmtPct(overview?.expense_mom_percent)}
                     tone="negative"
                   />
                   <Mini
-                    label="Savings rate"
+                    label={t(user.locale, 'insights.savingsRate')}
                     value={
                       overview?.savings_rate_percent != null
                         ? `${overview.savings_rate_percent.toFixed(0)}%`
@@ -688,10 +702,27 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError, 
                 </View>
               </Card>
 
+              {onOpenSeasonRecap ? (
+                <Card>
+                  <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>
+                    {t(user.locale, 'insights.seasonRecapTitle')}
+                  </Text>
+                  <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13, marginTop: 4 }}>
+                    {t(user.locale, 'insights.seasonRecapBody')}
+                  </Text>
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginTop: 12 }}>
+                    <PrimaryButton label={t(user.locale, 'common.thisMonth')} onPress={() => onOpenSeasonRecap('month')} />
+                    <SecondaryButton label={t(user.locale, 'common.thisYear')} onPress={() => onOpenSeasonRecap('year')} />
+                  </View>
+                </Card>
+              ) : null}
+
               <Card>
-                <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>Last 6 months</Text>
+                <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>
+                  {t(user.locale, 'insights.last6Months')}
+                </Text>
                 {series.every((s) => Number(s.income) === 0 && Number(s.expense) === 0) ? (
-                  <EmptyState title="No cashflow yet" body="Log income and expenses to see the trend." />
+                  <EmptyState title={t(user.locale, 'insights.noCashflowTitle')} body={t(user.locale, 'insights.noCashflowBody')} />
                 ) : (
                   <View style={{ gap: 14 }}>
                     <NetSparkline series={series} />
@@ -708,7 +739,7 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError, 
 
               <Card>
                 <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>
-                  Spending this month
+                  {t(user.locale, 'insights.spendingThisMonth')}
                 </Text>
                 <CategoryBars rows={categories} formatMoney={formatMoney} locale={user.locale} />
               </Card>
@@ -719,7 +750,7 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError, 
             <>
               <Card>
                 <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>
-                  Income vs expense
+                  {t(user.locale, 'insights.incomeVsExpense')}
                 </Text>
                 <View style={{ gap: 14 }}>
                   <NetSparkline series={series} />
@@ -733,7 +764,9 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError, 
                 </View>
               </Card>
               <Card>
-                <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>Categories</Text>
+                <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>
+                  {t(user.locale, 'insights.categories')}
+                </Text>
                 <CategoryBars rows={categories} formatMoney={formatMoney} locale={user.locale} />
               </Card>
             </>
@@ -745,7 +778,7 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError, 
                 <Text
                   style={{ color: colors.muted, fontFamily: fonts.uiSemi, fontSize: 12, textTransform: 'uppercase' }}
                 >
-                  Loan position
+                  {t(user.locale, 'insights.loanPosition')}
                 </Text>
                 <Money
                   value={formatMoney(loanSummary.net.toFixed(2), preferred, user.locale)}
@@ -754,23 +787,28 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError, 
                 />
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 }}>
                   <Text style={{ color: colors.success, fontFamily: fonts.uiMedium, fontSize: 12 }}>
-                    Owed to you {formatMoney(loanSummary.recv.toFixed(2), preferred, user.locale)}
+                    {t(user.locale, 'wealth.owedToYou')} {formatMoney(loanSummary.recv.toFixed(2), preferred, user.locale)}
                   </Text>
                   <Text style={{ color: colors.warning, fontFamily: fonts.uiMedium, fontSize: 12 }}>
-                    You owe {formatMoney(loanSummary.pay.toFixed(2), preferred, user.locale)}
+                    {t(user.locale, 'wealth.youOwe')} {formatMoney(loanSummary.pay.toFixed(2), preferred, user.locale)}
                   </Text>
                 </View>
                 {overview?.debt_service_ratio != null ? (
                   <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12, marginTop: 8 }}>
-                    Expense / income this month {(overview.debt_service_ratio * 100).toFixed(0)}%
+                    {t(user.locale, 'insights.expenseIncomeRatio').replace(
+                      '{percent}',
+                      (overview.debt_service_ratio * 100).toFixed(0),
+                    )}
                   </Text>
                 ) : null}
               </Card>
 
               <Card>
-                <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>People</Text>
+                <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>
+                  {t(user.locale, 'insights.people')}
+                </Text>
                 {friends.length === 0 ? (
-                  <EmptyState title="No people yet" body="Friend balances appear after shared loans." />
+                  <EmptyState title={t(user.locale, 'insights.noPeopleTitle')} body={t(user.locale, 'insights.noPeopleBody')} />
                 ) : (
                   friends.map((f) => (
                     <View
@@ -812,9 +850,11 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError, 
 
           {tab === 'goals' ? (
             <Card>
-              <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>Goal funding</Text>
+              <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>
+                {t(user.locale, 'insights.goalFunding')}
+              </Text>
               {goals.length === 0 ? (
-                <EmptyState title="No goals yet" body="Create goals under Plan to track funding here." />
+                <EmptyState title={t(user.locale, 'insights.noGoalsTitle')} body={t(user.locale, 'insights.noGoalsBody')} />
               ) : (
                 goals.map((g) => {
                   const pct = Math.min(100, Math.max(0, Math.round(g.progress_percent || 0)));
@@ -854,7 +894,9 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError, 
           {tab === 'analysis' ? (
             <Card>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-                <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>Analyst</Text>
+                <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>
+                  {t(user.locale, 'insights.analyst')}
+                </Text>
                 <View style={{ flexDirection: 'row', gap: 12 }}>
                   <Pressable
                     onPress={async () => {
@@ -868,17 +910,21 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError, 
                     }}
                     hitSlop={8}
                   >
-                    <Text style={{ color: colors.muted, fontFamily: fonts.uiSemi, fontSize: 13 }}>Clear</Text>
+                    <Text style={{ color: colors.muted, fontFamily: fonts.uiSemi, fontSize: 13 }}>
+                      {t(user.locale, 'common.clear')}
+                    </Text>
                   </Pressable>
                   <Pressable onPress={onRefreshInsights} hitSlop={8}>
-                    <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 13 }}>Refresh</Text>
+                    <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 13 }}>
+                      {t(user.locale, 'common.refresh')}
+                    </Text>
                   </Pressable>
                 </View>
               </View>
               {insights.length === 0 ? (
                 <EmptyState
-                  title="No cards yet"
-                  body="Tap Refresh to run rule-based analysis on this month's numbers."
+                  title={t(user.locale, 'insights.noCardsTitle')}
+                  body={t(user.locale, 'insights.noCardsBody')}
                 />
               ) : (
                 insights.map((card) => (
@@ -937,23 +983,31 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError, 
           {tab === 'reports' ? (
             <Card>
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-                <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>Visualizer</Text>
+                <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>
+                  {t(user.locale, 'insights.visualizer')}
+                </Text>
                 <Pressable onPress={onLoadReport} hitSlop={8} disabled={reportBusy}>
                   <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 13 }}>
-                    {reportBusy ? 'Building…' : report ? 'Refresh' : 'Build report'}
+                    {reportBusy
+                      ? t(user.locale, 'common.building')
+                      : report
+                        ? t(user.locale, 'common.refresh')
+                        : t(user.locale, 'insights.buildReport')}
                   </Text>
                 </Pressable>
               </View>
               {!report ? (
                 <EmptyState
-                  title="No report yet"
-                  body="Build a period pack with cashflow charts, category bars, and captions."
+                  title={t(user.locale, 'insights.noReportTitle')}
+                  body={t(user.locale, 'insights.noReportBody')}
                 />
               ) : (
                 <View style={{ gap: 14, marginTop: 8 }}>
                   <Text style={{ color: colors.text, fontFamily: fonts.ui, fontSize: 14 }}>{report.summary}</Text>
                   {report.source === 'llm_visualizer' ? (
-                    <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 11 }}>Captions AI-assisted</Text>
+                    <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 11 }}>
+                      {t(user.locale, 'insights.captionsAiAssisted')}
+                    </Text>
                   ) : null}
                   {report.charts.map((chart) => {
                     const seriesData = (chart.data?.series as InsightsMonthPoint[] | undefined) ?? [];
@@ -979,13 +1033,15 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError, 
                         ) : null}
                         {chart.type === 'kpi' ? (
                           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 12 }}>
-                            <Mini label="Income" value={formatMoney(String(chart.data?.income ?? ''), report.currency_code, user.locale)} />
-                            <Mini label="Expense" value={formatMoney(String(chart.data?.expense ?? ''), report.currency_code, user.locale)} />
+                            <Mini label={t(user.locale, 'cashflow.income')} value={formatMoney(String(chart.data?.income ?? ''), report.currency_code, user.locale)} />
+                            <Mini label={t(user.locale, 'cashflow.expense')} value={formatMoney(String(chart.data?.expense ?? ''), report.currency_code, user.locale)} />
                             <Mini label="Net" value={formatMoney(String(chart.data?.net ?? ''), report.currency_code, user.locale)} />
                           </View>
                         ) : null}
                         <Pressable onPress={() => explainChart(chart.id, chart.title, chart.caption)} hitSlop={8}>
-                          <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 13 }}>Explain this</Text>
+                          <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 13 }}>
+                            {t(user.locale, 'insights.explainThis')}
+                          </Text>
                         </Pressable>
                       </View>
                     );
@@ -1017,9 +1073,11 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError, 
                   <Text style={{ color: colors.primary, fontFamily: fonts.uiBold, fontSize: 16 }}>✦</Text>
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>Coach</Text>
+                  <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>
+                    {t(user.locale, 'insights.coach')}
+                  </Text>
                   <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
-                    Cut spending, debt health, score tips — never new borrowing.
+                    {t(user.locale, 'insights.coachSubtitle')}
                   </Text>
                 </View>
               </View>
@@ -1035,7 +1093,9 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError, 
                     marginBottom: 12,
                   }}
                 >
-                  <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }}>Try asking</Text>
+                  <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }}>
+                    {t(user.locale, 'insights.tryAsking')}
+                  </Text>
                   {[
                     'Where can I cut spending this month?',
                     'How does my debt look?',
@@ -1090,7 +1150,7 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError, 
                               textTransform: 'uppercase',
                             }}
                           >
-                            Coach
+                            {t(user.locale, 'insights.coach')}
                           </Text>
                         ) : null}
                         {isUser ? (
@@ -1100,7 +1160,9 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError, 
                         ) : m.content ? (
                           <RichText text={m.content} />
                         ) : (
-                          <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>Thinking…</Text>
+                          <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
+                            {t(user.locale, 'insights.thinking')}
+                          </Text>
                         )}
                       </View>
                     );
@@ -1128,19 +1190,19 @@ export function AnalyticsScreen({ user, token, dashboard, formatMoney, onError, 
                 </View>
               ) : null}
               <Field
-                label="Your question"
+                label={t(user.locale, 'insights.yourQuestion')}
                 value={coachMsg}
                 onChange={setCoachMsg}
                 placeholder="Where can I cut spending?"
               />
               <PrimaryButton
-                label={coachBusy ? 'Thinking…' : 'Ask Coach'}
+                label={coachBusy ? t(user.locale, 'insights.thinking') : t(user.locale, 'insights.askCoach')}
                 onPress={onAskCoach}
                 disabled={coachBusy}
               />
               {coachMessages.length > 0 ? (
                 <SecondaryButton
-                  label="Clear chat view"
+                  label={t(user.locale, 'insights.clearChatView')}
                   onPress={() => {
                     setCoachMessages([]);
                     setCoachActions([]);

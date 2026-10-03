@@ -1,5 +1,6 @@
 import { Pressable, Text, View } from 'react-native';
 import { IconChat, IconHome, IconLoans } from './icons';
+import { t } from './i18n';
 import { fonts, radii, useTheme } from './theme';
 
 export type TabId = 'home' | 'loans' | 'chats';
@@ -7,16 +8,17 @@ export type TabId = 'home' | 'loans' | 'chats';
 type Props = {
   active: TabId;
   unread?: number;
+  locale?: string | null;
   onChange: (tab: TabId) => void;
 };
 
-const TABS: { id: TabId; label: string }[] = [
-  { id: 'home', label: 'Home' },
-  { id: 'loans', label: 'Loans' },
-  { id: 'chats', label: 'Chat' },
+const TAB_KEYS: { id: TabId; key: string }[] = [
+  { id: 'home', key: 'nav.home' },
+  { id: 'loans', key: 'nav.loans' },
+  { id: 'chats', key: 'nav.chats' },
 ];
 
-export function BottomNav({ active, unread = 0, onChange }: Props) {
+export function BottomNav({ active, unread = 0, locale, onChange }: Props) {
   const { colors, resolved } = useTheme();
   const glassBg = resolved === 'dark' ? 'rgba(18, 26, 43, 0.88)' : 'rgba(255, 255, 255, 0.92)';
   const glassBorder = resolved === 'dark' ? 'rgba(255, 255, 255, 0.12)' : 'rgba(15, 23, 42, 0.06)';
@@ -53,15 +55,16 @@ export function BottomNav({ active, unread = 0, onChange }: Props) {
           width: '100%',
         }}
       >
-        {TABS.map((tab) => {
+        {TAB_KEYS.map((tab) => {
           const isActive = active === tab.id;
           const tint = isActive ? colors.primary : colors.muted;
+          const label = t(locale, tab.key);
           return (
             <Pressable
               key={tab.id}
               onPress={() => onChange(tab.id)}
               accessibilityRole="button"
-              accessibilityLabel={tab.label}
+              accessibilityLabel={label}
               accessibilityState={{ selected: isActive }}
               style={{
                 flex: 1,
@@ -85,7 +88,7 @@ export function BottomNav({ active, unread = 0, onChange }: Props) {
                   fontFamily: isActive ? fonts.uiSemi : fonts.ui,
                 }}
               >
-                {tab.label}
+                {label}
               </Text>
               {tab.id === 'chats' && unread > 0 ? (
                 <View

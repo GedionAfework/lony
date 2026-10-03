@@ -25,19 +25,45 @@ import { useDatePrefs, useFormatDate } from './datePrefs';
 import { SearchSelect } from './SearchSelect';
 import { IconClose, IconRepeat } from './icons';
 import { listCashflowDrafts, removeCashflowDraft, type CashflowDraft } from './offlineDrafts';
+import { NetWorthCard } from './NetWorthCard';
 import { fonts, radii, space, useTheme } from './theme';
+import { t } from './i18n';
 import { Card, EmptyState, Field, Money, PrimaryButton, SecondaryButton, SectionLabel } from './ui';
 
-function cashflowActionLabel(entry: CashflowEntry): string {
+function cashflowActionLabel(entry: CashflowEntry, locale?: string | null): string {
   const cat = (entry.category || '').toLowerCase();
   const note = (entry.note || '').toLowerCase();
   const expected = entry.status === 'expected' || entry.is_template;
-  if (expected) return entry.kind === 'income' ? 'Expected' : 'Due';
-  if (cat.includes('transfer') || note.includes('transfer')) return 'Transfer';
-  if (cat.includes('import') || note.startsWith('plaid:') || note.startsWith('sms:')) return 'Imported';
-  if (entry.linked_loan_id) return entry.kind === 'income' ? 'Loan repayment' : 'Loan payment';
-  if (entry.kind === 'income') return 'Received';
-  return 'Spent';
+  if (expected) return entry.kind === 'income' ? t(locale, 'expenses.actionExpected') : t(locale, 'expenses.actionDue');
+  if (cat.includes('transfer') || note.includes('transfer') || note.startsWith('acct') || note.startsWith('bank'))
+    return t(locale, 'expenses.actionTransfer');
+  if (cat.includes('import') || note.startsWith('plaid:') || note.startsWith('sms:'))
+    return t(locale, 'expenses.actionImported');
+  if (entry.linked_loan_id)
+    return entry.kind === 'income' ? t(locale, 'expenses.actionLoanRepayment') : t(locale, 'expenses.actionLoanPayment');
+  if (entry.kind === 'income') return t(locale, 'expenses.actionReceived');
+  return t(locale, 'expenses.actionSpent');
+}
+
+/** Short title for lists — hide full SMS / long paste blobs. */
+export function displayCashflowTitle(entry: CashflowEntry, locale?: string | null): string {
+  const raw = (entry.title || entry.category || 'Entry').trim();
+  const note = (entry.note || '').trim();
+  // Legacy rows stored the SMS body as note with newlines — never show that as title.
+  if (raw.length > 48 || /dear customer|transaction of|your (a\/c|account)|otp|balance is/i.test(raw)) {
+    if (/^from /i.test(raw) || /^to /i.test(raw)) return raw.slice(0, 48);
+    if (note.startsWith('acct')) {
+      const bit = note.split('\n')[0] || note;
+      return bit.length > 40 ? bit.slice(0, 40) : bit;
+    }
+    return entry.kind === 'income' ? t(locale, 'expenses.transferIn') : t(locale, 'expenses.transferOut');
+  }
+  if (raw === 'Bank SMS') {
+    const first = note.split('\n')[0] || '';
+    if (first.startsWith('acct')) return first.slice(0, 40);
+    return t(locale, 'expenses.actionTransfer');
+  }
+  return raw;
 }
 
 export type ExpensesTab = 'dashboard' | 'income' | 'expenses';
@@ -165,12 +191,12 @@ export function ExpensesScreen({
       setBudgets(budgetRes.budgets ?? []);
       setDrafts(await listCashflowDrafts());
     } catch (e) {
-      const message = formatError(e, 'Could not load expenses');
+      const message = formatError(e, t(user.locale, 'expenses.loadErrorFallback'));
       setLoadError(message);
       onError(message);
       setDrafts(await listCashflowDrafts());
     }
-  }, [token, period.from, period.to, onError]);
+  }, [token, period.from, period.to, onError, user.locale]);
 
   const reloadWealth = useCallback(async () => {
     try {
@@ -189,7 +215,9 @@ export function ExpensesScreen({
       .filter((e) => e.status === 'expected' && !e.is_template)
       .map((e) => ({
         id: e.id,
-        title: e.title || (e.kind === 'income' ? 'Expected income' : 'Expected bill'),
+        title:
+          e.title ||
+          (e.kind === 'income' ? t(user.locale, 'expenses.expectedIncome') : t(user.locale, 'expenses.expectedBill')),
         amount: e.amount,
         currency: e.currency_code,
         at: e.occurred_at.slice(0, 10),
@@ -206,7 +234,7 @@ export function ExpensesScreen({
       )
       .map((l) => ({
         id: l.id,
-        title: l.title || l.reference_code || 'Loan due',
+        title: l.title || l.reference_code || t(user.locale, 'expenses.loanDue'),
         amount: String(loanRemaining(l)),
         currency: l.currency_code || preferred,
         at: (l.due_at || '').slice(0, 10),
@@ -218,7 +246,7 @@ export function ExpensesScreen({
       .filter((b) => b.at >= start && b.at <= horizon)
       .sort((a, b) => a.at.localeCompare(b.at))
       .slice(0, 12);
-  }, [income, expenseRows, loans, preferred]);
+  }, [income, expenseRows, loans, preferred, user.locale]);
 
   async function syncDrafts() {
     if (!drafts.length) return;
@@ -241,7 +269,7 @@ export function ExpensesScreen({
       }
       await reload();
     } catch (e) {
-      onError(e instanceof Error ? e.message : 'Could not sync drafts');
+      onError(e instanceof Error ? e.message : t(user.locale, 'expenses.syncDraftsError'));
       setDrafts(await listCashflowDrafts());
     } finally {
       setDraftBusy(false);
@@ -261,26 +289,12 @@ export function ExpensesScreen({
   const currency = slice?.currency_code || preferred;
   const incomeTotal = Number(slice?.income ?? 0);
   const expenseTotal = Number(slice?.expense ?? slice?.outcome ?? 0);
-  const wealthCurrency =
+  const wealthCurrency = (
+    wealth?.by_currency?.find((c) => c.currency_code.toUpperCase() === preferred)?.currency_code ||
     wealth?.preferred_currency ||
     wealth?.by_currency?.find((c) => Number(c.cash_on_hand) !== 0)?.currency_code ||
-    currency;
-  const wealthCash =
-    wealth?.by_currency?.find((c) => c.currency_code === wealthCurrency)?.cash_on_hand ??
-    wealth?.cash_on_hand ??
-    '0';
-  const wealthRecv =
-    wealth?.by_currency?.find((c) => c.currency_code === wealthCurrency)?.receivables ??
-    wealth?.receivables ??
-    '0';
-  const wealthPay =
-    wealth?.by_currency?.find((c) => c.currency_code === wealthCurrency)?.payables ??
-    wealth?.payables ??
-    '0';
-  const wealthNet =
-    wealth?.by_currency?.find((c) => c.currency_code === wealthCurrency)?.net_worth ??
-    wealth?.net_worth ??
-    '0';
+    currency
+  ).toUpperCase();
   const maxSpend = Math.max(
     1,
     ...breakdown.filter((b) => b.currency_code === currency).map((b) => Number(b.amount) || 0),
@@ -359,12 +373,12 @@ export function ExpensesScreen({
 
   async function onSaveBudget() {
     if (!budgetCategory.trim()) {
-      onError('Pick a category');
+      onError(t(user.locale, 'expenses.pickCategory'));
       return;
     }
     const limit = stripAmount(budgetLimit);
     if (!limit || Number(limit) <= 0) {
-      onError('Enter a budget limit');
+      onError(t(user.locale, 'expenses.enterBudgetLimit'));
       return;
     }
     setBudgetBusy(true);
@@ -379,7 +393,7 @@ export function ExpensesScreen({
       const res = await api.listBudgets(token, period.from);
       setBudgets(res.budgets ?? []);
     } catch (e) {
-      onError(e instanceof Error ? e.message : 'Could not save budget');
+      onError(e instanceof Error ? e.message : t(user.locale, 'expenses.saveBudgetError'));
     } finally {
       setBudgetBusy(false);
     }
@@ -388,7 +402,9 @@ export function ExpensesScreen({
   return (
     <View style={{ gap: space.md }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-        <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>Expenses</Text>
+        <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>
+          {t(user.locale, 'expenses.title')}
+        </Text>
         <Pressable
           onPress={() => setCalendarOpen(true)}
           style={{
@@ -514,7 +530,7 @@ export function ExpensesScreen({
             </View>
             <Pressable
               onPress={() => setCalendarOpen(false)}
-              accessibilityLabel="Close"
+              accessibilityLabel={t(user.locale, 'common.close')}
               style={{
                 alignSelf: 'flex-end',
                 width: 36,
@@ -534,11 +550,12 @@ export function ExpensesScreen({
 
       <View style={{ flexDirection: 'row', gap: 8 }}>
         {([
-          ['dashboard', 'Dashboard'],
-          ['income', 'Income'],
-          ['expenses', 'Expenses'],
-        ] as const).map(([id, label]) => {
+          ['dashboard', 'expenses.tabDashboard'],
+          ['income', 'expenses.tabIncome'],
+          ['expenses', 'expenses.tabExpenses'],
+        ] as const).map(([id, key]) => {
           const active = tab === id;
+          const label = t(user.locale, key);
           return (
             <Pressable
               key={id}
@@ -565,10 +582,10 @@ export function ExpensesScreen({
       {loadError ? (
         <Card>
           <EmptyState
-            title="Couldn’t load cashflow"
+            title={t(user.locale, 'expenses.loadError')}
             body={
               loadError.includes('cashflow') || loadError.includes('404') || loadError.includes('pq:')
-                ? 'Expense API may not be deployed yet. Pull to refresh after the API update.'
+                ? t(user.locale, 'expenses.apiNotDeployed')
                 : loadError
             }
           />
@@ -577,54 +594,24 @@ export function ExpensesScreen({
 
       {tab === 'dashboard' ? (
         <>
-          <Card>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-              <Text
-                style={{ color: colors.muted, fontFamily: fonts.uiSemi, fontSize: 12, textTransform: 'uppercase' }}
-              >
-                Net worth
-              </Text>
-              {onOpenAccounts ? (
-                <Pressable onPress={onOpenAccounts} hitSlop={8}>
-                  <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 13 }}>Accounts</Text>
-                </Pressable>
-              ) : null}
-            </View>
-            <Money
-              value={formatMoney(wealthNet, wealthCurrency, user.locale)}
-              size="xl"
-              tone={Number(wealthNet || 0) >= 0 ? 'positive' : 'negative'}
-            />
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
-              <Mini
-                label="Cash on hand"
-                value={formatMoney(wealthCash, wealthCurrency, user.locale)}
-                tone="positive"
-              />
-              <Mini
-                label="Owed to you"
-                value={formatMoney(wealthRecv, wealthCurrency, user.locale)}
-                tone="positive"
-              />
-              <Mini
-                label="You owe"
-                value={formatMoney(wealthPay, wealthCurrency, user.locale)}
-                tone="negative"
-              />
-            </View>
-            {(wealth?.accounts?.length ?? 0) === 0 ? (
-              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
-                Add account balances to complete net worth. Loan positions are included already.
-              </Text>
-            ) : null}
-          </Card>
+          <NetWorthCard
+            token={token}
+            wealth={wealth}
+            currency={wealthCurrency}
+            locale={user.locale}
+            formatMoney={formatMoney}
+            onOpenAccounts={onOpenAccounts}
+          />
 
           <Card>
             <SectionLabel>
-              {selectedIso === toIsoLocal(new Date()) ? 'Today' : selectedIso}
+              {selectedIso === toIsoLocal(new Date()) ? t(user.locale, 'common.today') : selectedIso}
             </SectionLabel>
             {dayIncome.length === 0 && dayExpense.length === 0 ? (
-              <EmptyState title="Nothing this day" body="Income and expenses for the selected day show here." />
+              <EmptyState
+                title={t(user.locale, 'expenses.emptyDay')}
+                body={t(user.locale, 'expenses.emptyDayBody')}
+              />
             ) : (
               [...dayIncome, ...dayExpense]
                 .sort((a, b) => a.occurred_at.localeCompare(b.occurred_at))
@@ -642,9 +629,11 @@ export function ExpensesScreen({
                     }}
                   >
                     <View style={{ flex: 1, gap: 2 }}>
-                      <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }}>{e.title}</Text>
+                      <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }}>
+                        {displayCashflowTitle(e, user.locale)}
+                      </Text>
                       <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
-                        {cashflowActionLabel(e)}
+                        {cashflowActionLabel(e, user.locale)}
                         {e.category ? ` · ${e.category}` : ''}
                       </Text>
                     </View>
@@ -665,9 +654,9 @@ export function ExpensesScreen({
 
           {drafts.length > 0 ? (
             <Card>
-              <SectionLabel>Offline drafts ({drafts.length})</SectionLabel>
+              <SectionLabel>{t(user.locale, 'expenses.offlineDrafts').replace('{count}', String(drafts.length))}</SectionLabel>
               <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
-                Saved on this device while offline. Sync when you’re back online.
+                {t(user.locale, 'expenses.offlineDraftsBody')}
               </Text>
               {drafts.slice(0, 5).map((d) => (
                 <Text key={d.id} style={{ color: colors.text, fontFamily: fonts.ui, fontSize: 13 }}>
@@ -675,7 +664,7 @@ export function ExpensesScreen({
                 </Text>
               ))}
               <PrimaryButton
-                label={draftBusy ? 'Syncing…' : 'Sync drafts'}
+                label={draftBusy ? t(user.locale, 'common.syncing') : t(user.locale, 'expenses.syncDrafts')}
                 onPress={() => void syncDrafts()}
                 disabled={draftBusy}
               />
@@ -683,11 +672,11 @@ export function ExpensesScreen({
           ) : null}
 
           <Card>
-            <SectionLabel>Coming up</SectionLabel>
+            <SectionLabel>{t(user.locale, 'expenses.comingUp')}</SectionLabel>
             {upcomingBills.length === 0 ? (
               <EmptyState
-                title="No bills in the next 45 days"
-                body="Expected income/expenses and loan dues will show here."
+                title={t(user.locale, 'expenses.noBillsTitle')}
+                body={t(user.locale, 'expenses.noBillsBody')}
               />
             ) : (
               upcomingBills.map((b) => (
@@ -709,7 +698,8 @@ export function ExpensesScreen({
                   <View style={{ flex: 1, gap: 2 }}>
                     <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }}>{b.title}</Text>
                     <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
-                      {b.at} · {b.type === 'loan' ? 'Loan' : 'Expected'}
+                      {b.at} ·{' '}
+                      {b.type === 'loan' ? t(user.locale, 'loans.loanFallback') : t(user.locale, 'expenses.actionExpected')}
                     </Text>
                   </View>
                   <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }}>
@@ -724,7 +714,7 @@ export function ExpensesScreen({
             <Text
               style={{ color: colors.muted, fontFamily: fonts.uiSemi, fontSize: 12, textTransform: 'uppercase' }}
             >
-              This month
+              {t(user.locale, 'common.thisMonth')}
             </Text>
             <Money
               value={formatMoney(net.toFixed(2), currency, user.locale)}
@@ -733,22 +723,22 @@ export function ExpensesScreen({
             />
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
               <Mini
-                label="Income"
+                label={t(user.locale, 'cashflow.income')}
                 value={formatMoney(String(incomeTotal), currency, user.locale)}
                 tone="positive"
               />
               <Mini
-                label="Expenses"
+                label={t(user.locale, 'expenses.tabExpenses')}
                 value={formatMoney(String(expenseTotal), currency, user.locale)}
                 tone="negative"
               />
               <Mini
-                label="Owed to you"
+                label={t(user.locale, 'wealth.owedToYou')}
                 value={formatMoney(loanIn.toFixed(2), currency, user.locale)}
                 tone="positive"
               />
               <Mini
-                label="You owe"
+                label={t(user.locale, 'wealth.youOwe')}
                 value={formatMoney(loanOut.toFixed(2), currency, user.locale)}
                 tone="negative"
               />
@@ -756,9 +746,9 @@ export function ExpensesScreen({
           </Card>
 
           <Card>
-            <SectionLabel>Spending by category</SectionLabel>
+            <SectionLabel>{t(user.locale, 'expenses.spendingByCategory')}</SectionLabel>
             {breakdown.filter((b) => b.currency_code === currency).length === 0 ? (
-              <EmptyState title="No expenses yet" body="Category bars appear after you log spends." />
+              <EmptyState title={t(user.locale, 'expenses.noExpenses')} body={t(user.locale, 'expenses.categoryBarsBody')} />
             ) : (
               breakdown
                 .filter((b) => b.currency_code === currency)
@@ -793,10 +783,10 @@ export function ExpensesScreen({
           </Card>
 
           <Card>
-            <SectionLabel>Budgets this month</SectionLabel>
+            <SectionLabel>{t(user.locale, 'expenses.budgetsThisMonth')}</SectionLabel>
             {budgets.length === 0 ? (
               <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13, marginBottom: 8 }}>
-                Set a monthly limit per category to track burn.
+                {t(user.locale, 'expenses.budgetsHint')}
               </Text>
             ) : (
               budgets.map((b) => {
@@ -830,24 +820,24 @@ export function ExpensesScreen({
               })
             )}
             <SearchSelect
-              label="Category"
+              label={t(user.locale, 'common.category')}
               value={budgetCategory}
               onChange={setBudgetCategory}
               options={expenseCats}
-              placeholder="Category to budget"
+              placeholder={t(user.locale, 'expenses.categoryPlaceholder')}
             />
-            <Field label="Monthly limit" value={budgetLimit} onChange={setBudgetLimit} money />
+            <Field label={t(user.locale, 'expenses.monthlyLimit')} value={budgetLimit} onChange={setBudgetLimit} money />
             <PrimaryButton
-              label={budgetBusy ? 'Saving…' : 'Save budget'}
+              label={budgetBusy ? t(user.locale, 'common.saving') : t(user.locale, 'expenses.saveBudget')}
               onPress={onSaveBudget}
               disabled={budgetBusy}
             />
           </Card>
 
           <Card>
-            <SectionLabel>Open loans</SectionLabel>
+            <SectionLabel>{t(user.locale, 'expenses.openLoans')}</SectionLabel>
             {openLoans.length === 0 ? (
-              <EmptyState title="No open loans" body="Shared spends and peer loans appear here." />
+              <EmptyState title={t(user.locale, 'expenses.noOpenLoansTitle')} body={t(user.locale, 'expenses.noOpenLoansBody')} />
             ) : (
               openLoans.map((loan) => (
                 <Pressable
@@ -867,7 +857,7 @@ export function ExpensesScreen({
                       {loan.title || loan.institution_label || loan.reference_code}
                     </Text>
                     <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
-                      {loan.your_role === 'borrower' ? 'You owe' : 'They owe'}
+                      {loan.your_role === 'borrower' ? t(user.locale, 'wealth.youOwe') : t(user.locale, 'expenses.theyOwe')}
                     </Text>
                   </View>
                   <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }}>
@@ -879,7 +869,7 @@ export function ExpensesScreen({
           </Card>
 
           <Card>
-            <SectionLabel>Recent</SectionLabel>
+            <SectionLabel>{t(user.locale, 'common.recent')}</SectionLabel>
             {recent.map((entry) => (
                 <EntryRow
                   key={entry.id}
@@ -891,7 +881,10 @@ export function ExpensesScreen({
                 />
               ))}
             {recent.length === 0 && !loadError ? (
-              <EmptyState title="Quiet month" body="Tap + to add income or an expense." />
+              <EmptyState
+                title={t(user.locale, 'expenses.quietMonth')}
+                body={t(user.locale, 'expenses.quietMonthBody')}
+              />
             ) : null}
           </Card>
         </>
@@ -899,7 +892,9 @@ export function ExpensesScreen({
 
       {tab === 'income' || tab === 'expenses' ? (
         <Card>
-          <SectionLabel>{tab === 'income' ? 'Income' : 'Expenses'}</SectionLabel>
+          <SectionLabel>
+            {tab === 'income' ? t(user.locale, 'expenses.tabIncome') : t(user.locale, 'expenses.tabExpenses')}
+          </SectionLabel>
           {monthEntries.map((entry) => (
             <EntryRow
               key={entry.id}
@@ -912,8 +907,10 @@ export function ExpensesScreen({
           ))}
           {monthEntries.length === 0 && !loadError ? (
             <EmptyState
-              title={tab === 'income' ? 'No income yet' : 'No expenses yet'}
-              body="Tap + at the bottom left to add one."
+              title={
+                tab === 'income' ? t(user.locale, 'expenses.noIncome') : t(user.locale, 'expenses.noExpenses')
+              }
+              body={t(user.locale, 'expenses.tapToAdd')}
             />
           ) : null}
         </Card>
@@ -986,12 +983,12 @@ function EntryRow({
       <View style={{ flex: 1, gap: 2 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
           <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14, flexShrink: 1 }} numberOfLines={1}>
-            {entry.title || entry.category}
+            {displayCashflowTitle(entry, locale)}
           </Text>
           {recurring || entry.is_template ? <IconRepeat size={12} color={colors.muted} /> : null}
         </View>
         <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }} numberOfLines={1}>
-          {cashflowActionLabel(entry)}
+          {cashflowActionLabel(entry, locale)}
           {entry.category ? ` · ${entry.category}` : ''}
           {` · ${dateLabel}`}
         </Text>

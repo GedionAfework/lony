@@ -23,6 +23,28 @@ export function parseAmountNumber(raw: string): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+/** Number only (no currency code/symbol) — use when the UI shows the code separately. */
+export function formatMoneyAmount(
+  amount: string | number | null | undefined,
+  locale = 'en',
+): string {
+  if (amount === null || amount === undefined || amount === '') {
+    return '';
+  }
+  const n = typeof amount === 'number' ? amount : Number(String(amount).replace(/,/g, ''));
+  if (!Number.isFinite(n)) {
+    return String(amount);
+  }
+  try {
+    return new Intl.NumberFormat(locale, {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(n);
+  } catch {
+    return n.toFixed(2);
+  }
+}
+
 /**
  * Locale-aware money formatting. Uses CLDR rules so the currency symbol/code
  * appears as a prefix or suffix depending on locale + currency (e.g. $10 vs 10 €).
@@ -42,23 +64,17 @@ export function formatMoney(
   }
   try {
     if (!code) {
-      return new Intl.NumberFormat(locale, {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      }).format(n);
+      return formatMoneyAmount(n, locale);
     }
     return new Intl.NumberFormat(locale, {
       style: 'currency',
       currency: code,
-      currencyDisplay: 'symbol',
+      currencyDisplay: 'code',
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,
     }).format(n);
   } catch {
-    const num = new Intl.NumberFormat(locale, {
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(n);
+    const num = formatMoneyAmount(n, locale);
     return code ? `${num} ${code}` : num;
   }
 }

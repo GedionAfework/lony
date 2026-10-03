@@ -27,6 +27,7 @@ import {
   type ConversationMoney,
 } from './api';
 import { formatMoney } from './amountFormat';
+import { t } from './i18n';
 import { apiBaseUrl, fonts, useTheme, type ThemeColors } from './theme';
 import { IconAttach, IconBack, IconEmoji, IconLoans, IconMic, IconSend } from './icons';
 
@@ -41,6 +42,7 @@ type Props = {
   token: string;
   userId: string;
   selfInitial: string;
+  locale?: string | null;
   friends: { peer: { id: string; display_name: string; username?: string | null } }[];
   openLoanId?: string | null;
   openPeerId?: string | null;
@@ -57,6 +59,7 @@ export function ChatScreen({
   token,
   userId,
   selfInitial,
+  locale,
   friends,
   openLoanId,
   openPeerId,
@@ -418,7 +421,7 @@ export function ChatScreen({
             paddingBottom: 10,
           }}
         >
-          Chats
+          {t(locale, 'chats.title')}
         </Text>
 
         <Pressable
@@ -426,13 +429,13 @@ export function ChatScreen({
           onPress={() => openSelfChat()}
           onLongPress={() => onOpenProfile?.({ id: userId, display_name: 'Self' })}
           accessibilityRole="button"
-          accessibilityLabel="Self"
+          accessibilityLabel={t(locale, 'chats.self')}
         >
           <View style={[styles.avatar, { backgroundColor: colors.primarySoft }]}>
             <Text style={[styles.avatarText, { color: colors.primary }]}>{selfInitial}</Text>
           </View>
           <View style={styles.flex}>
-            <Text style={styles.rowTitle}>Self</Text>
+            <Text style={styles.rowTitle}>{t(locale, 'chats.self')}</Text>
           </View>
         </Pressable>
         {startRows.map((f) => (
@@ -449,14 +452,14 @@ export function ChatScreen({
             </View>
             <View style={styles.flex}>
               <Text style={styles.rowTitle}>{f.peer.display_name}</Text>
-              <Text style={styles.muted}>Start chat</Text>
+              <Text style={styles.muted}>{t(locale, 'chats.startChat')}</Text>
             </View>
           </Pressable>
         ))}
         {threadRows.map((c) => {
           const name =
             c.peer.id === userId || c.peer.display_name === 'Self' || c.peer.display_name === 'Saved Messages'
-              ? 'Self'
+              ? t(locale, 'chats.self')
               : c.peer.display_name;
           const moneyItems = conversationMoneyItems(c);
           return (
@@ -745,7 +748,7 @@ export function ChatScreen({
             style={styles.input}
             value={draft}
             onChangeText={setDraft}
-            placeholder="Message"
+            placeholder={t(locale, 'chats.messagePlaceholder')}
             placeholderTextColor={colors.muted}
             multiline
             onFocus={() => {

@@ -20,8 +20,8 @@ type ParsedSMS struct {
 }
 
 var (
-	reCredit = regexp.MustCompile(`(?i)\b(received|credited|credit|deposit|deposited|incoming|you (?:have )?received|sent to you|transfer(?:red)? (?:to|into) (?:your|you)|payment received|inflow)\b`)
-	reDebit  = regexp.MustCompile(`(?i)\b(sent|debited|debit|withdrawn|withdrawal|paid|payment (?:of|to)|transfer(?:red)? (?:from|out)|outgoing|you (?:have )?sent|charged)\b`)
+	reCredit = regexp.MustCompile(`(?i)\b(money received|received|credited|credit|deposit|deposited|incoming|you (?:have )?received|sent to you|transfer(?:red)? (?:to|into) (?:your|you)|payment received|inflow)\b`)
+	reDebit  = regexp.MustCompile(`(?i)\b(money sent|sent|debited|debit|withdrawn|withdrawal|paid|payment (?:of|to)|transfer(?:red)? (?:from|out)|outgoing|you (?:have )?sent|charged)\b`)
 	reAmt1   = regexp.MustCompile(`(?i)(?:(?:ETB|USD|EUR|GBP|KES|GHS|NGN|ZAR|AED|Br|\$|€|£|¥|₹|₦)\s*)([\d]{1,3}(?:,\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)`)
 	reAmt2   = regexp.MustCompile(`(?i)([\d]{1,3}(?:,\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)\s*(?:ETB|USD|EUR|GBP|KES|GHS|NGN|ZAR|AED|Br)`)
 	reAmt3   = regexp.MustCompile(`(?i)\b(?:amount|amt|sum)[:\s]+([\d,]+\.?\d*)`)
@@ -93,14 +93,42 @@ func ParseTransferSMS(text string) ParsedSMS {
 			score += 0.05
 		}
 	}
+	// Prefer "your a/c" so counterparty account numbers are not treated as the user's.
+	reYourAcct := regexp.MustCompile(`(?i)\byour\s+(?:a/c|acct|account|acc)(?:\s*(?:no|number|#)?)?[:\s.*-]*([0-9*]{4,20})\b`)
 	var digits string
-	for _, re := range []*regexp.Regexp{reAcct1, reAcct3, reAcct4, reAcct2} {
-		if m := re.FindStringSubmatch(raw); len(m) > 1 {
-			digits = regexp.MustCompile(`\D`).ReplaceAllString(m[1], "")
-			if len(digits) >= 4 {
-				break
+	if m := reYourAcct.FindStringSubmatch(raw); len(m) > 1 {
+		digits = regexp.MustCompile(`\D`).ReplaceAllString(m[1], "")
+		score += 0.05
+	} else {
+		for _, re := range []*regexp.Regexp{reAcct1, reAcct3, reAcct4, reAcct2} {
+			if m := re.FindStringSubmatch(raw); len(m) > 1 {
+				digits = regexp.MustCompile(`\D`).ReplaceAllString(m[1], "")
+				if len(digits) >= 4 {
+					break
+				}
+				digits = ""
 			}
-			digits = ""
+		}
+		// If income SMS has "from … account" and another account, prefer the non-from one.
+		if out.Kind == KindIncome {
+			reFromAcct := regexp.MustCompile(`(?i)\bfrom\s+(?:a/c|acct|account|acc)?[:\s.*-]*([0-9*]{4,20})`)
+			if m := reFromAcct.FindStringSubmatch(raw); len(m) > 1 {
+				fromDigits := regexp.MustCompile(`\D`).ReplaceAllString(m[1], "")
+				if len(fromDigits) >= 4 && len(digits) >= 4 && fromDigits[len(fromDigits)-4:] == digits[len(digits)-4:] {
+					// First match was the sender — try to find another.
+					all := reAcct1.FindAllStringSubmatch(raw, -1)
+					for _, am := range all {
+						if len(am) < 2 {
+							continue
+						}
+						cand := regexp.MustCompile(`\D`).ReplaceAllString(am[1], "")
+						if len(cand) >= 4 && cand[len(cand)-4:] != fromDigits[len(fromDigits)-4:] {
+							digits = cand
+							break
+						}
+					}
+				}
+			}
 		}
 	}
 	if len(digits) >= 4 {

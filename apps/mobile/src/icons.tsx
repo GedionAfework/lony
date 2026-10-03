@@ -109,6 +109,10 @@ export function IconCamera({ size = 22, color, style }: IconProps) {
   return <FontAwesome name="camera" size={size} color={useIconColor(color)} style={style} />;
 }
 
+export function IconRefresh({ size = 22, color, style }: IconProps) {
+  return <FontAwesome name="refresh" size={size} color={useIconColor(color)} style={style} />;
+}
+
 export function IconBalance({ size = 22, color, style }: IconProps) {
   return <FontAwesome name="money" size={size} color={useIconColor(color)} style={style} />;
 }
