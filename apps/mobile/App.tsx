@@ -955,17 +955,17 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         if (handledSmsNotifRef.current === dedupeKey) return;
         handledSmsNotifRef.current = dedupeKey;
       }
-      if (data.kind === 'expense' || data.open_form === '1') {
-        setCashflowKind('expense');
+      if (data.open_form === '1') {
+        setCashflowKind(data.kind);
         setSelectedCashflow(null);
         setCashflowPrefill(smsNotifyToPrefill(data as unknown as Record<string, unknown>));
-        setExpensesTab('expenses');
+        setExpensesTab(data.kind === 'income' ? 'income' : 'expenses');
         setScreen('cashflow-new');
         return;
       }
-      // Money received — entry already imported; open income list.
-      setExpensesTab('income');
-      setScreen('home');
+      // Auto-imported transfer — open the matching income/expense list.
+      setExpensesTab(data.kind === 'income' ? 'income' : 'expenses');
+      setScreen('expenses');
     };
 
     (async () => {
@@ -1003,10 +1003,10 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     let cancelled = false;
     const run = async () => {
       try {
-        const acc = await api.listAccounts(token);
         if (cancelled) return;
-        const accountId = acc.accounts?.[0]?.id;
-        const res = await syncBankSms(token, accountId);
+        const res = await syncBankSms(token, undefined, {
+          defaultCurrency: user?.default_currency_code || 'ETB',
+        });
         if (!cancelled && (res.imported > 0 || res.accountsAdded > 0)) {
           setCashflowReload((n) => n + 1);
           setWealthReload((n) => n + 1);
@@ -1020,7 +1020,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     return () => {
       cancelled = true;
     };
-  }, [screen, token]);
+  }, [screen, token, user?.default_currency_code]);
 
   useEffect(() => {
     if (!token) return;
@@ -1028,9 +1028,9 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
       if (next !== 'active') return;
       void (async () => {
         try {
-          const acc = await api.listAccounts(token);
-          const accountId = acc.accounts?.[0]?.id;
-          const res = await syncBankSms(token, accountId);
+          const res = await syncBankSms(token, undefined, {
+            defaultCurrency: user?.default_currency_code || 'ETB',
+          });
           if (res.imported > 0 || res.accountsAdded > 0) {
             setCashflowReload((n) => n + 1);
             setWealthReload((n) => n + 1);
@@ -1042,7 +1042,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
       })();
     });
     return () => sub.remove();
-  }, [token]);
+  }, [token, user?.default_currency_code]);
 
   async function onActivateSmsImport() {
     if (!token || !user) return;
@@ -1959,9 +1959,11 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               try {
                 setBusy(true);
                 setError(null);
-                const acc = await api.listAccounts(token);
-                const accountId = acc.accounts?.[0]?.id;
-                const res = await syncBankSms(token, accountId, { force: true, maxCount: 200 });
+                const res = await syncBankSms(token, undefined, {
+                  force: true,
+                  maxCount: 200,
+                  defaultCurrency: user?.default_currency_code || 'ETB',
+                });
                 setCashflowReload((n) => n + 1);
                 setWealthReload((n) => n + 1);
                 setAccountsReload((n) => n + 1);
@@ -1970,7 +1972,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                 } else if (res.imported > 0) {
                   Alert.alert(
                     'Messages',
-                    `${res.imported} new transfer(s) found${res.duplicates ? ` · ${res.duplicates} already saved` : ''}.`,
+                    `${res.imported} new transfer(s) saved${res.accountsAdded ? ` · ${res.accountsAdded} account(s) added` : ''}${res.duplicates ? ` · ${res.duplicates} already saved` : ''}.`,
                   );
                 } else if (res.duplicates > 0) {
                   Alert.alert('Messages', 'No new transfers — recent ones were already imported.');

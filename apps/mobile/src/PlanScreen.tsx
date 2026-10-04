@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Image, Pressable, Text, View } from 'react-native';
 import { EncodingType, cacheDirectory, documentDirectory, downloadAsync, readAsStringAsync } from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
@@ -92,7 +92,7 @@ type GoalFormFields = {
   cover: CoverDraft | null;
 };
 
-type AiChipKind = 'agree' | 'tooHigh' | 'tooLow' | 'retry' | 'save' | 'editDetail';
+type AiChipKind = 'agree' | 'tooHigh' | 'tooLow' | 'retry' | 'save' | 'editDetail' | 'askSource';
 
 type AiChip = {
   id: string;
@@ -108,12 +108,21 @@ type AiChatMessage = {
   draft?: GoalDraft;
 };
 
+type EstimateMemory = {
+  source: NonNullable<AiInterview['estimateSource']>;
+  explain: string;
+  draft: GoalDraft | null;
+};
+
 /** Multi-turn interview: clarify item → estimate price → confirm → save. */
 type AiInterview = {
   phase: 'gather' | 'estimate' | 'confirm' | 'done';
   turns: number;
   itemHint: string;
   details: string[];
+  /** How the last price was produced — used for “where did you get that?” */
+  estimateSource?: 'product_link' | 'market_estimate' | 'user_stated' | 'offline_heuristic';
+  estimateExplain?: string;
 };
 
 export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0, onDetailChange }: Props) {
@@ -153,6 +162,8 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
     itemHint: '',
     details: [],
   });
+  /** Survives re-renders so “where did you get that?” always has context. */
+  const estimateMemoryRef = useRef<EstimateMemory | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -448,6 +459,7 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
       { id: 'agree', label: 'Yes, that works', kind: 'agree' },
       { id: 'high', label: 'Too high', kind: 'tooHigh' },
       { id: 'low', label: 'Too low', kind: 'tooLow' },
+      { id: 'source', label: 'Where from?', kind: 'askSource' },
       { id: 'retry', label: 'Start over', kind: 'retry' },
     ];
   }
@@ -463,121 +475,222 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
   function resetAiInterview() {
     setAiInterview({ phase: 'gather', turns: 0, itemHint: '', details: [] });
     setAiDraft(null);
+    estimateMemoryRef.current = null;
+  }
+
+  function rememberEstimate(
+    source: NonNullable<AiInterview['estimateSource']>,
+    explain: string,
+    draft: GoalDraft | null,
+  ) {
+    estimateMemoryRef.current = { source, explain, draft };
+  }
+
+  function isYearAmount(n: number): boolean {
+    return Number.isInteger(n) && n >= 1900 && n <= 2099;
+  }
+
+  function parseStatedPrice(text: string): string | null {
+    const withCur =
+      text.match(
+        /\b(?:about|around|approx(?:imately)?|≈|~|price|cost|for|budget)\s*(?:of\s*)?(?:ETB|USD|EUR|GBP|Br|\$)?\s*([\d,]{3,}(?:\.\d{1,2})?)/i,
+      ) ||
+      text.match(/\b(?:ETB|USD|EUR|GBP|Br|\$)\s*([\d,]{3,}(?:\.\d{1,2})?)/i) ||
+      text.match(/^\s*([\d,]{3,}(?:\.\d{1,2})?)\s*(?:ETB|USD|EUR|GBP|Br)?\s*$/i);
+    if (!withCur) return null;
+    const n = Number(withCur[1].replace(/,/g, ''));
+    if (!Number.isFinite(n) || n <= 0 || isYearAmount(n)) return null;
+    return n.toFixed(2);
+  }
+
+  /** “Where did you get that?” and similar — must NEVER re-run the price estimator. */
+  function isMetaPriceQuestion(text: string): boolean {
+    const t = text.trim();
+    if (!t) return false;
+    if (/where\s+from|from\s+where|what'?s?\s+the\s+source|source\s+of/i.test(t)) return true;
+    if (/\b(source|based on what|is that real|did you invent|hallucinat|made up|guess(ing)?)\b/i.test(t)) {
+      return true;
+    }
+    if (/\b(where|how)\b[\s\S]{0,40}\b(get|got|find|found|know|came|come|estimate|number|price|figure|information|info|that)\b/i.test(t)) {
+      return true;
+    }
+    if (/^(why|how come)\b/i.test(t) && /\b(price|number|amount|estimate|that)\b/i.test(t)) return true;
+    return false;
+  }
+
+  function explainEstimateSource(
+    interview: AiInterview,
+    draft: GoalDraft | null,
+    mem?: EstimateMemory | null,
+  ): string {
+    const source = mem?.source || interview.estimateSource;
+    const explain = mem?.explain || interview.estimateExplain;
+    const d = draft || mem?.draft;
+    const price = d?.target_amount
+      ? formatMoney(d.target_amount, (d.currency_code || currency).toUpperCase(), user.locale)
+      : 'that amount';
+
+    if (!source && !d?.target_amount) {
+      return "I haven’t suggested a price yet. Tell me what you’re saving for (make/model/year), paste a product link, or type a number like “about 25000 ETB”.";
+    }
+
+    switch (source) {
+      case 'product_link':
+        return (
+          explain ||
+          `I pulled ${price} from the product page you linked (the listed sale price on that site). If it looks wrong, paste another link or tell me the price you want.`
+        );
+      case 'user_stated':
+        return explain || `That’s the price you typed yourself (${price}). I didn’t invent it.`;
+      case 'offline_heuristic':
+        return (
+          explain ||
+          `${price} is a rough offline ballpark from make/model/year when live AI pricing wasn’t available. It’s not a listing scrape — say “too high/low” or give a number.`
+        );
+      case 'market_estimate':
+      default:
+        return (
+          explain ||
+          `${price} is my market estimate from what you described (make/model/year/condition) — not a live listing. Tell me a better number, or paste a product link for the exact price.`
+        );
+    }
   }
 
   /** Offline / AI-down fallback so the chat still reaches a number. */
-  function heuristicPrice(details: string[], cur: string): { title: string; amount: string } | null {
+  function heuristicPrice(details: string[], cur: string): { title: string; amount: string; explain: string } | null {
     const blob = details.join(' ').toLowerCase();
     const yearMatch = blob.match(/\b(20\d{2})\b/);
     const year = yearMatch ? Number(yearMatch[1]) : undefined;
     const isETB = cur === 'ETB';
     const scale = isETB ? 55 : 1; // rough USD→ETB for local fallbacks
 
+    const pack = (title: string, usd: number) => ({
+      title,
+      amount: String(Math.round(usd * scale)),
+      explain: `Rough ${cur} ballpark for ${title} (offline table${year ? `, ${year}` : ''}${isETB ? ', USD→ETB scaled' : ''}). Not a live listing.`,
+    });
+
     if (/rav\s*4|rav4/.test(blob)) {
       const base = year && year <= 2018 ? 18000 : year && year <= 2021 ? 24000 : 32000;
-      return { title: `Toyota RAV4${year ? ` ${year}` : ''}`, amount: String(Math.round(base * scale)) };
+      return pack(`Toyota RAV4${year ? ` ${year}` : ''}`, base);
     }
     if (/corolla/.test(blob)) {
       const base = year && year <= 2018 ? 12000 : 18000;
-      return { title: `Toyota Corolla${year ? ` ${year}` : ''}`, amount: String(Math.round(base * scale)) };
+      return pack(`Toyota Corolla${year ? ` ${year}` : ''}`, base);
     }
     if (/honda\s*cr-?v|crv/.test(blob)) {
-      return { title: `Honda CR-V${year ? ` ${year}` : ''}`, amount: String(Math.round(28000 * scale)) };
+      return pack(`Honda CR-V${year ? ` ${year}` : ''}`, 28000);
     }
-    if (/macbook/.test(blob)) {
-      return { title: 'MacBook', amount: String(Math.round(1800 * scale)) };
-    }
-    if (/iphone/.test(blob)) {
-      return { title: 'iPhone', amount: String(Math.round(900 * scale)) };
-    }
-    if (/car|vehicle|suv|truck/.test(blob) && year) {
-      return { title: `Vehicle ${year}`, amount: String(Math.round(22000 * scale)) };
-    }
-    if (/car|vehicle|suv|truck/.test(blob)) {
-      return { title: 'Used car', amount: String(Math.round(15000 * scale)) };
-    }
+    if (/macbook/.test(blob)) return pack('MacBook', 1800);
+    if (/iphone/.test(blob)) return pack('iPhone', 900);
+    if (/car|vehicle|suv|truck/.test(blob) && year) return pack(`Vehicle ${year}`, 22000);
+    if (/car|vehicle|suv|truck/.test(blob)) return pack('Used car', 15000);
     return null;
   }
 
   function enoughToEstimate(details: string[], text: string): boolean {
-    if (/\b(estimate|price|how much|go ahead|that'?s all)\b/i.test(text)) return true;
-    if (/\b(20\d{2})\b/.test(text)) return true; // year
-    if (/\b\d{4,}\b/.test(text) && /\b(about|around|etb|usd|\$|br|birr|cost|price)\b/i.test(text)) return true;
-    if (/^\s*[\d,]{3,}(?:\.\d{1,2})?\s*$/.test(text)) return true; // bare amount
+    if (parseStatedPrice(text)) return true;
+    if (/\b(estimate|price|how much|go ahead|that'?s all|save for it)\b/i.test(text)) return true;
+    if (/\bhttps?:\/\/|www\./i.test(text)) return true;
+    // Year alone is a detail, not enough by itself on turn 1.
+    if (details.length >= 2 && /\b(20\d{2})\b/.test(text)) return true;
     if (details.length >= 3) return true;
     const blob = details.join(' ');
-    if (details.length >= 2 && /\b(rav|toyota|honda|macbook|iphone|laptop|trip|dubai|japan)\b/i.test(blob)) {
+    if (
+      details.length >= 2 &&
+      /\b(rav|toyota|honda|macbook|iphone|laptop|trip|dubai|japan|corolla)\b/i.test(blob) &&
+      /\b(20\d{2}|new|used|hybrid|awd|le|xle)\b/i.test(blob)
+    ) {
       return true;
     }
     return false;
   }
 
-  async function askFollowUp(itemHint: string, details: string[]): Promise<string> {
-    const blob = details.join('\n');
-    try {
-      const coachRes = await api.aiCoach(
-        token,
-        currency,
-        [
-          'You are helping someone create a savings Plan in Lony.',
-          'Ask ONE short clarifying question to estimate the purchase price.',
-          'Do not give a price yet. Prefer make/model/year/condition questions.',
-          `What they said so far:\n${blob || itemHint}`,
-        ].join('\n'),
-      );
-      const reply = coachRes.coach?.reply?.trim();
-      if (reply) return reply.split('\n')[0]!.slice(0, 220);
-    } catch {
-      /* fallback below */
-    }
+  function askFollowUp(itemHint: string, details: string[]): string {
     if (/car|vehicle|rav|toyota|honda|suv|truck/i.test(itemHint)) {
-      return details.length <= 1
-        ? 'What kind of car — make and model?'
-        : 'Which year (and trim, if you know)?';
+      if (details.length <= 1) return 'What kind of car — make and model?';
+      if (!/\b(20\d{2})\b/.test(details.join(' '))) return 'Which model year?';
+      return 'New or used, and any trim (LE, XLE, Hybrid…)?';
     }
     if (/phone|laptop|macbook|iphone|ipad|computer/i.test(itemHint)) {
-      return 'Which model and storage/size do you want?';
+      return details.length <= 1
+        ? 'Which model (and storage/size) do you want?'
+        : 'Any condition preference — new or refurbished?';
     }
     return details.length <= 1
       ? 'Can you be more specific — which product or model?'
-      : 'Any year, condition (new/used), or other details that affect the price?';
+      : 'Any year, condition (new/used), or other details that affect the price? Or paste a product link.';
   }
 
-  async function runPriceEstimate(contextLines: string[]): Promise<{ draft: GoalDraft; financeNote: string; warning?: string }> {
+  async function runPriceEstimate(
+    contextLines: string[],
+    latestText: string,
+  ): Promise<{
+    draft: GoalDraft;
+    financeNote: string;
+    warning?: string;
+    source: NonNullable<AiInterview['estimateSource']>;
+    explain: string;
+  }> {
     const blob = contextLines.join('\n');
     const cur = currency.toUpperCase();
-    const prompt = [
-      `Estimate a realistic purchase price in ${cur} for this savings goal.`,
-      'Fill target_amount with a realistic market estimate (digits only).',
-      'Also set a clear title and goal_type purchase when buying something.',
-      blob,
-    ].join('\n');
     const merged: GoalDraft = { ...(aiDraft ?? {}), currency_code: cur };
     let warning: string | undefined;
+    let source: NonNullable<AiInterview['estimateSource']> = 'market_estimate';
+    let explain = '';
 
-    try {
-      const res = await api.extractGoalDraft(token, prompt);
-      for (const [key, value] of Object.entries(res.draft ?? {})) {
-        if (value !== undefined && value !== null && value !== '') {
-          (merged as Record<string, unknown>)[key] = value;
-        }
-      }
-    } catch (e) {
-      warning = e instanceof Error ? e.message : 'AI extract unavailable';
+    const stated = parseStatedPrice(latestText) || contextLines.map(parseStatedPrice).find(Boolean);
+    if (stated) {
+      merged.target_amount = stated;
+      source = 'user_stated';
+      explain = `Using the price you stated: ${formatMoney(stated, cur, user.locale)}.`;
     }
 
-    if (!merged.target_amount) {
+    const urlMatch = blob.match(/\bhttps?:\/\/[^\s<>"']+/i) || latestText.match(/\bwww\.[^\s<>"']+/i);
+    if (urlMatch && !merged.target_amount) {
       try {
-        const coachRes = await api.aiCoach(
-          token,
-          cur,
-          `Estimate a realistic ${cur} market price for:\n${blob}\nReply with exactly one line: ESTIMATE: <number>`,
-        );
-        const reply = coachRes.coach?.reply || '';
-        const m = reply.match(/ESTIMATE:\s*([\d,]+(?:\.\d{1,2})?)/i) || reply.match(/(\d[\d,]{2,}(?:\.\d{1,2})?)/);
-        if (m) merged.target_amount = m[1].replace(/,/g, '');
+        const res = await api.extractGoalDraft(token, urlMatch[0]);
+        for (const [key, value] of Object.entries(res.draft ?? {})) {
+          if (value !== undefined && value !== null && value !== '') {
+            (merged as Record<string, unknown>)[key] = value;
+          }
+        }
+        if (merged.target_amount && !isYearAmount(Number(merged.target_amount))) {
+          source = 'product_link';
+          explain = `Pulled ${formatMoney(merged.target_amount, (merged.currency_code || cur).toUpperCase(), user.locale)} from the product page (${merged.source_url || urlMatch[0]}).`;
+        }
       } catch (e) {
-        if (!warning) warning = e instanceof Error ? e.message : 'AI coach unavailable';
+        warning = e instanceof Error ? e.message : 'Could not read that link';
+      }
+    }
+
+    if (!merged.target_amount || isYearAmount(Number(merged.target_amount))) {
+      if (isYearAmount(Number(merged.target_amount))) merged.target_amount = undefined;
+      const prompt = [
+        `Estimate a realistic purchase price in ${cur} for this savings goal.`,
+        'Fill target_amount with a realistic market estimate (digits only, never a year like 2018 or 2024).',
+        'Set a clear title and goal_type purchase when buying something.',
+        'In note, start with "Estimated market price" and list the assumptions (year, condition, region).',
+        blob,
+      ].join('\n');
+      try {
+        const res = await api.extractGoalDraft(token, prompt);
+        for (const [key, value] of Object.entries(res.draft ?? {})) {
+          if (value !== undefined && value !== null && value !== '') {
+            if (key === 'target_amount' && merged.target_amount) continue;
+            (merged as Record<string, unknown>)[key] = value;
+          }
+        }
+        if (merged.target_amount && !isYearAmount(Number(merged.target_amount))) {
+          source = 'market_estimate';
+          explain =
+            (merged.note && /estimat/i.test(merged.note) ? merged.note : null) ||
+            `Market estimate in ${cur} from what you described — not scraped from a live listing.`;
+        } else {
+          merged.target_amount = undefined;
+        }
+      } catch (e) {
+        warning = e instanceof Error ? e.message : 'AI extract unavailable';
       }
     }
 
@@ -588,8 +701,14 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
         if (!merged.target_amount) {
           merged.target_amount = Number(fallback.amount).toFixed(2);
           merged.note = (merged.note ? `${merged.note} · ` : '') + 'Rough offline estimate';
+          source = 'offline_heuristic';
+          explain = fallback.explain;
         }
       }
+    }
+
+    if (merged.target_amount && isYearAmount(Number(merged.target_amount))) {
+      merged.target_amount = undefined;
     }
 
     if (!merged.title) {
@@ -620,7 +739,7 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
       /* optional */
     }
 
-    return { draft: merged, financeNote, warning };
+    return { draft: merged, financeNote, warning, source, explain };
   }
 
   async function onAiSend() {
@@ -631,21 +750,55 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
     setAiInput('');
     setAiBusy(true);
     try {
+      // Meta / source questions — always answer; never treat as a new product detail.
+      if (isMetaPriceQuestion(text)) {
+        const mem = estimateMemoryRef.current;
+        const draft = aiDraft || mem?.draft || null;
+        setAiMessages((prev) => [
+          ...prev,
+          {
+            id: `a-${Date.now()}`,
+            role: 'assistant',
+            content: explainEstimateSource(aiInterview, draft, mem),
+            chips: draft?.target_amount ? estimateChips(draft) : undefined,
+            draft: draft ?? undefined,
+          },
+        ]);
+        return;
+      }
+
       const nextDetails = [...aiInterview.details, text];
       const itemHint = aiInterview.itemHint || text;
       const turns = aiInterview.turns + 1;
       const ready = aiInterview.phase !== 'gather' || enoughToEstimate(nextDetails, text);
 
       if (!ready) {
-        setAiInterview({ phase: 'gather', turns, itemHint, details: nextDetails });
-        const q = await askFollowUp(itemHint, nextDetails);
-        setAiMessages((prev) => [...prev, { id: `a-${Date.now()}`, role: 'assistant', content: q }]);
+        setAiInterview({
+          phase: 'gather',
+          turns,
+          itemHint,
+          details: nextDetails,
+          estimateSource: aiInterview.estimateSource,
+          estimateExplain: aiInterview.estimateExplain,
+        });
+        setAiMessages((prev) => [
+          ...prev,
+          { id: `a-${Date.now()}`, role: 'assistant', content: askFollowUp(itemHint, nextDetails) },
+        ]);
         return;
       }
 
-      setAiInterview({ phase: 'estimate', turns, itemHint, details: nextDetails });
-      const { draft, financeNote, warning } = await runPriceEstimate(nextDetails);
+      const { draft, financeNote, warning, source, explain } = await runPriceEstimate(nextDetails, text);
       setAiDraft(draft);
+      rememberEstimate(source, explain, draft);
+      setAiInterview({
+        phase: draft.target_amount ? 'estimate' : 'gather',
+        turns,
+        itemHint,
+        details: nextDetails,
+        estimateSource: source,
+        estimateExplain: explain,
+      });
 
       if (!draft.target_amount) {
         setAiMessages((prev) => [
@@ -656,20 +809,13 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
             content: [
               "I still don't have a solid price.",
               warning ? `(${warning})` : null,
-              'Tell me the model and year more clearly, or type a number like “about 25000”.',
+              'Tell me the model and year more clearly, paste a product link, or type a number like “about 25000 ETB”.',
             ]
               .filter(Boolean)
               .join('\n'),
           },
         ]);
-        setAiInterview({ phase: 'gather', turns, itemHint, details: nextDetails });
         return;
-      }
-
-      // User typed an explicit amount — prefer it.
-      const typedAmt = text.match(/(?:about|around|≈|~)?\s*([\d]{3,}(?:[.,]\d{2})?)/i);
-      if (typedAmt && /\b(about|around|etb|usd|\$|price|cost)\b/i.test(text)) {
-        draft.target_amount = typedAmt[1].replace(/,/g, '');
       }
 
       const priceLabel = formatMoney(
@@ -677,10 +823,20 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
         (draft.currency_code || currency).toUpperCase(),
         user.locale,
       );
+      const sourceLine =
+        source === 'product_link'
+          ? `Source: product link${draft.source_url ? ` (${draft.source_url})` : ''}.`
+          : source === 'user_stated'
+            ? 'Source: the price you typed.'
+            : source === 'offline_heuristic'
+              ? 'Source: rough offline ballpark (not a live listing).'
+              : 'Source: market estimate from your description — not a live listing.';
       const content = [
         `That’s around ${priceLabel} for ${draft.title || 'that item'}.`,
+        sourceLine,
+        explain && source === 'market_estimate' ? explain : null,
         financeNote,
-        'Does that price work for you?',
+        'Does that price work for you? (Ask “where from?” anytime.)',
       ]
         .filter(Boolean)
         .join('\n\n');
@@ -702,7 +858,7 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
           role: 'assistant',
           content:
             e instanceof Error
-              ? `Something went wrong: ${e.message}. Try again with the model and year.`
+              ? `Something went wrong: ${e.message}. Try again with the model and year, or paste a product link.`
               : "I couldn't estimate that yet — tell me the item, model, and year.",
         },
       ]);
@@ -712,6 +868,26 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
   }
 
   function onAiChipPress(chip: AiChip, draftSnapshot: GoalDraft) {
+    if (chip.kind === 'askSource') {
+      const mem = estimateMemoryRef.current;
+      const draft = draftSnapshot || aiDraft || mem?.draft || null;
+      setAiMessages((prev) => [
+        ...prev,
+        {
+          id: `u-${Date.now()}`,
+          role: 'user',
+          content: 'Where did you get that price?',
+        },
+        {
+          id: `a-${Date.now()}`,
+          role: 'assistant',
+          content: explainEstimateSource(aiInterview, draft, mem),
+          chips: draft?.target_amount ? estimateChips(draft) : undefined,
+          draft: draft ?? undefined,
+        },
+      ]);
+      return;
+    }
     if (chip.kind === 'retry') {
       resetAiInterview();
       setAiMessages((prev) => [
@@ -725,7 +901,13 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
       return;
     }
     if (chip.kind === 'tooHigh' || chip.kind === 'tooLow') {
-      setAiInterview((prev) => ({ ...prev, phase: 'gather', turns: Math.max(1, prev.turns - 1) }));
+      setAiInterview((prev) => ({
+        ...prev,
+        phase: 'gather',
+        turns: Math.max(1, prev.turns - 1),
+        estimateSource: prev.estimateSource,
+        estimateExplain: prev.estimateExplain,
+      }));
       setAiMessages((prev) => [
         ...prev,
         {

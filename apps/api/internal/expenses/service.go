@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -988,6 +989,15 @@ type SMSIngestInput struct {
 	Text      string
 	AccountID *uuid.UUID
 	Create    bool
+	// Optional client-side parse (mobile). When set, these win over server re-parse
+	// so phone and API never disagree on amount / direction / summary.
+	Kind         string
+	Amount       string
+	CurrencyCode string
+	AccountLast4 string
+	Counterparty string
+	Title        string
+	Note         string
 }
 
 type SMSIngestResult struct {
@@ -1011,6 +1021,33 @@ func (s *Service) IngestSMS(ctx context.Context, userID uuid.UUID, in SMSIngestI
 	}
 	fp := SMSFingerprint(text)
 	parsed := ParseTransferSMS(text)
+	// Prefer the phone's parse when the client already extracted a transfer.
+	if k := strings.ToLower(strings.TrimSpace(in.Kind)); k == KindIncome || k == KindExpense {
+		parsed.Kind = k
+	}
+	if amt := normalizeSMSAmount(in.Amount); amt != "" {
+		parsed.Amount = amt
+	}
+	if cur := strings.ToUpper(strings.TrimSpace(in.CurrencyCode)); len(cur) == 3 {
+		parsed.CurrencyCode = cur
+	}
+	if last4 := strings.TrimSpace(in.AccountLast4); len(last4) >= 4 {
+		digits := regexp.MustCompile(`\D`).ReplaceAllString(last4, "")
+		if len(digits) >= 4 {
+			parsed.AccountLast4 = digits[len(digits)-4:]
+		}
+	}
+	if cp := strings.TrimSpace(in.Counterparty); cp != "" {
+		parsed.Counterparty = cp
+		if parsed.Kind == KindIncome {
+			parsed.SummaryTitle = "From " + cp
+		} else if parsed.Kind == KindExpense {
+			parsed.SummaryTitle = "To " + cp
+		}
+	}
+	if t := strings.TrimSpace(in.Title); t != "" {
+		parsed.SummaryTitle = t
+	}
 	if logger, ok := s.store.(SMSLogStore); ok {
 		if existing, err := logger.GetSMSIngest(ctx, userID, fp); err == nil && existing != nil {
 			out := SMSIngestResult{Parsed: parsed, Duplicate: true}
@@ -1062,31 +1099,40 @@ func (s *Service) IngestSMS(ctx context.Context, userID uuid.UUID, in SMSIngestI
 		return out, nil
 	}
 
-	title := "Transfer"
-	if parsed.Counterparty != "" {
-		cp := parsed.Counterparty
-		if utf8.RuneCountInString(cp) > 40 {
-			r := []rune(cp)
-			cp = string(r[:40])
+	title := strings.TrimSpace(in.Title)
+	if title == "" {
+		title = strings.TrimSpace(parsed.SummaryTitle)
+	}
+	if title == "" {
+		title = "Transfer"
+		if parsed.Counterparty != "" {
+			cp := parsed.Counterparty
+			if utf8.RuneCountInString(cp) > 40 {
+				r := []rune(cp)
+				cp = string(r[:40])
+			}
+			if parsed.Kind == KindIncome {
+				title = "From " + cp
+			} else {
+				title = "To " + cp
+			}
+		} else if parsed.AccountLast4 != "" {
+			title = "Account …" + parsed.AccountLast4
 		}
-		if parsed.Kind == KindIncome {
-			title = "From " + cp
-		} else {
-			title = "To " + cp
-		}
-	} else if parsed.AccountLast4 != "" {
-		title = "Account …" + parsed.AccountLast4
 	}
 	// Keep a short note — never store the full SMS body as the visible summary.
-	note := "Bank transfer"
-	if parsed.AccountLast4 != "" {
-		note = "acct …" + parsed.AccountLast4
+	note := strings.TrimSpace(in.Note)
+	if note == "" {
+		note = "Bank transfer"
+		if parsed.AccountLast4 != "" {
+			note = "acct …" + parsed.AccountLast4
+		}
+		if parsed.Counterparty != "" && !strings.Contains(strings.ToLower(title), strings.ToLower(parsed.Counterparty)) {
+			note = note + " · " + parsed.Counterparty
+		}
 	}
-	if parsed.Counterparty != "" {
-		note = note + " · " + parsed.Counterparty
-	}
-	if len(note) > 120 {
-		note = note[:120]
+	if utf8.RuneCountInString(note) > 120 {
+		note = string([]rune(note)[:120])
 	}
 
 	accountID := in.AccountID

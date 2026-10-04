@@ -17,6 +17,7 @@ import { CURRENCIES } from './catalogs';
 import { DateField, isoToday } from './DateField';
 import { useFormatDate } from './datePrefs';
 import { scheduleBillReminders } from './billReminders';
+import { displayCashflowNote, displayCashflowTitle } from './ExpensesScreen';
 import { IconContact, IconEdit, IconSearch, IconTrash } from './icons';
 import { dialForCountry, toE164 } from './phone';
 import { SearchSelect } from './SearchSelect';
@@ -1302,9 +1303,12 @@ export function CashflowShowScreen({
       keywords: a.name.toLowerCase(),
     }));
 
+  const showTitle = displayCashflowTitle(current, user.locale);
+  const showNote = displayCashflowNote(current);
+
   return (
     <View style={{ gap: space.md, paddingTop: 4 }}>
-      <ScreenHeader title={current.title || current.category} onBack={onBack} />
+      <ScreenHeader title={showTitle || current.category} onBack={onBack} />
 
       <Card>
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
@@ -1321,11 +1325,14 @@ export function CashflowShowScreen({
                 const cat = (current.category || '').toLowerCase();
                 const note = (current.note || '').toLowerCase();
                 if (expected) return income ? 'Expected' : 'Due';
-                if (cat.includes('transfer') || note.includes('transfer')) return 'Transfer';
+                if (cat.includes('transfer') || note.includes('transfer') || note.startsWith('acct')) return 'Transfer';
                 if (cat.includes('import') || note.startsWith('plaid:') || note.startsWith('sms:')) return 'Imported';
                 if (current.linked_loan_id) return income ? 'Loan repayment' : 'Loan payment';
                 return income ? 'Received' : 'Spent';
               })()}
+            </Text>
+            <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }} numberOfLines={2}>
+              {showTitle}
             </Text>
             <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 28 }}>
               {income ? '+' : '−'}
@@ -1366,8 +1373,8 @@ export function CashflowShowScreen({
             </Pressable>
           </View>
         </View>
-        {current.note ? (
-          <Text style={{ color: colors.text, fontFamily: fonts.ui, fontSize: 14, marginTop: 8 }}>{current.note}</Text>
+        {showNote && showNote !== showTitle ? (
+          <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 14, marginTop: 8 }}>{showNote}</Text>
         ) : null}
         {expected ? (
           <View style={{ marginTop: 12, gap: space.sm }}>

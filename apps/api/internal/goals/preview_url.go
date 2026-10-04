@@ -34,8 +34,11 @@ var (
 	metaContentRe  = regexp.MustCompile(`(?is)<meta[^>]+content\s*=\s*["']([^"']*)["'][^>]+(?:property|name)\s*=\s*["']([^"']+)["'][^>]*>`)
 	titleTagRe     = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
 	jsonLDRe       = regexp.MustCompile(`(?is)<script[^>]+type=["']application/ld\+json["'][^>]*>(.*?)</script>`)
+	itemPropPriceRe = regexp.MustCompile(`(?is)itemprop\s*=\s*["']price["'][^>]*content\s*=\s*["']([^"']+)["']|content\s*=\s*["']([^"']+)["'][^>]*itemprop\s*=\s*["']price["']`)
+	jsonPriceRe    = regexp.MustCompile(`(?i)"(?:price|salePrice|sale_price|currentPrice|current_price|amount)"\s*:\s*"?([0-9]+(?:\.[0-9]{1,2})?)"?`)
+	jsonCurrencyRe = regexp.MustCompile(`(?i)"(?:priceCurrency|currency|currencyCode|currency_code)"\s*:\s*"([A-Z]{3})"`)
 	priceTokenRe   = regexp.MustCompile(`(?i)(?:USD|EUR|GBP|ETB|CAD|AUD|JPY|CHF|CNY|INR|\$|€|£)\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)`)
-	barePriceRe    = regexp.MustCompile(`(?i)(?:price|amount|cost)["'\s:=]+["']?([0-9]+(?:\.[0-9]{1,2})?)`)
+	barePriceRe    = regexp.MustCompile(`(?i)(?:["']?(?:price|salePrice|sale_price|amount|cost)["']?\s*[:=]\s*["']?)([0-9]{2,}(?:\.[0-9]{1,2})?)`)
 )
 
 func (h *Handler) PreviewURL(w http.ResponseWriter, r *http.Request) {
@@ -116,6 +119,22 @@ func PreviewProductURL(ctx context.Context, raw string) (PreviewURLResult, error
 		Price:       firstNonEmpty(meta["og:price:amount"], meta["product:price:amount"], meta["twitter:data1"]),
 	}
 	applyJSONLD(&out, html, u)
+	if out.Price == "" {
+		if m := itemPropPriceRe.FindStringSubmatch(html); len(m) > 0 {
+			out.Price = firstNonEmpty(m[1], m[2])
+		}
+	}
+	if out.Price == "" {
+		if m := jsonPriceRe.FindStringSubmatch(html); len(m) >= 2 {
+			out.Price = m[1]
+		}
+	}
+	if out.Currency == "" {
+		if m := jsonCurrencyRe.FindStringSubmatch(html); len(m) >= 2 {
+			out.Currency = strings.ToUpper(m[1])
+		}
+	}
+	out.Price = normalizePrice(out.Price)
 	if out.Price == "" || out.Currency == "" {
 		price, cur := guessPrice(html)
 		if out.Price == "" {
@@ -249,39 +268,99 @@ func firstImage(v any) string {
 }
 
 func guessPrice(html string) (price, currency string) {
-	if m := priceTokenRe.FindStringSubmatch(html); len(m) >= 2 {
+	type cand struct {
+		price string
+		cur   string
+		score int
+	}
+	var cands []cand
+	for _, m := range priceTokenRe.FindAllStringSubmatch(html, 40) {
+		if len(m) < 2 {
+			continue
+		}
+		p := normalizePrice(m[1])
+		if p == "" || isYearLikePrice(p) {
+			continue
+		}
 		tok := m[0]
-		price = normalizePrice(m[1])
+		cur := ""
 		switch {
 		case strings.Contains(tok, "$"):
-			currency = "USD"
+			cur = "USD"
 		case strings.Contains(tok, "€"):
-			currency = "EUR"
+			cur = "EUR"
 		case strings.Contains(tok, "£"):
-			currency = "GBP"
+			cur = "GBP"
 		default:
 			for _, c := range []string{"USD", "EUR", "GBP", "ETB", "CAD", "AUD", "JPY", "CHF", "CNY", "INR"} {
 				if strings.Contains(strings.ToUpper(tok), c) {
-					currency = c
+					cur = c
 					break
 				}
 			}
 		}
-		return price, currency
+		score := 2
+		if cur != "" {
+			score += 2
+		}
+		f, _ := strconv.ParseFloat(p, 64)
+		if f >= 10 && f <= 1_000_000 {
+			score += 2
+		}
+		cands = append(cands, cand{price: p, cur: cur, score: score})
 	}
-	if m := barePriceRe.FindStringSubmatch(html); len(m) >= 2 {
-		return normalizePrice(m[1]), ""
+	for _, m := range barePriceRe.FindAllStringSubmatch(html, 20) {
+		if len(m) < 2 {
+			continue
+		}
+		p := normalizePrice(m[1])
+		if p == "" || isYearLikePrice(p) {
+			continue
+		}
+		f, _ := strconv.ParseFloat(p, 64)
+		score := 1
+		if f >= 10 && f <= 1_000_000 {
+			score += 2
+		}
+		cands = append(cands, cand{price: p, score: score})
+	}
+	bestIdx := -1
+	for i, c := range cands {
+		if bestIdx < 0 || c.score > cands[bestIdx].score {
+			bestIdx = i
+		}
+	}
+	if bestIdx >= 0 {
+		return cands[bestIdx].price, cands[bestIdx].cur
 	}
 	return "", ""
+}
+
+func isYearLikePrice(p string) bool {
+	f, err := strconv.ParseFloat(p, 64)
+	if err != nil {
+		return false
+	}
+	if f != float64(int64(f)) {
+		return false
+	}
+	return f >= 1900 && f <= 2099
 }
 
 func normalizePrice(p string) string {
 	p = strings.TrimSpace(p)
 	p = strings.ReplaceAll(p, ",", "")
+	p = strings.TrimPrefix(p, "$")
+	p = strings.TrimPrefix(p, "€")
+	p = strings.TrimPrefix(p, "£")
 	if p == "" {
 		return ""
 	}
-	if _, err := strconv.ParseFloat(p, 64); err != nil {
+	f, err := strconv.ParseFloat(p, 64)
+	if err != nil || f <= 0 {
+		return ""
+	}
+	if isYearLikePrice(p) {
 		return ""
 	}
 	return p

@@ -323,9 +323,16 @@ func (h *Handler) DeleteBudget(w http.ResponseWriter, r *http.Request) {
 }
 
 type smsIngestBody struct {
-	Text      string     `json:"text"`
-	AccountID *uuid.UUID `json:"account_id"`
-	Create    bool       `json:"create"`
+	Text         string     `json:"text"`
+	AccountID    *uuid.UUID `json:"account_id"`
+	Create       bool       `json:"create"`
+	Kind         string     `json:"kind"`
+	Amount       string     `json:"amount"`
+	CurrencyCode string     `json:"currency_code"`
+	AccountLast4 string     `json:"account_last4"`
+	Counterparty string     `json:"counterparty"`
+	Title        string     `json:"title"`
+	Note         string     `json:"note"`
 }
 
 func (h *Handler) IngestSMS(w http.ResponseWriter, r *http.Request) {
@@ -335,7 +342,16 @@ func (h *Handler) IngestSMS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := h.svc.IngestSMS(r.Context(), auth.UserIDFrom(r.Context()), SMSIngestInput{
-		Text: body.Text, AccountID: body.AccountID, Create: body.Create,
+		Text:         body.Text,
+		AccountID:    body.AccountID,
+		Create:       body.Create,
+		Kind:         body.Kind,
+		Amount:       body.Amount,
+		CurrencyCode: body.CurrencyCode,
+		AccountLast4: body.AccountLast4,
+		Counterparty: body.Counterparty,
+		Title:        body.Title,
+		Note:         body.Note,
 	})
 	if err != nil {
 		httpx.Error(w, err)

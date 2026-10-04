@@ -45,25 +45,50 @@ function cashflowActionLabel(entry: CashflowEntry, locale?: string | null): stri
   return t(locale, 'expenses.actionSpent');
 }
 
-/** Short title for lists — hide full SMS / long paste blobs. */
+function looksLikeRawSms(text: string): boolean {
+  const s = (text || '').trim();
+  if (!s) return false;
+  if (s.length > 120) return true;
+  return /dear customer|you have (?:transfered|transferred|received|paid)|transaction of|your (?:a\/c|account)|otp|balance is|e-money|telebirr|ref\s*:?\s*ft/i.test(
+    s,
+  );
+}
+
+/** Short title for lists / show — hide full SMS / long paste blobs. */
 export function displayCashflowTitle(entry: CashflowEntry, locale?: string | null): string {
   const raw = (entry.title || entry.category || 'Entry').trim();
   const note = (entry.note || '').trim();
-  // Legacy rows stored the SMS body as note with newlines — never show that as title.
-  if (raw.length > 48 || /dear customer|transaction of|your (a\/c|account)|otp|balance is/i.test(raw)) {
-    if (/^from /i.test(raw) || /^to /i.test(raw)) return raw.slice(0, 48);
-    if (note.startsWith('acct')) {
-      const bit = note.split('\n')[0] || note;
-      return bit.length > 40 ? bit.slice(0, 40) : bit;
+  // Legacy rows stored the SMS body as title or note — never show the raw body.
+  if (looksLikeRawSms(raw) || raw.length > 48) {
+    if (/^from /i.test(raw) || /^to /i.test(raw) || /^money (received|sent)/i.test(raw)) {
+      return raw.slice(0, 48);
+    }
+    const firstNote = note.split('\n')[0] || '';
+    if (/^from /i.test(firstNote) || /^to /i.test(firstNote) || firstNote.startsWith('acct')) {
+      return firstNote.slice(0, 48);
     }
     return entry.kind === 'income' ? t(locale, 'expenses.transferIn') : t(locale, 'expenses.transferOut');
   }
-  if (raw === 'Bank SMS') {
+  if (raw === 'Bank SMS' || raw === 'Transfer') {
     const first = note.split('\n')[0] || '';
-    if (first.startsWith('acct')) return first.slice(0, 40);
+    if (/^from /i.test(first) || /^to /i.test(first) || first.startsWith('acct')) return first.slice(0, 40);
     return t(locale, 'expenses.actionTransfer');
   }
   return raw;
+}
+
+/** Short note for show page — never the full SMS body. */
+export function displayCashflowNote(entry: CashflowEntry): string | null {
+  const note = (entry.note || '').trim();
+  if (!note) return null;
+  if (looksLikeRawSms(note)) {
+    const title = (entry.title || '').trim();
+    if (title && !looksLikeRawSms(title) && title.length <= 60) return title;
+    return entry.kind === 'income' ? 'Money received' : 'Money sent';
+  }
+  // Keep first line only (legacy rows sometimes appended SMS after a summary).
+  const first = note.split('\n')[0]?.trim() || note;
+  return first.slice(0, 120);
 }
 
 export type ExpensesTab = 'dashboard' | 'income' | 'expenses';

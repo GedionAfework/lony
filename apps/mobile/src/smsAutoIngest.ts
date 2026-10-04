@@ -3,8 +3,10 @@ import * as SecureStore from 'expo-secure-store';
 import { api, type MoneyAccount } from './api';
 import {
   accountTypeLabel,
+  isTransferSms,
   parseTransferSms,
   smsFingerprint,
+  summarizeSmsNote,
   type ParsedSmsTransfer,
   type SmsAccountType,
 } from './smsParse';
@@ -146,6 +148,10 @@ function accountKey(last4: string, currency: string): string {
   return `${currency.toUpperCase()}:${last4}`;
 }
 
+function walletKey(institution: string, currency: string): string {
+  return `${currency.toUpperCase()}:wallet:${institution.toLowerCase()}`;
+}
+
 function accountAlreadyExists(accounts: MoneyAccount[], last4: string, currency: string): MoneyAccount | undefined {
   const c = currency.toUpperCase();
   const want = last4.slice(-4);
@@ -156,6 +162,21 @@ function accountAlreadyExists(accounts: MoneyAccount[], last4: string, currency:
     if (digits.length >= 4 && digits.slice(-4) === want) return true;
     const hay = `${a.name} ${a.institution_label || ''}`.toLowerCase();
     return hay.includes(want);
+  });
+}
+
+function findWalletAccount(
+  accounts: MoneyAccount[],
+  institution: string,
+  currency: string,
+): MoneyAccount | undefined {
+  const c = currency.toUpperCase();
+  const needle = institution.toLowerCase();
+  return accounts.find((a) => {
+    if (a.currency_code.toUpperCase() !== c) return false;
+    if (a.account_type === 'cash') return false;
+    const hay = `${a.name} ${a.institution_label || ''}`.toLowerCase();
+    return hay.includes(needle);
   });
 }
 
@@ -179,6 +200,98 @@ export type SmsAutoSyncResult = {
   duplicates: number;
   permissionDenied?: boolean;
 };
+
+/** Resolve / create the right account for a parsed SMS (currency + own last4 / wallet). */
+async function resolveAccountForSms(
+  token: string,
+  parsed: ParsedSmsTransfer,
+  defaultCurrency: string,
+  accounts: MoneyAccount[],
+  opts?: { autoCreate?: boolean },
+): Promise<{ accountId?: string; accounts: MoneyAccount[]; added: number }> {
+  const currency = (parsed.currency || defaultCurrency || 'USD').toUpperCase();
+  const last4 = (parsed.accountLast4 || '').replace(/\D/g, '').slice(-4);
+  const inst = parsed.institutionHint || accountTypeLabel(parsed.accountType);
+  let list = accounts;
+  let added = 0;
+
+  // Never create/match accounts from counterparty digits.
+  if (
+    last4.length === 4 &&
+    !(parsed.otherAccountLast4 && parsed.otherAccountLast4 === last4)
+  ) {
+    const existing = accountAlreadyExists(list, last4, currency);
+    if (existing) return { accountId: existing.id, accounts: list, added };
+    if (opts?.autoCreate) {
+      try {
+        const label = `${inst} …${last4}`;
+        const created = await api.createAccount(token, {
+          name: label,
+          account_type: mapAccountType(parsed.accountType),
+          currency_code: currency,
+          balance: '0',
+          institution_label: inst,
+        });
+        list = [...list, created.account];
+        added = 1;
+        return { accountId: created.account.id, accounts: list, added };
+      } catch {
+        /* fall through */
+      }
+    }
+  }
+
+  // Telebirr / wallets often have no account digits — match by institution + currency.
+  if (parsed.accountType === 'mobile_money' || parsed.institutionHint) {
+    const wallet = findWalletAccount(list, inst, currency);
+    if (wallet) return { accountId: wallet.id, accounts: list, added };
+    if (opts?.autoCreate) {
+      try {
+        const created = await api.createAccount(token, {
+          name: inst,
+          account_type: mapAccountType(parsed.accountType === 'other' ? 'bank' : parsed.accountType),
+          currency_code: currency,
+          balance: '0',
+          institution_label: inst,
+        });
+        list = [...list, created.account];
+        added = 1;
+        return { accountId: created.account.id, accounts: list, added };
+      } catch {
+        /* fall through */
+      }
+    }
+  }
+
+  const byCurrency = list.find((a) => a.currency_code.toUpperCase() === currency && a.account_type !== 'cash');
+  if (byCurrency) return { accountId: byCurrency.id, accounts: list, added };
+  return { accountId: undefined, accounts: list, added };
+}
+
+async function ingestParsedSms(
+  token: string,
+  body: string,
+  parsed: ParsedSmsTransfer,
+  accountId: string,
+): Promise<{ imported: boolean; duplicate: boolean }> {
+  const title = parsed.summaryTitle || (parsed.kind === 'income' ? 'Money received' : 'Money sent');
+  const note = summarizeSmsNote(parsed);
+  const res = await api.ingestCashflowSms(token, {
+    text: body,
+    account_id: accountId,
+    create: true,
+    kind: parsed.kind || undefined,
+    amount: parsed.amount || undefined,
+    currency_code: parsed.currency || undefined,
+    account_last4: parsed.accountLast4 || undefined,
+    counterparty: parsed.counterparty || undefined,
+    title,
+    note,
+  });
+  if (res.duplicate || res.matched_existing_id) return { imported: false, duplicate: true };
+  if (res.entry) return { imported: true, duplicate: false };
+  return { imported: false, duplicate: false };
+}
 
 /**
  * Full onboarding when SMS auto-import is turned on:
@@ -210,17 +323,21 @@ export async function activateAndSyncSms(
       string,
       { last4: string; currency: string; label: string; accountType: SmsAccountType; institution: string | null }
     >();
+    const discoveredWallets = new Map<
+      string,
+      { currency: string; label: string; accountType: SmsAccountType; institution: string }
+    >();
 
     for (const msg of messages) {
+      if (!isTransferSms(msg.body)) continue;
       const parsed = parseTransferSms(msg.body);
       if (!parsed.amount || !parsed.kind || parsed.confidence < 0.45) continue;
       const fp = smsFingerprint(msg.body);
       candidates.push({ msg, parsed, fp });
-      // Only discover *your* account — never the counterparty's digits.
+
+      const currency = (parsed.currency || defaultCurrency || 'USD').toUpperCase();
       const last4 = (parsed.accountLast4 || '').replace(/\D/g, '').slice(-4);
-      if (last4.length === 4) {
-        if (parsed.otherAccountLast4 && parsed.otherAccountLast4 === last4) continue;
-        const currency = (parsed.currency || defaultCurrency || 'USD').toUpperCase();
+      if (last4.length === 4 && !(parsed.otherAccountLast4 && parsed.otherAccountLast4 === last4)) {
         const key = accountKey(last4, currency);
         if (!discovered.has(key)) {
           const kindLabel = accountTypeLabel(parsed.accountType);
@@ -233,26 +350,27 @@ export async function activateAndSyncSms(
             label: `${inst} …${last4}`,
           });
         }
+      } else if (parsed.institutionHint || parsed.accountType === 'mobile_money') {
+        const inst = parsed.institutionHint || 'Mobile money';
+        const key = walletKey(inst, currency);
+        if (!discoveredWallets.has(key)) {
+          discoveredWallets.set(key, {
+            currency,
+            accountType: parsed.accountType === 'other' ? 'mobile_money' : parsed.accountType,
+            institution: inst,
+            label: inst,
+          });
+        }
       }
     }
 
     let accounts = (await api.listAccounts(token).catch(() => ({ accounts: [] as MoneyAccount[] }))).accounts ?? [];
     const asked = await loadAskedAccounts();
     let accountsAdded = 0;
-    const accountByKey = new Map<string, string>();
-
-    for (const a of accounts) {
-      const m = `${a.name} ${a.institution_label || ''}`.match(/(\d{4})\b/);
-      if (m) accountByKey.set(accountKey(m[1], a.currency_code), a.id);
-    }
 
     for (const disc of discovered.values()) {
       const key = accountKey(disc.last4, disc.currency);
-      const existing = accountAlreadyExists(accounts, disc.last4, disc.currency);
-      if (existing) {
-        accountByKey.set(key, existing.id);
-        continue;
-      }
+      if (accountAlreadyExists(accounts, disc.last4, disc.currency)) continue;
       if (asked.has(key)) continue;
       asked.add(key);
       const yes = await askAddAccount(disc.label, disc.currency);
@@ -266,16 +384,34 @@ export async function activateAndSyncSms(
           institution_label: disc.institution || disc.label,
         });
         accounts = [...accounts, created.account];
-        accountByKey.set(key, created.account.id);
         accountsAdded++;
       } catch {
         /* skip create failure */
       }
     }
-    await saveAskedAccounts(asked);
 
-    // Fallback: any account the user already has.
-    const fallbackId = accounts[0]?.id;
+    for (const disc of discoveredWallets.values()) {
+      const key = walletKey(disc.institution, disc.currency);
+      if (findWalletAccount(accounts, disc.institution, disc.currency)) continue;
+      if (asked.has(key)) continue;
+      asked.add(key);
+      const yes = await askAddAccount(disc.label, disc.currency);
+      if (!yes) continue;
+      try {
+        const created = await api.createAccount(token, {
+          name: disc.label,
+          account_type: mapAccountType(disc.accountType),
+          currency_code: disc.currency,
+          balance: '0',
+          institution_label: disc.institution,
+        });
+        accounts = [...accounts, created.account];
+        accountsAdded++;
+      } catch {
+        /* skip */
+      }
+    }
+    await saveAskedAccounts(asked);
 
     const seen = await loadSeen();
     let imported = 0;
@@ -287,52 +423,29 @@ export async function activateAndSyncSms(
         skipped++;
         continue;
       }
-      const last4 = (parsed.accountLast4 || parsed.accountNumber || '').replace(/\D/g, '').slice(-4);
-      const currency = (parsed.currency || defaultCurrency || 'USD').toUpperCase();
-      let accountId: string | undefined;
-      if (last4.length === 4) {
-        accountId = accountByKey.get(accountKey(last4, currency));
-      }
-      if (!accountId) {
-        accountId = accounts.find((a) => a.currency_code.toUpperCase() === currency)?.id ?? fallbackId;
-      }
-      if (!accountId) {
+      const resolved = await resolveAccountForSms(token, parsed, defaultCurrency, accounts, {
+        autoCreate: false,
+      });
+      accounts = resolved.accounts;
+      if (!resolved.accountId) {
         skipped++;
         continue;
       }
       try {
-        // Money sent: notify and let the user complete the expense form (do not auto-create).
-        if (parsed.kind === 'expense') {
-          seen.add(fp);
-          await notifySmsTransfer({
-            kind: 'expense',
-            amount: parsed.amount!,
-            currency,
-            counterparty: parsed.counterparty,
-            accountLast4: last4.length === 4 ? last4 : parsed.accountLast4,
-            accountId,
-          });
-          imported++;
-          continue;
-        }
-
-        const res = await api.ingestCashflowSms(token, {
-          text: msg.body,
-          account_id: accountId,
-          create: true,
-        });
+        const result = await ingestParsedSms(token, msg.body, parsed, resolved.accountId);
         seen.add(fp);
-        if (res.duplicate || res.matched_existing_id) {
+        if (result.duplicate) {
           duplicates++;
-        } else if (res.entry) {
+        } else if (result.imported) {
           imported++;
+          const last4 = (parsed.accountLast4 || '').replace(/\D/g, '').slice(-4);
           await notifySmsTransfer({
-            kind: 'income',
+            kind: parsed.kind!,
             amount: parsed.amount!,
-            currency,
+            currency: (parsed.currency || defaultCurrency).toUpperCase(),
             counterparty: parsed.counterparty,
             accountLast4: last4.length === 4 ? last4 : parsed.accountLast4,
-            accountId,
+            accountId: resolved.accountId,
           });
         } else {
           skipped++;
@@ -366,12 +479,13 @@ export type SyncBankSmsOptions = {
   force?: boolean;
   /** How many inbox messages to scan (default 80; refresh uses more). */
   maxCount?: number;
+  defaultCurrency?: string;
 };
 
 /** Incremental sync when opening Home (no account prompts). */
 export async function syncBankSms(
   token: string,
-  accountId?: string,
+  _accountId?: string,
   opts?: SyncBankSmsOptions,
 ): Promise<SmsAutoSyncResult> {
   const empty: SmsAutoSyncResult = { imported: 0, skipped: 0, accountsAdded: 0, duplicates: 0 };
@@ -382,17 +496,30 @@ export async function syncBankSms(
     if (opts?.force && Platform.OS === 'android') {
       const ok = await ensureSmsPermission();
       if (!ok) return { ...empty, permissionDenied: true };
+      // Allow a full re-scan; server fingerprint still blocks true duplicates.
+      await SecureStore.deleteItemAsync(SEEN_KEY).catch(() => undefined);
     }
 
     const messages = await collectCandidateSms(opts?.maxCount ?? 80);
     if (!messages.length) return empty;
 
+    let accounts = (await api.listAccounts(token).catch(() => ({ accounts: [] as MoneyAccount[] }))).accounts ?? [];
+    const defaultCurrency =
+      opts?.defaultCurrency ||
+      accounts.find((a) => a.currency_code)?.currency_code ||
+      'ETB';
+
     const seen = await loadSeen();
     let imported = 0;
     let skipped = 0;
     let duplicates = 0;
+    let accountsAdded = 0;
 
     for (const msg of messages) {
+      if (!isTransferSms(msg.body)) {
+        skipped++;
+        continue;
+      }
       const local = parseTransferSms(msg.body);
       if (!local.amount || !local.kind || local.confidence < 0.45) {
         skipped++;
@@ -404,41 +531,31 @@ export async function syncBankSms(
         continue;
       }
       try {
-        const currency = (local.currency || '').toUpperCase() || undefined;
-        const last4 = (local.accountLast4 || local.accountNumber || '').replace(/\D/g, '').slice(-4);
-
-        // Money sent → notify; user taps to fill expense details (no auto-create).
-        if (local.kind === 'expense') {
-          seen.add(fp);
-          await notifySmsTransfer({
-            kind: 'expense',
-            amount: local.amount,
-            currency,
-            counterparty: local.counterparty,
-            accountLast4: last4.length === 4 ? last4 : local.accountLast4,
-            accountId,
-          });
-          imported++;
+        // Auto-create missing bank/wallet accounts during sync (Odit-style).
+        const resolved = await resolveAccountForSms(token, local, defaultCurrency, accounts, {
+          autoCreate: true,
+        });
+        accounts = resolved.accounts;
+        accountsAdded += resolved.added;
+        if (!resolved.accountId) {
+          skipped++;
           continue;
         }
 
-        const res = await api.ingestCashflowSms(token, {
-          text: msg.body,
-          account_id: accountId,
-          create: true,
-        });
+        const result = await ingestParsedSms(token, msg.body, local, resolved.accountId);
         seen.add(fp);
-        if (res.duplicate || res.matched_existing_id) {
+        if (result.duplicate) {
           duplicates++;
-        } else if (res.entry) {
+        } else if (result.imported) {
           imported++;
+          const last4 = (local.accountLast4 || '').replace(/\D/g, '').slice(-4);
           await notifySmsTransfer({
-            kind: 'income',
+            kind: local.kind,
             amount: local.amount,
-            currency,
+            currency: (local.currency || defaultCurrency).toUpperCase(),
             counterparty: local.counterparty,
             accountLast4: last4.length === 4 ? last4 : local.accountLast4,
-            accountId,
+            accountId: resolved.accountId,
           });
         } else {
           skipped++;
@@ -449,7 +566,7 @@ export async function syncBankSms(
     }
 
     await saveSeen(seen);
-    return { imported, skipped, accountsAdded: 0, duplicates };
+    return { imported, skipped, accountsAdded, duplicates };
   } catch {
     return empty;
   }

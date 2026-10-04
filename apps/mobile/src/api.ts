@@ -821,7 +821,19 @@ export const api = {
     }, token),
   ingestCashflowSms: (
     token: string,
-    body: { text: string; account_id?: string; create?: boolean },
+    body: {
+      text: string;
+      account_id?: string;
+      create?: boolean;
+      /** Client parse wins over server re-parse when provided. */
+      kind?: 'income' | 'expense';
+      amount?: string;
+      currency_code?: string;
+      account_last4?: string;
+      counterparty?: string;
+      title?: string;
+      note?: string;
+    },
   ) =>
     request<{
       parsed: {
@@ -831,6 +843,7 @@ export const api = {
         account_last4?: string;
         account_number?: string;
         counterparty?: string;
+        summary_title?: string;
         confidence: number;
       };
       entry?: CashflowEntry;

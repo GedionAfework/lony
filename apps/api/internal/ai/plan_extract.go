@@ -23,16 +23,25 @@ type GoalPriceRefresher interface {
 	RefreshSourcePrices(ctx context.Context, userID uuid.UUID) (goals.RefreshResult, error)
 }
 
-const planExtractSystemPrompt = `You turn a short note into a structured savings goal ("Plan") for a personal finance app.
-Return ONLY compact JSON with keys:
-title (max 80 chars), goal_type (one of: travel, purchase, savings, debt_payoff, custom), currency_code (3-letter, uppercase, empty if unknown),
-target_amount (positive decimal string without separators, empty if unknown), target_date (YYYY-MM-DD when stated), note (optional, max 200 chars), type_label (optional short label such as "Laptop" or "Trip to Dubai").
-Rules:
-- Use "purchase" for things to buy, "travel" for trips, "savings" for generic saving or emergency funds, "debt_payoff" for paying off debt.
-- If the user (or prompt) asks to estimate a price, or gives a product/model/year without a stated price, you MUST fill target_amount with a realistic market estimate (no currency symbols, no commas). Put "Estimated price" in note.
-- Only leave target_amount empty when there is truly not enough detail to estimate (e.g. just "I want something").
-- Prefer the user's currency_code when mentioned; otherwise leave currency_code empty.
-If a draft JSON is provided, keep its URL/image; you may update title, goal_type, note, type_label, target_date, and target_amount when estimating.`}
+const planExtractSystemPrompt = "" +
+	"You turn a short note into a structured savings goal (Plan) for a personal finance app. " +
+	"Return ONLY compact JSON with keys: " +
+	"title (max 80 chars), goal_type (one of: travel, purchase, savings, debt_payoff, custom), " +
+	"currency_code (3-letter, uppercase, empty if unknown), " +
+	"target_amount (positive decimal string without separators, empty if unknown), " +
+	"target_date (YYYY-MM-DD when stated), note (optional, max 200 chars), " +
+	"type_label (optional short label such as Laptop or Trip to Dubai). " +
+	"Rules: " +
+	"Use purchase for things to buy, travel for trips, savings for generic saving or emergency funds, debt_payoff for paying off debt. " +
+	"If the user or prompt asks to estimate a price, or gives a product/model/year without a stated price, " +
+	"you MUST fill target_amount with a realistic market estimate (no currency symbols, no commas). " +
+	"In note, start with 'Estimated market price' and briefly say what assumptions you used (year, condition, region). " +
+	"CRITICAL: Never put a model year (1900-2099) into target_amount. Years are not prices. " +
+	"If the user already stated an explicit purchase price (with currency or words like about/around/cost), use that exact number. " +
+	"Only leave target_amount empty when there is truly not enough detail to estimate. " +
+	"Prefer the user's currency_code when mentioned; otherwise leave currency_code empty. " +
+	"If a draft JSON is provided, keep its URL/image; you may update title, goal_type, note, type_label, target_date, and target_amount when estimating. " +
+	"If the draft already has a scraped target_amount from a product page, keep that amount and do not invent a different price."
 
 // ExtractPlan implements goals.PlanExtractor.
 func (s *Service) ExtractPlan(ctx context.Context, userID uuid.UUID, text string, base *PlanDraft) (PlanDraft, error) {
@@ -81,7 +90,12 @@ func (s *Service) ExtractPlan(ctx context.Context, userID uuid.UUID, text string
 	}
 	amt := strings.TrimSpace(strings.ReplaceAll(out.TargetAmount, ",", ""))
 	if d, err := decimal.NewFromString(amt); err == nil && d.GreaterThan(decimal.Zero) {
-		out.TargetAmount = d.Round(goals.Scale).StringFixed(goals.Scale)
+		// Reject model years mistaken for prices (e.g. 2018, 2024).
+		if d.Equal(d.Truncate(0)) && d.GreaterThanOrEqual(decimal.NewFromInt(1900)) && d.LessThanOrEqual(decimal.NewFromInt(2099)) {
+			out.TargetAmount = ""
+		} else {
+			out.TargetAmount = d.Round(goals.Scale).StringFixed(goals.Scale)
+		}
 	} else {
 		out.TargetAmount = ""
 	}

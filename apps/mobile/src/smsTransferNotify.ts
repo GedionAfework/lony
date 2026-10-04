@@ -57,16 +57,13 @@ export async function configureSmsNotificationHandler(): Promise<void> {
 
 function buildTitleNote(input: SmsTransferNotifyInput): { title: string; note: string } {
   const cp = (input.counterparty || '').trim();
+  const acct = (input.accountLast4 || '').replace(/\D/g, '').slice(-4);
+  const noteBits = [acct.length === 4 ? `acct …${acct}` : null, cp || null].filter(Boolean);
+  const note = noteBits.join(' · ') || 'Bank transfer';
   if (input.kind === 'income') {
-    return {
-      title: cp ? `From ${cp}` : 'Money received',
-      note: input.accountLast4 ? `acct …${input.accountLast4}` : 'Bank transfer',
-    };
+    return { title: cp ? `From ${cp}` : 'Money received', note };
   }
-  return {
-    title: cp ? `To ${cp}` : 'Money sent',
-    note: input.accountLast4 ? `acct …${input.accountLast4}` : 'Bank transfer',
-  };
+  return { title: cp ? `To ${cp}` : 'Money sent', note };
 }
 
 export function smsNotifyToPrefill(data: Record<string, unknown>): CashflowFormPrefill {
@@ -118,18 +115,25 @@ export async function notifySmsTransfer(input: SmsTransferNotifyInput): Promise<
     title,
     note,
     account_id: input.accountId || undefined,
-    open_form: isExpense ? '1' : '0',
+    // Entries are auto-created from SMS; tap just opens the matching list.
+    open_form: '0',
   };
 
   await Notifications.scheduleNotificationAsync({
     content: {
       title: isExpense ? 'Money sent' : 'Money received',
       body: isExpense
-        ? `${amountLabel} left your account. Tap to finish the expense.`
-        : `${amountLabel} arrived. Added to your income.`,
+        ? `${amountLabel}${cpBit(input)} saved as an expense.`
+        : `${amountLabel}${cpBit(input)} saved as income.`,
       data: payload,
       sound: true,
     },
     trigger: null,
   });
+}
+
+function cpBit(input: SmsTransferNotifyInput): string {
+  const cp = (input.counterparty || '').trim();
+  if (!cp) return '';
+  return input.kind === 'income' ? ` from ${cp}` : ` to ${cp}`;
 }

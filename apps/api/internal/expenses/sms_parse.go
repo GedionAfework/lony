@@ -17,20 +17,27 @@ type ParsedSMS struct {
 	AccountNumber string  `json:"account_number,omitempty"`
 	Counterparty  string  `json:"counterparty,omitempty"`
 	Confidence    float64 `json:"confidence"`
+	SummaryTitle  string  `json:"summary_title,omitempty"`
 }
 
 var (
-	reCredit = regexp.MustCompile(`(?i)\b(money received|received|credited|credit|deposit|deposited|incoming|you (?:have )?received|sent to you|transfer(?:red)? (?:to|into) (?:your|you)|payment received|inflow)\b`)
-	reDebit  = regexp.MustCompile(`(?i)\b(money sent|sent|debited|debit|withdrawn|withdrawal|paid|payment (?:of|to)|transfer(?:red)? (?:from|out)|outgoing|you (?:have )?sent|charged)\b`)
-	reAmt1   = regexp.MustCompile(`(?i)(?:(?:ETB|USD|EUR|GBP|KES|GHS|NGN|ZAR|AED|Br|\$|€|£|¥|₹|₦)\s*)([\d]{1,3}(?:,\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)`)
-	reAmt2   = regexp.MustCompile(`(?i)([\d]{1,3}(?:,\d{3})*(?:\.\d{1,2})?|\d+(?:\.\d{1,2})?)\s*(?:ETB|USD|EUR|GBP|KES|GHS|NGN|ZAR|AED|Br)`)
-	reAmt3   = regexp.MustCompile(`(?i)\b(?:amount|amt|sum)[:\s]+([\d,]+\.?\d*)`)
-	reAcct1  = regexp.MustCompile(`(?i)\b(?:a/c|acct|account|acc)(?:\s*(?:no|number|#)?)?[:\s.*-]*([0-9]{4,20})\b`)
-	reAcct2  = regexp.MustCompile(`\b([0-9]{10,16})\b`)
-	reAcct3  = regexp.MustCompile(`\*{2,}([0-9]{4})\b`)
-	reAcct4  = regexp.MustCompile(`(?i)\bend(?:ing)?(?:\s*in)?\s*([0-9]{4})\b`)
-	reFromTo = regexp.MustCompile(`(?i)\b(?:from|to|by)\s+([A-Za-z][A-Za-z0-9 .&'\-]{2,40})`)
-	reParty  = regexp.MustCompile(`(?i)\b(?:sender|receiver|beneficiary)[:\s]+([A-Za-z][A-Za-z0-9 .&'\-]{2,40})`)
+	reOTP       = regexp.MustCompile(`(?i)\b(otp|one[-\s]?time|verification code|pin code)\b`)
+	reIncome    = regexp.MustCompile(`(?i)\b(you have (?:received|been credited)|has been credited|received\s+(?:ETB|USD|Br)|credited|money received|deposit(?:ed)?)\b`)
+	reExpense   = regexp.MustCompile(`(?i)\b(you have (?:transfered|transferred|sent|paid|been debited)|has been debited|transfered|transferred|debited|money sent|paid\s+(?:ETB|USD|Br)|sent\s+(?:ETB|USD|Br)|transaction of)\b`)
+	reBalStrip  = regexp.MustCompile(`(?i)\b(?:your\s+)?(?:current\s+)?(?:e-?money\s+)?(?:account\s+)?balance\s+is\s+[A-Z$€£]*\s*[\d,]+\.?\d*`)
+	reAmt1      = regexp.MustCompile(`(?i)\b(?:transfered|transferred|received|paid|sent|debited|credited)\s+(?:with\s+)?(?:ETB|USD|EUR|GBP|Br)\s*([\d,]+\.?\d*)`)
+	reAmtDebit  = regexp.MustCompile(`(?i)\b(?:has been|was)\s+(?:debited|credited)\s+(?:with\s+)?(?:ETB|USD|EUR|GBP|Br)\s*([\d,]+\.?\d*)`)
+	reAmtTxn    = regexp.MustCompile(`(?i)\btransaction of\s+(?:ETB|USD|EUR|GBP|Br)\s*([\d,]+\.?\d*)`)
+	reAmt2      = regexp.MustCompile(`(?i)\b(?:ETB|USD|EUR|GBP|Br)\s*([\d,]+\.?\d*)\s+(?:to|from|for)\b`)
+	reAmt3      = regexp.MustCompile(`(?i)(?:ETB|USD|EUR|GBP|Br)\s*([\d,]{1,}(?:\.\d{1,2})?)`)
+	reOwnAcct   = regexp.MustCompile(`(?i)\b(?:from your account|your account)\s+([0-9*xX]{4,24})\b`)
+	reOwnDebit  = regexp.MustCompile(`(?i)\byour account\s+([0-9*xX]{4,24})\s+has been\s+(?:debited|credited)\b`)
+	reOwnMasked = regexp.MustCompile(`(?i)\byour account\s+[0-9]\*{3,}([0-9]{4})\b`)
+	reToParty   = regexp.MustCompile(`(?i)\b(?:transfered|transferred|sent|paid)\s+(?:ETB|USD|Br)?\s*[\d,]+\.?\d*\s+to\s+([+\dA-Za-z*][+\dA-Za-z0-9 *().'-]{1,50}?)(?:\s+on\b|\s+from\b|\s+Ref\b|\.|,|$)`)
+	reFromParty = regexp.MustCompile(`(?i)\breceived\s+(?:ETB|USD|Br)?\s*[\d,]+\.?\d*\s+from\s+([+\dA-Za-z*][+\dA-Za-z0-9 *().'-]{1,50}?)(?:\s+on\b|\.|,|$)`)
+	reFromPhone = regexp.MustCompile(`(?i)\bfrom\s+(\+?251[\d*]{6,12}|\+?09[\d*]{6,10})`)
+	rePaidFor   = regexp.MustCompile(`(?i)\bpaid\s+(?:ETB|USD|Br)?\s*[\d,]+\.?\d*\s+for\s+([A-Za-z0-9][A-Za-z0-9 .'-]{1,40}?)(?:\s+on\b|\.|,|$)`)
+	reCurrency  = regexp.MustCompile(`(?i)\b(ETB|USD|EUR|GBP)\b`)
 )
 
 func normalizeSMSAmount(raw string) string {
@@ -43,111 +50,142 @@ func normalizeSMSAmount(raw string) string {
 	return strconv.FormatFloat(f, 'f', 2, 64)
 }
 
+func cleanParty(raw string) string {
+	s := strings.TrimSpace(raw)
+	s = regexp.MustCompile(`\*+`).ReplaceAllString(s, "")
+	s = regexp.MustCompile(`\(\s*251[\d*]+\s*\)`).ReplaceAllString(s, "")
+	s = strings.Join(strings.Fields(s), " ")
+	s = strings.TrimRight(s, ".,;:")
+	if len(s) > 60 {
+		s = s[:60]
+	}
+	return s
+}
+
+// IsTransferSMS rejects OTP / balance-only noise.
+func IsTransferSMS(text string) bool {
+	raw := strings.TrimSpace(text)
+	if len(raw) < 24 {
+		return false
+	}
+	if reOTP.MatchString(raw) {
+		return false
+	}
+	if strings.Contains(strings.ToLower(raw), "balance is") && !reIncome.MatchString(raw) && !reExpense.MatchString(raw) {
+		return false
+	}
+	return reIncome.MatchString(raw) || reExpense.MatchString(raw)
+}
+
 // ParseTransferSMS extracts amount / account / direction from free-form SMS.
 func ParseTransferSMS(text string) ParsedSMS {
 	raw := strings.TrimSpace(text)
 	out := ParsedSMS{}
-	if raw == "" {
+	if raw == "" || !IsTransferSMS(raw) {
 		return out
 	}
-	score := 0.0
-	if reCredit.MatchString(raw) {
+	score := 0.2
+
+	if reIncome.MatchString(raw) {
 		out.Kind = KindIncome
 		score += 0.35
-	} else if reDebit.MatchString(raw) {
+	} else if reExpense.MatchString(raw) {
 		out.Kind = KindExpense
 		score += 0.35
 	}
+
+	stripped := reBalStrip.ReplaceAllString(raw, " ")
 	var amt string
-	if m := reAmt1.FindStringSubmatch(raw); len(m) > 1 {
+	if m := reAmt1.FindStringSubmatch(stripped); len(m) > 1 {
 		amt = normalizeSMSAmount(m[1])
-	} else if m := reAmt2.FindStringSubmatch(raw); len(m) > 1 {
+	} else if m := reAmtDebit.FindStringSubmatch(stripped); len(m) > 1 {
 		amt = normalizeSMSAmount(m[1])
-	} else if m := reAmt3.FindStringSubmatch(raw); len(m) > 1 {
+	} else if m := reAmtTxn.FindStringSubmatch(stripped); len(m) > 1 {
+		amt = normalizeSMSAmount(m[1])
+	} else if m := reAmt2.FindStringSubmatch(stripped); len(m) > 1 {
+		amt = normalizeSMSAmount(m[1])
+	} else if m := reAmt3.FindStringSubmatch(stripped); len(m) > 1 {
 		amt = normalizeSMSAmount(m[1])
 	}
 	if amt != "" {
 		out.Amount = amt
 		score += 0.4
 	}
-	upper := strings.ToUpper(raw)
-	for _, code := range []string{"ETB", "USD", "EUR", "GBP", "KES", "GHS", "NGN", "ZAR", "AED"} {
-		if strings.Contains(upper, code) {
-			out.CurrencyCode = code
-			score += 0.1
-			break
-		}
-	}
-	if out.CurrencyCode == "" {
-		switch {
-		case strings.Contains(raw, "$"):
-			out.CurrencyCode = "USD"
-		case strings.Contains(raw, "€"):
-			out.CurrencyCode = "EUR"
-		case strings.Contains(raw, "£"):
-			out.CurrencyCode = "GBP"
-		case strings.Contains(raw, "Br"):
-			out.CurrencyCode = "ETB"
-		}
-		if out.CurrencyCode != "" {
-			score += 0.05
-		}
-	}
-	// Prefer "your a/c" so counterparty account numbers are not treated as the user's.
-	reYourAcct := regexp.MustCompile(`(?i)\byour\s+(?:a/c|acct|account|acc)(?:\s*(?:no|number|#)?)?[:\s.*-]*([0-9*]{4,20})\b`)
-	var digits string
-	if m := reYourAcct.FindStringSubmatch(raw); len(m) > 1 {
-		digits = regexp.MustCompile(`\D`).ReplaceAllString(m[1], "")
+	if m := reCurrency.FindStringSubmatch(raw); len(m) > 1 {
+		out.CurrencyCode = strings.ToUpper(m[1])
 		score += 0.05
-	} else {
-		for _, re := range []*regexp.Regexp{reAcct1, reAcct3, reAcct4, reAcct2} {
-			if m := re.FindStringSubmatch(raw); len(m) > 1 {
-				digits = regexp.MustCompile(`\D`).ReplaceAllString(m[1], "")
-				if len(digits) >= 4 {
-					break
-				}
-				digits = ""
-			}
-		}
-		// If income SMS has "from … account" and another account, prefer the non-from one.
-		if out.Kind == KindIncome {
-			reFromAcct := regexp.MustCompile(`(?i)\bfrom\s+(?:a/c|acct|account|acc)?[:\s.*-]*([0-9*]{4,20})`)
-			if m := reFromAcct.FindStringSubmatch(raw); len(m) > 1 {
-				fromDigits := regexp.MustCompile(`\D`).ReplaceAllString(m[1], "")
-				if len(fromDigits) >= 4 && len(digits) >= 4 && fromDigits[len(fromDigits)-4:] == digits[len(digits)-4:] {
-					// First match was the sender — try to find another.
-					all := reAcct1.FindAllStringSubmatch(raw, -1)
-					for _, am := range all {
-						if len(am) < 2 {
-							continue
-						}
-						cand := regexp.MustCompile(`\D`).ReplaceAllString(am[1], "")
-						if len(cand) >= 4 && cand[len(cand)-4:] != fromDigits[len(fromDigits)-4:] {
-							digits = cand
-							break
-						}
-					}
-				}
-			}
-		}
+	} else if regexp.MustCompile(`(?i)\bBr\b`).MatchString(raw) {
+		out.CurrencyCode = "ETB"
+		score += 0.05
 	}
-	if len(digits) >= 4 {
-		out.AccountLast4 = digits[len(digits)-4:]
-		if len(digits) > 4 {
-			out.AccountNumber = digits
+
+	if m := reOwnAcct.FindStringSubmatch(raw); len(m) > 1 {
+		digits := regexp.MustCompile(`\D`).ReplaceAllString(m[1], "")
+		if len(digits) >= 4 {
+			out.AccountLast4 = digits[len(digits)-4:]
+			if len(digits) > 4 {
+				out.AccountNumber = digits
+			}
+			score += 0.15
 		}
+	} else if m := reOwnDebit.FindStringSubmatch(raw); len(m) > 1 {
+		digits := regexp.MustCompile(`\D`).ReplaceAllString(m[1], "")
+		if len(digits) >= 4 {
+			out.AccountLast4 = digits[len(digits)-4:]
+			if len(digits) > 4 {
+				out.AccountNumber = digits
+			}
+			score += 0.15
+		}
+	} else if m := reOwnMasked.FindStringSubmatch(raw); len(m) > 1 {
+		out.AccountLast4 = m[1]
 		score += 0.15
 	}
-	if m := reFromTo.FindStringSubmatch(raw); len(m) > 1 {
-		out.Counterparty = strings.TrimSpace(m[1])
-		score += 0.05
-	} else if m := reParty.FindStringSubmatch(raw); len(m) > 1 {
-		out.Counterparty = strings.TrimSpace(m[1])
-		score += 0.05
+
+	if out.Kind == KindExpense {
+		if m := reToParty.FindStringSubmatch(raw); len(m) > 1 {
+			out.Counterparty = cleanParty(m[1])
+		} else if m := rePaidFor.FindStringSubmatch(raw); len(m) > 1 {
+			out.Counterparty = cleanParty(m[1])
+		}
+	} else if out.Kind == KindIncome {
+		if m := reFromParty.FindStringSubmatch(raw); len(m) > 1 {
+			p := cleanParty(m[1])
+			if p != "" && !strings.EqualFold(p, "your") && !strings.EqualFold(p, "account") {
+				out.Counterparty = p
+			}
+		}
+		if out.Counterparty == "" {
+			if m := reFromPhone.FindStringSubmatch(raw); len(m) > 1 {
+				out.Counterparty = cleanParty(m[1])
+			}
+		}
 	}
-	if out.Confidence = score; out.Confidence > 1 {
-		out.Confidence = 1
+	if out.Counterparty != "" {
+		score += 0.08
 	}
+
+	if out.Kind == KindIncome {
+		if out.Counterparty != "" {
+			out.SummaryTitle = "From " + out.Counterparty
+		} else {
+			out.SummaryTitle = "Money received"
+		}
+	} else if out.Kind == KindExpense {
+		if out.Counterparty != "" {
+			out.SummaryTitle = "To " + out.Counterparty
+		} else {
+			out.SummaryTitle = "Money sent"
+		}
+	}
+
+	if out.Amount == "" || out.Kind == "" {
+		score = min(score, 0.4)
+	}
+	if score > 1 {
+		score = 1
+	}
+	out.Confidence = score
 	return out
 }
 
