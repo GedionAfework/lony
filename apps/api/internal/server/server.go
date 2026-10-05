@@ -154,7 +154,9 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 	banksSvc.SetNotifier(notifications.BankHooks{Svc: notifySvc, Chat: chatSvc})
 
 	authLimit := ratelimit.New(30, time.Minute)
-	apiLimit := ratelimit.New(180, time.Minute)
+	// SMS auto-import can fire many cashflow/sms-ingest calls in one sync (one per transfer).
+	// 180/min was too low and surfaced as "Too many requests" on phones with a full inbox.
+	apiLimit := ratelimit.New(900, time.Minute)
 	idem := idempotency.New(sqlStore, 24*time.Hour)
 
 	r := chi.NewRouter()

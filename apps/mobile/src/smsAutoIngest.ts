@@ -268,6 +268,18 @@ async function resolveAccountForSms(
   return { accountId: undefined, accounts: list, added };
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRateLimitedError(e: unknown): boolean {
+  if (!e || typeof e !== 'object') return false;
+  const err = e as Error & { api?: { error?: { code?: string; message?: string } } };
+  const code = err.api?.error?.code || '';
+  const msg = `${err.message || ''} ${err.api?.error?.message || ''}`.toLowerCase();
+  return code === 'RATE_LIMITED' || msg.includes('too many requests') || msg.includes('rate limit');
+}
+
 async function ingestParsedSms(
   token: string,
   body: string,
@@ -276,10 +288,10 @@ async function ingestParsedSms(
 ): Promise<{ imported: boolean; duplicate: boolean }> {
   const title = parsed.summaryTitle || (parsed.kind === 'income' ? 'Money received' : 'Money sent');
   const note = summarizeSmsNote(parsed);
-  const res = await api.ingestCashflowSms(token, {
+  const payload = {
     text: body,
     account_id: accountId,
-    create: true,
+    create: true as const,
     kind: parsed.kind || undefined,
     amount: parsed.amount || undefined,
     currency_code: parsed.currency || undefined,
@@ -287,10 +299,23 @@ async function ingestParsedSms(
     counterparty: parsed.counterparty || undefined,
     title,
     note,
-  });
-  if (res.duplicate || res.matched_existing_id) return { imported: false, duplicate: true };
-  if (res.entry) return { imported: true, duplicate: false };
-  return { imported: false, duplicate: false };
+  };
+
+  // Back off if the API rate limiter trips mid-inbox sync.
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      if (attempt > 0) await sleep(1500 * attempt);
+      const res = await api.ingestCashflowSms(token, payload);
+      if (res.duplicate || res.matched_existing_id) return { imported: false, duplicate: true };
+      if (res.entry) return { imported: true, duplicate: false };
+      return { imported: false, duplicate: false };
+    } catch (e) {
+      lastErr = e;
+      if (!isRateLimitedError(e)) throw e;
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error('Too many requests');
 }
 
 /**
@@ -417,9 +442,15 @@ export async function activateAndSyncSms(
     let imported = 0;
     let skipped = 0;
     let duplicates = 0;
+    let processed = 0;
 
     for (const { msg, parsed, fp } of candidates) {
       if (seen.has(fp)) {
+        skipped++;
+        continue;
+      }
+      // Cap one activation burst so we don't hammer the API / hit rate limits.
+      if (processed >= 80) {
         skipped++;
         continue;
       }
@@ -433,6 +464,7 @@ export async function activateAndSyncSms(
       }
       try {
         const result = await ingestParsedSms(token, msg.body, parsed, resolved.accountId);
+        processed++;
         seen.add(fp);
         if (result.duplicate) {
           duplicates++;
@@ -450,7 +482,9 @@ export async function activateAndSyncSms(
         } else {
           skipped++;
         }
-      } catch {
+        await sleep(80);
+      } catch (e) {
+        if (isRateLimitedError(e)) break;
         skipped++;
       }
     }
@@ -514,6 +548,9 @@ export async function syncBankSms(
     let skipped = 0;
     let duplicates = 0;
     let accountsAdded = 0;
+    let processed = 0;
+    // Incremental sync: don't dump the whole inbox against the rate limiter at once.
+    const maxProcess = opts?.force ? 60 : 40;
 
     for (const msg of messages) {
       if (!isTransferSms(msg.body)) {
@@ -530,6 +567,10 @@ export async function syncBankSms(
         skipped++;
         continue;
       }
+      if (processed >= maxProcess) {
+        skipped++;
+        continue;
+      }
       try {
         // Auto-create missing bank/wallet accounts during sync (Odit-style).
         const resolved = await resolveAccountForSms(token, local, defaultCurrency, accounts, {
@@ -543,6 +584,7 @@ export async function syncBankSms(
         }
 
         const result = await ingestParsedSms(token, msg.body, local, resolved.accountId);
+        processed++;
         seen.add(fp);
         if (result.duplicate) {
           duplicates++;
@@ -560,7 +602,9 @@ export async function syncBankSms(
         } else {
           skipped++;
         }
-      } catch {
+        await sleep(100);
+      } catch (e) {
+        if (isRateLimitedError(e)) break;
         skipped++;
       }
     }
