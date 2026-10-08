@@ -3,6 +3,8 @@ import * as SecureStore from 'expo-secure-store';
 import { api, type MoneyAccount } from './api';
 import {
   accountTypeLabel,
+  extractSmsStatedBalance,
+  isAccountHintSms,
   isTransferSms,
   parseTransferSms,
   smsFingerprint,
@@ -108,34 +110,41 @@ async function collectCandidateSms(maxCount = 500): Promise<RawSms[]> {
       // eslint-disable-next-line @typescript-eslint/no-require-imports
       const SmsAndroid = require('react-native-get-sms-android');
       if (SmsAndroid?.list) {
-        const filter = JSON.stringify({
-          box: 'inbox',
-          maxCount,
-          indexFrom: 0,
-        });
-        const rows: RawSms[] = await new Promise((resolve) => {
-          try {
-            SmsAndroid.list(
-              filter,
-              () => resolve([]),
-              (_count: number, smsList: string) => {
-                try {
-                  const parsed = JSON.parse(smsList) as Array<{ body?: string; date?: string | number }>;
-                  resolve(
-                    (parsed || [])
-                      .map((m) => ({ body: String(m.body || ''), date: Number(m.date) || undefined }))
-                      .filter((m) => m.body.trim()),
-                  );
-                } catch {
-                  resolve([]);
-                }
-              },
-            );
-          } catch {
-            resolve([]);
-          }
-        });
-        if (rows.length) return rows;
+        const pages: RawSms[] = [];
+        const pageSize = Math.min(maxCount, 400);
+        for (let indexFrom = 0; indexFrom < maxCount && pages.length < maxCount; indexFrom += pageSize) {
+          const filter = JSON.stringify({
+            box: 'inbox',
+            maxCount: pageSize,
+            indexFrom,
+          });
+          const rows: RawSms[] = await new Promise((resolve) => {
+            try {
+              SmsAndroid.list(
+                filter,
+                () => resolve([]),
+                (_count: number, smsList: string) => {
+                  try {
+                    const parsed = JSON.parse(smsList) as Array<{ body?: string; date?: string | number }>;
+                    resolve(
+                      (parsed || [])
+                        .map((m) => ({ body: String(m.body || ''), date: Number(m.date) || undefined }))
+                        .filter((m) => m.body.trim()),
+                    );
+                  } catch {
+                    resolve([]);
+                  }
+                },
+              );
+            } catch {
+              resolve([]);
+            }
+          });
+          if (!rows.length) break;
+          pages.push(...rows);
+          if (rows.length < pageSize) break;
+        }
+        if (pages.length) return pages.slice(0, maxCount);
       }
     } catch {
       /* Expo Go / missing native module */
@@ -160,17 +169,155 @@ function walletKey(institution: string, currency: string): string {
   return `${currency.toUpperCase()}:wallet:${institution.toLowerCase()}`;
 }
 
+function smsTime(msg: RawSms): number {
+  return msg.date && Number.isFinite(msg.date) ? msg.date : 0;
+}
+
+/** Newest bank-printed remaining balance per last4 / wallet (SMS is the source of truth). */
+function newestStatedBalances(
+  messages: RawSms[],
+  defaultCurrency: string,
+): Map<string, string> {
+  const best = new Map<string, { date: number; balance: string }>();
+  const remember = (key: string, date: number, balance: string) => {
+    const prev = best.get(key);
+    if (!prev || date >= prev.date) best.set(key, { date, balance });
+  };
+  for (const msg of messages) {
+    const parsed = parseTransferSms(msg.body);
+    const stated = parsed.statedBalance || extractSmsStatedBalance(msg.body);
+    if (!stated) continue;
+    const currency = (parsed.currency || defaultCurrency || 'ETB').toUpperCase();
+    const last4 = (parsed.accountLast4 || '').replace(/\D/g, '').slice(-4);
+    const date = smsTime(msg);
+    if (last4.length === 4) {
+      remember(accountKey(last4, currency), date, stated);
+      remember(`l4:${last4}`, date, stated);
+    }
+    const inst = parsed.institutionHint;
+    if (inst && !/^(bank|account|card)$/i.test(inst)) remember(walletKey(inst, currency), date, stated);
+  }
+  const out = new Map<string, string>();
+  for (const [k, v] of best) out.set(k, v.balance);
+  return out;
+}
+
+function seedBalance(
+  stated: Map<string, string>,
+  last4: string | null,
+  institution: string | null,
+  currency: string,
+): string {
+  const c = currency.toUpperCase();
+  if (last4 && last4.length === 4) {
+    const hit = stated.get(accountKey(last4, c));
+    if (hit) return hit;
+  }
+  if (institution) {
+    const hit = stated.get(walletKey(institution, c));
+    if (hit) return hit;
+  }
+  return '0';
+}
+
+function balancesDiffer(a: string, b: string): boolean {
+  return Math.abs(Number(a) - Number(b)) > 0.009;
+}
+
+/** Snap each matched account to the newest SMS "balance is …" figure. */
+async function applyNewestSmsBalances(
+  token: string,
+  messages: RawSms[],
+  accounts: MoneyAccount[],
+  defaultCurrency: string,
+): Promise<number> {
+  const stated = newestStatedBalances(messages, defaultCurrency);
+  if (!stated.size) return 0;
+  let updated = 0;
+  for (const acct of accounts) {
+    if (acct.account_type === 'cash') continue;
+    const c = acct.currency_code.toUpperCase();
+    const digits = `${acct.name} ${acct.institution_label || ''}`.replace(/\D/g, '');
+    const last4 = digits.length >= 4 ? digits.slice(-4) : '';
+    const balance =
+      (last4 ? stated.get(accountKey(last4, c)) : undefined) ||
+      (last4 ? stated.get(`l4:${last4}`) : undefined) ||
+      (acct.institution_label ? stated.get(walletKey(acct.institution_label, c)) : undefined) ||
+      stated.get(walletKey(acct.name, c));
+    if (!balance || !balancesDiffer(acct.balance, balance)) continue;
+    try {
+      await api.setAccountBalance(token, acct.id, {
+        balance,
+        note: 'sms stated balance',
+      });
+      acct.balance = balance;
+      updated++;
+    } catch {
+      /* keep going — cashflow import still succeeded */
+    }
+  }
+  return updated;
+}
+
+/** Collapse two rows that are the same last4 (e.g. USD copy + ETB copy). */
+async function mergeDuplicateLast4Accounts(
+  token: string,
+  accounts: MoneyAccount[],
+  messages: RawSms[],
+  defaultCurrency: string,
+): Promise<MoneyAccount[]> {
+  const stated = newestStatedBalances(messages, defaultCurrency);
+  const groups = new Map<string, MoneyAccount[]>();
+  for (const a of accounts) {
+    if (a.account_type === 'cash') continue;
+    const l4 = accountLast4(a);
+    if (!l4) continue;
+    const g = groups.get(l4) || [];
+    g.push(a);
+    groups.set(l4, g);
+  }
+  const kept: MoneyAccount[] = [];
+  const archived = new Set<string>();
+  for (const [l4, group] of groups) {
+    if (group.length < 2) continue;
+    const named = group.find((a) => /…|\.\.\.|\d{4}/.test(a.name)) || group[0];
+    const currency = named.currency_code.toUpperCase();
+    const balance = stated.get(accountKey(l4, currency)) || stated.get(`l4:${l4}`) || named.balance;
+    try {
+      if (balancesDiffer(named.balance, balance)) {
+        await api.setAccountBalance(token, named.id, { balance, note: 'sms stated balance' });
+        named.balance = balance;
+      }
+      for (const extra of group) {
+        if (extra.id === named.id) continue;
+        await api.archiveAccount(token, extra.id);
+        archived.add(extra.id);
+      }
+    } catch {
+      /* keep both if archive fails */
+    }
+  }
+  for (const a of accounts) {
+    if (!archived.has(a.id)) kept.push(a);
+  }
+  return kept;
+}
+
+function accountLast4(a: MoneyAccount): string | null {
+  const digits = `${a.name} ${a.institution_label || ''}`.replace(/\D/g, '');
+  if (digits.length >= 4) return digits.slice(-4);
+  return null;
+}
+
 function accountAlreadyExists(accounts: MoneyAccount[], last4: string, currency: string): MoneyAccount | undefined {
   const c = currency.toUpperCase();
   const want = last4.slice(-4);
-  return accounts.find((a) => {
-    if (a.currency_code.toUpperCase() !== c) return false;
+  const hits = accounts.filter((a) => {
     if (a.account_type === 'cash') return false;
-    const digits = `${a.name} ${a.institution_label || ''}`.replace(/\D/g, '');
-    if (digits.length >= 4 && digits.slice(-4) === want) return true;
-    const hay = `${a.name} ${a.institution_label || ''}`.toLowerCase();
-    return hay.includes(want);
+    return accountLast4(a) === want;
   });
+  if (!hits.length) return undefined;
+  return hits.find((a) => a.currency_code.toUpperCase() === c) || hits[0];
 }
 
 function findWalletAccount(
@@ -178,8 +325,9 @@ function findWalletAccount(
   institution: string,
   currency: string,
 ): MoneyAccount | undefined {
+  const needle = institution.toLowerCase().trim();
+  if (!needle || needle === 'bank' || needle === 'account' || needle === 'card') return undefined;
   const c = currency.toUpperCase();
-  const needle = institution.toLowerCase();
   return accounts.find((a) => {
     if (a.currency_code.toUpperCase() !== c) return false;
     if (a.account_type === 'cash') return false;
@@ -206,6 +354,7 @@ export type SmsAutoSyncResult = {
   skipped: number;
   accountsAdded: number;
   duplicates: number;
+  balancesUpdated?: number;
   permissionDenied?: boolean;
 };
 
@@ -237,7 +386,7 @@ async function resolveAccountForSms(
           name: label,
           account_type: mapAccountType(parsed.accountType),
           currency_code: currency,
-          balance: '0',
+          balance: parsed.statedBalance || '0',
           institution_label: inst,
         });
         list = [...list, created.account];
@@ -249,17 +398,18 @@ async function resolveAccountForSms(
     }
   }
 
-  // Telebirr / wallets often have no account digits — match by institution + currency.
-  if (parsed.accountType === 'mobile_money' || parsed.institutionHint) {
+  // Telebirr / wallets often have no account digits — never a generic “Bank” row.
+  const namedInst = parsed.institutionHint && !/^(bank|account|card)$/i.test(parsed.institutionHint);
+  if (parsed.accountType === 'mobile_money' || parsed.accountType === 'wallet' || namedInst) {
     const wallet = findWalletAccount(list, inst, currency);
     if (wallet) return { accountId: wallet.id, accounts: list, added };
-    if (opts?.autoCreate) {
+    if (opts?.autoCreate && parsed.accountType !== 'bank') {
       try {
         const created = await api.createAccount(token, {
           name: inst,
           account_type: mapAccountType(parsed.accountType === 'other' ? 'bank' : parsed.accountType),
           currency_code: currency,
-          balance: '0',
+          balance: parsed.statedBalance || '0',
           institution_label: inst,
         });
         list = [...list, created.account];
@@ -271,8 +421,6 @@ async function resolveAccountForSms(
     }
   }
 
-  const byCurrency = list.find((a) => a.currency_code.toUpperCase() === currency && a.account_type !== 'cash');
-  if (byCurrency) return { accountId: byCurrency.id, accounts: list, added };
   return { accountId: undefined, accounts: list, added };
 }
 
@@ -307,6 +455,7 @@ async function ingestParsedSms(
     counterparty: parsed.counterparty || undefined,
     title,
     note,
+    stated_balance: parsed.statedBalance || undefined,
   };
 
   // Back off if the API rate limiter trips mid-inbox sync.
@@ -362,16 +511,12 @@ export async function activateAndSyncSms(
     >();
 
     for (const msg of messages) {
-      if (!isTransferSms(msg.body)) continue;
+      if (!isAccountHintSms(msg.body)) continue;
       const parsed = parseTransferSms(msg.body);
-      if (!parsed.amount || !parsed.kind || parsed.confidence < 0.45) continue;
-      const fp = smsFingerprint(msg.body);
-      candidates.push({ msg, parsed, fp });
-
-      const currency = (parsed.currency || defaultCurrency || 'USD').toUpperCase();
       const last4 = (parsed.accountLast4 || '').replace(/\D/g, '').slice(-4);
+      const currency = (parsed.currency || defaultCurrency || 'USD').toUpperCase();
       if (last4.length === 4 && !(parsed.otherAccountLast4 && parsed.otherAccountLast4 === last4)) {
-        const key = accountKey(last4, currency);
+        const key = last4;
         if (!discovered.has(key)) {
           const kindLabel = accountTypeLabel(parsed.accountType);
           const inst = parsed.institutionHint || kindLabel;
@@ -383,26 +528,34 @@ export async function activateAndSyncSms(
             label: `${inst} …${last4}`,
           });
         }
-      } else if (parsed.institutionHint || parsed.accountType === 'mobile_money') {
-        const inst = parsed.institutionHint || 'Mobile money';
+      } else if (
+        (parsed.accountType === 'mobile_money' || parsed.accountType === 'wallet') &&
+        parsed.institutionHint &&
+        !/^(bank|account)$/i.test(parsed.institutionHint)
+      ) {
+        const inst = parsed.institutionHint;
         const key = walletKey(inst, currency);
         if (!discoveredWallets.has(key)) {
           discoveredWallets.set(key, {
             currency,
-            accountType: parsed.accountType === 'other' ? 'mobile_money' : parsed.accountType,
+            accountType: parsed.accountType,
             institution: inst,
             label: inst,
           });
         }
+      }
+      if (parsed.amount && parsed.kind && parsed.confidence >= 0.45 && isTransferSms(msg.body)) {
+        candidates.push({ msg, parsed, fp: smsFingerprint(msg.body) });
       }
     }
 
     let accounts = (await api.listAccounts(token).catch(() => ({ accounts: [] as MoneyAccount[] }))).accounts ?? [];
     const asked = await loadAskedAccounts();
     let accountsAdded = 0;
+    const stated = newestStatedBalances(messages, defaultCurrency);
 
     for (const disc of discovered.values()) {
-      const key = accountKey(disc.last4, disc.currency);
+      const key = `last4:${disc.last4}`;
       if (accountAlreadyExists(accounts, disc.last4, disc.currency)) continue;
       if (asked.has(key)) continue;
       asked.add(key);
@@ -413,7 +566,7 @@ export async function activateAndSyncSms(
           name: disc.label,
           account_type: mapAccountType(disc.accountType),
           currency_code: disc.currency,
-          balance: '0',
+          balance: seedBalance(stated, disc.last4, disc.institution, disc.currency),
           institution_label: disc.institution || disc.label,
         });
         accounts = [...accounts, created.account];
@@ -435,7 +588,7 @@ export async function activateAndSyncSms(
           name: disc.label,
           account_type: mapAccountType(disc.accountType),
           currency_code: disc.currency,
-          balance: '0',
+          balance: seedBalance(stated, null, disc.institution, disc.currency),
           institution_label: disc.institution,
         });
         accounts = [...accounts, created.account];
@@ -451,6 +604,7 @@ export async function activateAndSyncSms(
     let skipped = 0;
     let duplicates = 0;
     let processed = 0;
+    candidates.sort((a, b) => smsTime(a.msg) - smsTime(b.msg));
 
     for (const { msg, parsed, fp } of candidates) {
       if (seen.has(fp)) {
@@ -498,6 +652,8 @@ export async function activateAndSyncSms(
     }
 
     await saveSeen(seen);
+    accounts = await mergeDuplicateLast4Accounts(token, accounts, messages, defaultCurrency);
+    const balancesUpdated = await applyNewestSmsBalances(token, messages, accounts, defaultCurrency);
 
     const parts = [
       accountsAdded ? `${accountsAdded} account(s) added` : null,
@@ -510,7 +666,7 @@ export async function activateAndSyncSms(
       Alert.alert('SMS import', 'No new transfers to import. Receipts already saved won’t be counted twice.');
     }
 
-    return { imported, skipped, accountsAdded, duplicates };
+    return { imported, skipped, accountsAdded, duplicates, balancesUpdated };
   } catch {
     return empty;
   }
@@ -522,7 +678,16 @@ export type SyncBankSmsOptions = {
   /** How many inbox messages to scan (default 80; refresh uses more). */
   maxCount?: number;
   defaultCurrency?: string;
+  /** Stage updates so the UI can show progress instead of a silent spinner. */
+  onProgress?: (stage: SmsSyncStage) => void;
+  /**
+   * Fired as soon as account balances have been snapped to the newest "balance is …" SMS —
+   * before the (slow) transfer import — so Home can repaint Total Balance immediately.
+   */
+  onBalancesReady?: (updated: number) => void;
 };
+
+export type SmsSyncStage = 'reading' | 'balances' | 'importing' | 'done';
 
 /** Incremental sync when opening Home (no account prompts). */
 export async function syncBankSms(
@@ -542,8 +707,13 @@ export async function syncBankSms(
       await SecureStore.deleteItemAsync(SEEN_KEY).catch(() => undefined);
     }
 
-    const messages = await collectCandidateSms(opts?.maxCount ?? 80);
-    if (!messages.length) return empty;
+    opts?.onProgress?.('reading');
+    const messages = await collectCandidateSms(opts?.maxCount ?? 250);
+    if (!messages.length) {
+      opts?.onProgress?.('done');
+      return empty;
+    }
+    messages.sort((a, b) => smsTime(a) - smsTime(b));
 
     let accounts = (await api.listAccounts(token).catch(() => ({ accounts: [] as MoneyAccount[] }))).accounts ?? [];
     const defaultCurrency =
@@ -551,6 +721,13 @@ export async function syncBankSms(
       accounts.find((a) => a.currency_code)?.currency_code ||
       'ETB';
 
+    // Balances first: this is what Total Balance reads, and it only needs a few PATCHes.
+    opts?.onProgress?.('balances');
+    accounts = await mergeDuplicateLast4Accounts(token, accounts, messages, defaultCurrency);
+    let balancesUpdated = await applyNewestSmsBalances(token, messages, accounts, defaultCurrency);
+    opts?.onBalancesReady?.(balancesUpdated);
+
+    opts?.onProgress?.('importing');
     const seen = await loadSeen();
     let imported = 0;
     let skipped = 0;
@@ -618,8 +795,16 @@ export async function syncBankSms(
     }
 
     await saveSeen(seen);
-    return { imported, skipped, accountsAdded, duplicates };
+    // Re-snap after import: new accounts may have appeared and server-side deltas may
+    // have nudged balances away from the SMS-stated truth.
+    if (imported > 0 || accountsAdded > 0) {
+      accounts = await mergeDuplicateLast4Accounts(token, accounts, messages, defaultCurrency);
+      balancesUpdated += await applyNewestSmsBalances(token, messages, accounts, defaultCurrency);
+    }
+    opts?.onProgress?.('done');
+    return { imported, skipped, accountsAdded, duplicates, balancesUpdated };
   } catch {
+    opts?.onProgress?.('done');
     return empty;
   }
 }

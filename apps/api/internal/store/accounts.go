@@ -155,7 +155,7 @@ func (s *SQLStore) MoneyAccountLedgerSince(ctx context.Context, userID, accountI
 	err := s.pool.QueryRow(ctx, `
 		SELECT COALESCE(
 			(SELECT balance::text FROM money_account_balance_events
-			 WHERE account_id = $1 AND user_id = $2 AND source IN ('manual','reconcile')
+			 WHERE account_id = $1 AND user_id = $2 AND source IN ('manual','reconcile','sms')
 			 ORDER BY created_at DESC LIMIT 1),
 			(SELECT balance::text FROM money_account_balance_events
 			 WHERE account_id = $1 AND user_id = $2
@@ -164,7 +164,7 @@ func (s *SQLStore) MoneyAccountLedgerSince(ctx context.Context, userID, accountI
 		),
 		COALESCE(
 			(SELECT created_at FROM money_account_balance_events
-			 WHERE account_id = $1 AND user_id = $2 AND source IN ('manual','reconcile')
+			 WHERE account_id = $1 AND user_id = $2 AND source IN ('manual','reconcile','sms')
 			 ORDER BY created_at DESC LIMIT 1),
 			(SELECT created_at FROM money_account_balance_events
 			 WHERE account_id = $1 AND user_id = $2

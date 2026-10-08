@@ -101,26 +101,27 @@ type Summary struct {
 }
 
 type ListQuery struct {
-	Kind       string
-	From       *time.Time
-	To         *time.Time
-	Currency   string
-	Templates  *bool
-	Limit      int
+	Kind      string
+	From      *time.Time
+	To        *time.Time
+	Currency  string
+	Templates *bool
+	Limit     int
 }
 
 type CreateInput struct {
-	Kind         string
-	Title        string
-	Amount       string
-	CurrencyCode string
-	Category     string
-	CategoryID   *uuid.UUID
-	AccountID    *uuid.UUID
-	Note         *string
-	OccurredAt   time.Time
-	Recurrence   *string
-	IsTemplate   bool
+	Kind             string
+	Title            string
+	Amount           string
+	CurrencyCode     string
+	Category         string
+	CategoryID       *uuid.UUID
+	AccountID        *uuid.UUID
+	Note             *string
+	OccurredAt       time.Time
+	Recurrence       *string
+	IsTemplate       bool
+	SkipAccountDelta bool // SMS already carries the bank-stated remaining balance
 }
 
 type UpdateInput struct {
@@ -143,11 +144,11 @@ type ShareInput struct {
 }
 
 type CategorySpend struct {
-	Category     string `json:"category"`
+	Category     string     `json:"category"`
 	CategoryID   *uuid.UUID `json:"category_id,omitempty"`
-	CurrencyCode string `json:"currency_code"`
-	Amount       string `json:"amount"`
-	Count        int    `json:"count"`
+	CurrencyCode string     `json:"currency_code"`
+	Amount       string     `json:"amount"`
+	Count        int        `json:"count"`
 }
 
 type Budget struct {

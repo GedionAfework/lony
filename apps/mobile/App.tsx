@@ -17,7 +17,6 @@ import {
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   AppState,
   type AppStateStatus,
   KeyboardAvoidingView,
@@ -96,7 +95,20 @@ import { SearchSelect } from './src/SearchSelect';
 import { applyNativeDirection, parseLocaleMessages, setActivePack } from './src/i18n';
 import { formatError, passwordHint } from './src/errors';
 import { SettingsScreen, shareExportJSON, shareExportNote } from './src/SettingsScreen';
-import { Card, DueDatePill, EmptyState, Field, Money, PrimaryButton, ScreenHeader, SecondaryButton, SectionLabel, useAppStyles } from './src/ui';
+import {
+  Card,
+  DueDatePill,
+  EmptyState,
+  Field,
+  Money,
+  PrimaryButton,
+  ScreenHeader,
+  SecondaryButton,
+  SectionLabel,
+  StatusModal,
+  useAppStyles,
+  type StatusModalState,
+} from './src/ui';
 
 const ACCESS_KEY = 'lony.access_token';
 const REFRESH_KEY = 'lony.refresh_token';
@@ -213,6 +225,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   const [booting, setBooting] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [statusModal, setStatusModal] = useState<StatusModalState | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
   const [friends, setFriends] = useState<Friendship[]>([]);
@@ -1021,6 +1034,13 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         if (cancelled) return;
         const res = await syncBankSms(token, undefined, {
           defaultCurrency: user?.default_currency_code || 'ETB',
+          onBalancesReady: (updated) => {
+            // Repaint Total Balance the moment SMS-stated balances land; don't wait for imports.
+            if (!cancelled && updated > 0) {
+              setWealthReload((n) => n + 1);
+              setAccountsReload((n) => n + 1);
+            }
+          },
         });
         if (!cancelled && (res.imported > 0 || res.accountsAdded > 0)) {
           setCashflowReload((n) => n + 1);
@@ -1991,38 +2011,65 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     showChrome && screen === 'home' && token ? (
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
         <Pressable
+          disabled={statusModal?.busy === true}
           onPress={() => {
+            // Open the sheet synchronously so the tap is acknowledged before any work starts.
+            setStatusModal({ title: 'Checking messages…', body: 'Reading your inbox.', busy: true });
             void (async () => {
               try {
-                setBusy(true);
                 setError(null);
+                const stageText: Record<string, string> = {
+                  reading: 'Reading your inbox.',
+                  balances: 'Updating account balances from bank SMS.',
+                  importing: 'Importing new transfers.',
+                };
                 const res = await syncBankSms(token, undefined, {
                   force: true,
                   maxCount: 200,
                   defaultCurrency: user?.default_currency_code || 'ETB',
+                  onProgress: (stage) => {
+                    if (stage === 'done') return;
+                    setStatusModal({ title: 'Checking messages…', body: stageText[stage], busy: true });
+                  },
+                  onBalancesReady: (updated) => {
+                    if (updated > 0) {
+                      setWealthReload((n) => n + 1);
+                      setAccountsReload((n) => n + 1);
+                    }
+                  },
                 });
                 setCashflowReload((n) => n + 1);
                 setWealthReload((n) => n + 1);
                 setAccountsReload((n) => n + 1);
+                const balanceNote = res.balancesUpdated ? ` · ${res.balancesUpdated} balance(s) updated` : '';
                 if (res.permissionDenied) {
-                  Alert.alert('Messages', 'Allow SMS permission in system settings so Lony can recheck transfers.');
+                  setStatusModal({
+                    title: 'SMS permission needed',
+                    body: 'Allow SMS permission in system settings so Lony can recheck transfers.',
+                    tone: 'tertiary',
+                  });
                 } else if (res.imported > 0) {
-                  Alert.alert(
-                    'Messages',
-                    `${res.imported} new transfer(s) saved${res.accountsAdded ? ` · ${res.accountsAdded} account(s) added` : ''}${res.duplicates ? ` · ${res.duplicates} already saved` : ''}.`,
-                  );
-                } else if (res.duplicates > 0) {
-                  Alert.alert('Messages', 'No new transfers — recent ones were already imported.');
+                  setStatusModal({
+                    title: 'Messages synced',
+                    body: `${res.imported} new transfer(s) saved${res.accountsAdded ? ` · ${res.accountsAdded} account(s) added` : ''}${res.duplicates ? ` · ${res.duplicates} already saved` : ''}${balanceNote}.`,
+                  });
+                } else if (res.duplicates > 0 || res.balancesUpdated) {
+                  setStatusModal({
+                    title: 'Up to date',
+                    body: `No new transfers — recent ones were already imported${balanceNote}.`,
+                  });
                 } else {
-                  Alert.alert(
-                    'Messages',
-                    'No new money received/sent SMS found. You can also enable SMS auto-import in Settings → Preferences.',
-                  );
+                  setStatusModal({
+                    title: 'Nothing new',
+                    body: 'No new money received/sent SMS found. You can also enable SMS auto-import in Settings → Preferences.',
+                  });
                 }
               } catch (e) {
-                setError(e instanceof Error ? e.message : 'Could not refresh messages');
-              } finally {
-                setBusy(false);
+                setStatusModal({
+                  title: 'Could not refresh messages',
+                  body: e instanceof Error ? e.message : 'Please try again.',
+                  tone: 'tertiary',
+                });
               }
             })();
           }}
@@ -2104,6 +2151,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     >
     <SafeAreaView style={styles.safe}>
       <StatusBar style={resolved === 'dark' ? 'light' : 'dark'} />
+      <StatusModal state={statusModal} onClose={() => setStatusModal(null)} />
       {token && appLocked && lockMethod !== 'none' ? (
         <AppLockScreen
           busy={unlocking}

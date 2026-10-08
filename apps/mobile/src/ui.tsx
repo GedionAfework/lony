@@ -1,5 +1,15 @@
 import { useMemo, type Ref } from 'react';
-import { Pressable, StyleSheet, Text, TextInput, View, type TextInputProps, type ViewStyle } from 'react-native';
+import {
+  ActivityIndicator,
+  Modal,
+  Pressable,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+  type TextInputProps,
+  type ViewStyle,
+} from 'react-native';
 import { formatAmountCommas } from './amountFormat';
 import { useFormatDate } from './datePrefs';
 import { IconMoon, IconSun, IconBack } from './icons';
@@ -478,6 +488,99 @@ export function Banner({
         </Pressable>
       ) : null}
     </View>
+  );
+}
+
+export type StatusModalState = {
+  title: string;
+  body?: string;
+  /** While true a spinner is shown and the sheet can't be dismissed. */
+  busy?: boolean;
+  tone?: 'primary' | 'secondary' | 'tertiary';
+  actionLabel?: string;
+};
+
+/** In-app replacement for Alert.alert: progress first, result in the same sheet. */
+export function StatusModal({
+  state,
+  onClose,
+}: {
+  state: StatusModalState | null;
+  onClose: () => void;
+}) {
+  const { colors } = useTheme();
+  const visible = state !== null;
+  const tone = state?.tone ?? 'primary';
+  const accent = tone === 'secondary' ? colors.secondary : tone === 'tertiary' ? colors.tertiary : colors.primary;
+  const accentSoft =
+    tone === 'secondary' ? colors.secondarySoft : tone === 'tertiary' ? colors.tertiarySoft : colors.primarySoft;
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      statusBarTranslucent
+      onRequestClose={() => {
+        if (!state?.busy) onClose();
+      }}
+    >
+      <Pressable
+        onPress={() => {
+          if (!state?.busy) onClose();
+        }}
+        style={{
+          flex: 1,
+          backgroundColor: 'rgba(0,0,0,0.45)',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: space.lg,
+        }}
+      >
+        <Pressable
+          onPress={() => undefined}
+          style={{
+            width: '100%',
+            maxWidth: 360,
+            borderRadius: radii.lg,
+            backgroundColor: colors.surface,
+            borderWidth: 1,
+            borderColor: colors.border,
+            padding: space.lg,
+            gap: space.md,
+          }}
+        >
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+            <View
+              style={{
+                width: 40,
+                height: 40,
+                borderRadius: 14,
+                backgroundColor: accentSoft,
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              {state?.busy ? (
+                <ActivityIndicator color={accent} />
+              ) : (
+                <Text style={{ color: accent, fontFamily: fonts.uiBold, fontSize: 18 }}>
+                  {tone === 'tertiary' ? '!' : '✓'}
+                </Text>
+              )}
+            </View>
+            <Text style={{ flex: 1, color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>
+              {state?.title ?? ''}
+            </Text>
+          </View>
+          {state?.body ? (
+            <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 14, lineHeight: 20 }}>{state.body}</Text>
+          ) : null}
+          {!state?.busy ? (
+            <PrimaryButton label={state?.actionLabel ?? 'OK'} onPress={onClose} />
+          ) : null}
+        </Pressable>
+      </Pressable>
+    </Modal>
   );
 }
 

@@ -20,6 +20,9 @@ func TestParseTransferSMS_CBEOut(t *testing.T) {
 	if p.SummaryTitle == "" || p.SummaryTitle[0:2] != "To" {
 		t.Fatalf("summary=%q", p.SummaryTitle)
 	}
+	if p.StatedBalance != "10000.00" {
+		t.Fatalf("stated=%q want 10000.00", p.StatedBalance)
+	}
 }
 
 func TestParseTransferSMS_TelebirrIn(t *testing.T) {
@@ -33,6 +36,9 @@ func TestParseTransferSMS_TelebirrIn(t *testing.T) {
 	}
 	if p.Counterparty == "" {
 		t.Fatalf("expected counterparty, got empty")
+	}
+	if p.StatedBalance != "5000.00" {
+		t.Fatalf("stated=%q want 5000.00", p.StatedBalance)
 	}
 }
 
@@ -48,11 +54,34 @@ func TestParseTransferSMS_TelebirrPhoneOnly(t *testing.T) {
 	if p.Counterparty == "" {
 		t.Fatalf("expected phone counterparty")
 	}
+	if p.StatedBalance != "3000.00" {
+		t.Fatalf("stated=%q want 3000.00", p.StatedBalance)
+	}
 }
 
 func TestIsTransferSMS_RejectsOTP(t *testing.T) {
 	if IsTransferSMS("Your OTP is 123456. Do not share.") {
 		t.Fatal("OTP should be rejected")
+	}
+}
+
+func TestParseTransferSMS_USChaseCard(t *testing.T) {
+	raw := "Chase Alert: You made a $32.10 purchase at AMAZON. Card ending in 1234. Avail Bal: $5,432.10"
+	p := ParseTransferSMS(raw)
+	if p.Kind != KindExpense {
+		t.Fatalf("kind=%q want expense", p.Kind)
+	}
+	if p.Amount != "32.10" {
+		t.Fatalf("amount=%q want 32.10 (not balance)", p.Amount)
+	}
+	if p.AccountLast4 != "1234" {
+		t.Fatalf("account_last4=%q want 1234", p.AccountLast4)
+	}
+	if p.CurrencyCode != "USD" {
+		t.Fatalf("currency=%q want USD", p.CurrencyCode)
+	}
+	if p.StatedBalance != "5432.10" {
+		t.Fatalf("stated=%q want 5432.10", p.StatedBalance)
 	}
 }
 

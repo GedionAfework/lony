@@ -295,6 +295,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 			r.With(idem.Handler("goals.create")).Post("/goals", goalsH.Create)
 			r.Post("/goals/preview-url", goalsH.PreviewURL)
 			r.Post("/goals/extract", goalsH.Extract)
+			r.Post("/goals/market-search", goalsH.SearchMarket)
 			r.Post("/goals/refresh-prices", goalsH.RefreshPrices)
 			r.Get("/goals/{id}/price-history", goalsH.ListPriceHistory)
 			r.Post("/goals/{id}/refresh-price", goalsH.RefreshOnePrice)

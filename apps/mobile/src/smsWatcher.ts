@@ -113,7 +113,7 @@ async function pollInboxOnce(forceDaily = false): Promise<void> {
       maxCount: forceDaily ? 200 : 30,
       defaultCurrency: liveOpts.defaultCurrency || 'ETB',
     });
-    if (res.imported > 0 || res.accountsAdded > 0) {
+    if (res.imported > 0 || res.accountsAdded > 0 || (res.balancesUpdated ?? 0) > 0) {
       liveOpts.onImported?.(res.imported, res.accountsAdded);
     }
   } catch {

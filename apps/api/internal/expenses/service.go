@@ -24,6 +24,7 @@ type LoanCreator interface {
 
 type AccountLinker interface {
 	ApplyCashflowDelta(ctx context.Context, userID, accountID uuid.UUID, kind string, amount decimal.Decimal, currency, note string) error
+	SetStatedBalance(ctx context.Context, userID, accountID uuid.UUID, balance, note string) error
 	// PickAccount returns preferred if set, else the first account matching currency.
 	PickAccount(ctx context.Context, userID uuid.UUID, currency string, preferred *uuid.UUID) (*uuid.UUID, error)
 	// FindAccountByLast4 matches an account whose name/label contains …last4.
@@ -50,15 +51,15 @@ type BillNotifier interface {
 }
 
 type ReceiptExtract struct {
-	Kind         string `json:"kind"`
-	Title        string `json:"title"`
-	Amount       string `json:"amount"`
-	CurrencyCode string `json:"currency_code"`
-	Merchant     string `json:"merchant,omitempty"`
-	OccurredAt   string `json:"occurred_at,omitempty"`
-	Note         string `json:"note,omitempty"`
-	AccountHint  string `json:"account_hint,omitempty"`
-	Confidence   float64 `json:"confidence"`
+	Kind         string     `json:"kind"`
+	Title        string     `json:"title"`
+	Amount       string     `json:"amount"`
+	CurrencyCode string     `json:"currency_code"`
+	Merchant     string     `json:"merchant,omitempty"`
+	OccurredAt   string     `json:"occurred_at,omitempty"`
+	Note         string     `json:"note,omitempty"`
+	AccountHint  string     `json:"account_hint,omitempty"`
+	Confidence   float64    `json:"confidence"`
 	MatchedID    *uuid.UUID `json:"matched_entry_id,omitempty"`
 }
 
@@ -220,8 +221,10 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, in CreateInput) 
 		}
 		return toDTO(pending), nil
 	}
-	if err := s.applyAccount(ctx, userID, saved); err != nil {
-		return EntryDTO{}, err
+	if !in.SkipAccountDelta {
+		if err := s.applyAccount(ctx, userID, saved); err != nil {
+			return EntryDTO{}, err
+		}
 	}
 	return toDTO(saved), nil
 }
@@ -991,13 +994,14 @@ type SMSIngestInput struct {
 	Create    bool
 	// Optional client-side parse (mobile). When set, these win over server re-parse
 	// so phone and API never disagree on amount / direction / summary.
-	Kind         string
-	Amount       string
-	CurrencyCode string
-	AccountLast4 string
-	Counterparty string
-	Title        string
-	Note         string
+	Kind          string
+	Amount        string
+	CurrencyCode  string
+	AccountLast4  string
+	Counterparty  string
+	Title         string
+	Note          string
+	StatedBalance string
 }
 
 type SMSIngestResult struct {
@@ -1047,6 +1051,9 @@ func (s *Service) IngestSMS(ctx context.Context, userID uuid.UUID, in SMSIngestI
 	}
 	if t := strings.TrimSpace(in.Title); t != "" {
 		parsed.SummaryTitle = t
+	}
+	if bal := normalizeSMSAmount(in.StatedBalance); bal != "" {
+		parsed.StatedBalance = bal
 	}
 	if logger, ok := s.store.(SMSLogStore); ok {
 		if existing, err := logger.GetSMSIngest(ctx, userID, fp); err == nil && existing != nil {
@@ -1154,20 +1161,25 @@ func (s *Service) IngestSMS(ctx context.Context, userID uuid.UUID, in SMSIngestI
 		})
 	}
 
+	skipDelta := parsed.StatedBalance != ""
 	entry, err := s.Create(ctx, userID, CreateInput{
-		Kind:         parsed.Kind,
-		Title:        title,
-		Amount:       parsed.Amount,
-		CurrencyCode: currency,
-		Category:     "Transfers",
-		AccountID:    accountID,
-		Note:         &note,
-		OccurredAt:   s.now().UTC(),
+		Kind:             parsed.Kind,
+		Title:            title,
+		Amount:           parsed.Amount,
+		CurrencyCode:     currency,
+		Category:         "Transfers",
+		AccountID:        accountID,
+		Note:             &note,
+		OccurredAt:       s.now().UTC(),
+		SkipAccountDelta: skipDelta,
 	})
 	if err != nil {
 		return SMSIngestResult{}, err
 	}
 	out.Entry = &entry
+	if skipDelta && accountID != nil && s.accounts != nil {
+		_ = s.accounts.SetStatedBalance(ctx, userID, *accountID, parsed.StatedBalance, "sms stated balance")
+	}
 	if logger, ok := s.store.(SMSLogStore); ok {
 		excerpt := text
 		if len(excerpt) > 280 {

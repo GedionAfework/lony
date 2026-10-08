@@ -1,6 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Image, Pressable, Text, View } from 'react-native';
-import { EncodingType, cacheDirectory, documentDirectory, downloadAsync, readAsStringAsync } from 'expo-file-system/legacy';
+import { ActivityIndicator, Image, Pressable, Text, View } from 'react-native';
+import {
+  EncodingType,
+  cacheDirectory,
+  deleteAsync,
+  documentDirectory,
+  downloadAsync,
+  readAsStringAsync,
+  writeAsStringAsync,
+} from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import { api, type Goal, type GoalDraft, type GoalPricePoint, type MoneyAccount, type User } from './api';
 import { stripAmount } from './amountFormat';
@@ -14,6 +22,7 @@ import {
   Card,
   EmptyState,
   Field,
+  GhostButton,
   PrimaryButton,
   ScreenHeader,
   SecondaryButton,
@@ -114,6 +123,44 @@ type EstimateMemory = {
   draft: GoalDraft | null;
 };
 
+/** Chat history + interview state survive tab switches and app restarts. */
+type PersistedAiChat = {
+  v: 1;
+  messages: AiChatMessage[];
+  interview: AiInterview;
+  draft: GoalDraft | null;
+  memory: EstimateMemory | null;
+};
+const AI_CHAT_FILE = documentDirectory ? `${documentDirectory}plan_ai_chat.json` : null;
+const AI_CHAT_MAX_MESSAGES = 80;
+const EMPTY_INTERVIEW: AiInterview = { phase: 'gather', turns: 0, itemHint: '', details: [] };
+
+async function loadPersistedAiChat(): Promise<PersistedAiChat | null> {
+  if (!AI_CHAT_FILE) return null;
+  try {
+    const raw = await readAsStringAsync(AI_CHAT_FILE);
+    const parsed = JSON.parse(raw) as PersistedAiChat;
+    if (parsed?.v !== 1 || !Array.isArray(parsed.messages)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+async function savePersistedAiChat(data: PersistedAiChat): Promise<void> {
+  if (!AI_CHAT_FILE) return;
+  try {
+    await writeAsStringAsync(AI_CHAT_FILE, JSON.stringify(data));
+  } catch {
+    /* best-effort */
+  }
+}
+
+async function clearPersistedAiChat(): Promise<void> {
+  if (!AI_CHAT_FILE) return;
+  await deleteAsync(AI_CHAT_FILE, { idempotent: true }).catch(() => undefined);
+}
+
 /** Multi-turn interview: clarify item → estimate price → confirm → save. */
 type AiInterview = {
   phase: 'gather' | 'estimate' | 'confirm' | 'done';
@@ -121,7 +168,7 @@ type AiInterview = {
   itemHint: string;
   details: string[];
   /** How the last price was produced — used for “where did you get that?” */
-  estimateSource?: 'product_link' | 'market_estimate' | 'user_stated' | 'offline_heuristic';
+  estimateSource?: 'product_link' | 'market_scrape' | 'market_estimate' | 'user_stated' | 'offline_heuristic';
   estimateExplain?: string;
 };
 
@@ -155,15 +202,54 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
   const [aiMessages, setAiMessages] = useState<AiChatMessage[]>([]);
   const [aiInput, setAiInput] = useState('');
   const [aiBusy, setAiBusy] = useState(false);
+  /** What the assistant is doing right now; rendered as a live bubble while busy. */
+  const [aiStatus, setAiStatus] = useState<string | null>(null);
   const [aiDraft, setAiDraft] = useState<GoalDraft | null>(null);
-  const [aiInterview, setAiInterview] = useState<AiInterview>({
-    phase: 'gather',
-    turns: 0,
-    itemHint: '',
-    details: [],
-  });
+  const [aiInterview, setAiInterview] = useState<AiInterview>(EMPTY_INTERVIEW);
+  const aiChatLoadedRef = useRef(false);
   /** Survives re-renders so “where did you get that?” always has context. */
   const estimateMemoryRef = useRef<EstimateMemory | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadPersistedAiChat().then((saved) => {
+      if (cancelled) return;
+      if (saved) {
+        setAiMessages(saved.messages);
+        setAiInterview(saved.interview ?? EMPTY_INTERVIEW);
+        setAiDraft(saved.draft ?? null);
+        estimateMemoryRef.current = saved.memory ?? null;
+      }
+      aiChatLoadedRef.current = true;
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!aiChatLoadedRef.current) return;
+    if (aiMessages.length === 0) {
+      void clearPersistedAiChat();
+      return;
+    }
+    void savePersistedAiChat({
+      v: 1,
+      messages: aiMessages.slice(-AI_CHAT_MAX_MESSAGES),
+      interview: aiInterview,
+      draft: aiDraft,
+      memory: estimateMemoryRef.current,
+    });
+  }, [aiMessages, aiInterview, aiDraft]);
+
+  function clearAiChat() {
+    setAiMessages([]);
+    setAiInput('');
+    setAiDraft(null);
+    setAiInterview(EMPTY_INTERVIEW);
+    estimateMemoryRef.current = null;
+    void clearPersistedAiChat();
+  }
   const pricesRefreshedRef = useRef(false);
   const [priceHistory, setPriceHistory] = useState<GoalPricePoint[]>([]);
   const [priceBusy, setPriceBusy] = useState(false);
@@ -278,9 +364,7 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
     setProductUrl('');
     setPendingCover(null);
     setCreateTab('detail');
-    setAiMessages([]);
-    setAiInput('');
-    setAiDraft(null);
+    // AI chat intentionally survives leaving the screen; "Clear chat" wipes it explicitly.
   }
 
   function goIndex() {
@@ -581,38 +665,240 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
       : 'that amount';
 
     if (!source && !d?.target_amount) {
-      return "I haven’t suggested a price yet. Tell me what you’re saving for (make/model/year), paste a product link, or type a number like “about 25000 ETB”.";
+      return "I haven’t suggested a price yet. Tell me the exact item (for an iPhone: which model and storage). I’ll scrape current selling prices.";
     }
 
     switch (source) {
       case 'product_link':
         return (
           explain ||
-          `I pulled ${price} from the product page you linked (the listed sale price on that site). If it looks wrong, paste another link or tell me the price you want.`
+          `I pulled ${price} from a product page. If it looks wrong, say too high/low or type the number you want.`
+        );
+      case 'market_scrape':
+        return (
+          explain ||
+          `${price} is the typical live selling price I scraped from current listings (low–high compared). Not a guess.`
         );
       case 'user_stated':
         return explain || `That’s the price you typed yourself (${price}). I didn’t invent it.`;
       case 'offline_heuristic':
         return (
           explain ||
-          `${price} is a rough offline ballpark from make/model/year when live AI pricing wasn’t available. It’s not a listing scrape — say “too high/low” or give a number.`
+          `${price} is a rough offline ballpark when live listings weren’t available. Not a scrape — say “too high/low” or give a number.`
         );
       case 'market_estimate':
       default:
         return (
           explain ||
-          `${price} is my market estimate from what you described (make/model/year/condition) — not a live listing. Tell me a better number, or paste a product link for the exact price.`
+          `${price} is a market estimate from what you described when scrape didn’t return enough listings.`
         );
     }
   }
 
-  /** Offline / AI-down fallback so the chat still reaches a number. */
+  function interviewBlob(itemHint: string, details: string[]): string {
+    return [itemHint, ...details].join(' ');
+  }
+
+  function hasYear(text: string): boolean {
+    return extractCarYears(text).some((y) => !implausibleCarYear(y));
+  }
+
+  function extractCarYears(text: string): number[] {
+    const out: number[] = [];
+    const re = /\b((?:19|20)\d{2})\b/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text))) out.push(Number(m[1]));
+    return out;
+  }
+
+  function implausibleCarYear(year: number): string | null {
+    const now = new Date().getFullYear();
+    const latest = now + 1; // next model year
+    if (year > latest) {
+      return `There isn’t a ${year} model year on the market (latest is around ${latest}). Which year did you mean?`;
+    }
+    if (year < 1990) {
+      return `${year} is too old to price from current listings. Which year did you mean?`;
+    }
+    return null;
+  }
+
+  type ProductFamily = 'phone' | 'tablet' | 'laptop' | 'car' | 'travel' | 'generic';
+
+  function productFamily(text: string): ProductFamily {
+    const t = text.toLowerCase();
+    if (/\b(iphone|smartphone|galaxy\s*s|pixel\s*\d|android phone)\b/.test(t) || (/\bphones?\b/.test(t) && !/\bheadphone/.test(t))) {
+      return 'phone';
+    }
+    if (/\b(ipad|tablet)\b/.test(t)) return 'tablet';
+    if (/\b(macbook|laptop|thinkpad|chromebook|surface (pro|laptop)|computer)\b/.test(t)) return 'laptop';
+    if (/\b(trip|travel|flight|vacation|holiday|ticket to)\b/.test(t)) return 'travel';
+    if (
+      /\b(car|vehicle|suv|truck|sedan|hatchback|pickup|van|coupe|4x4)\b/.test(t) ||
+      /\b(toyota|honda|hyundai|kia|nissan|ford|bmw|mercedes|audi|mazda|subaru|lexus|jeep|suzuki|isuzu)\b/.test(t)
+    ) {
+      return 'car';
+    }
+    return 'generic';
+  }
+
+  function latestIPhoneGen(): number {
+    const now = new Date();
+    // iPhone 16 = 2024 → gen ≈ year - 2008; new models typically in September.
+    return now.getMonth() >= 8 ? now.getFullYear() - 2008 : now.getFullYear() - 2009;
+  }
+
+  function iPhoneGeneration(text: string): number | null {
+    const numbered = text.match(/\biphone\s*(?:se\s*)?(\d{1,2})\b/i);
+    if (numbered) return Number(numbered[1]);
+    if (/\biphone\s*x[sr]?\b/i.test(text)) return 10;
+    return null;
+  }
+
+  function implausibleIPhone(text: string): string | null {
+    if (!/\biphone\b/i.test(text)) return null;
+    const gen = iPhoneGeneration(text);
+    if (gen == null) return null;
+    const latest = latestIPhoneGen();
+    if (gen > latest || gen > 18) {
+      return `There isn’t an iPhone ${gen} on the market (latest is around iPhone ${Math.min(latest, 18)}). Which model did you mean — 15, 16, 17, Pro, Pro Max?`;
+    }
+    if (gen < 6) {
+      return `iPhone ${gen} isn’t a current listing. Which model did you mean (11–${Math.min(latest, 18)}, SE, or Pro)?`;
+    }
+    return null;
+  }
+
+  function hasPhoneModel(text: string): boolean {
+    if (implausibleIPhone(text)) return false;
+    if (/\biphone\s*(se(\s*\d)?|\d{1,2}|x[sr]?)\s*(pro(\s*max)?|plus|mini|air)?\b/i.test(text)) return true;
+    if (/\biphone\b/i.test(text) && /\b(se|\d{1,2}|x[sr]?|pro|max|plus|mini)\b/i.test(text) && iPhoneGeneration(text) == null) {
+      return true;
+    }
+    if (/\b(galaxy\s*s\d+|pixel\s*\d+|redmi|note\s*\d+)\b/i.test(text)) return true;
+    return false;
+  }
+
+  const CAR_MAKE_RE =
+    /\b(toyota|honda|hyundai|kia|nissan|ford|bmw|mercedes|benz|audi|volkswagen|\bvw\b|mazda|subaru|chevrolet|\bchevy\b|lexus|tesla|jeep|volvo|mitsubishi|suzuki|isuzu|daihatsu|peugeot|renault|porsche|mini|fiat|\bram\b|gmc|cadillac|acura|infiniti|genesis|byd|haval|chery|geely)\b/i;
+  const CAR_MODEL_RE =
+    /\b(rav-?4|corolla|camry|carina|yaris|hilux|prado|land\s*cruiser|civic|accord|cr-?v|pilot|fit|tucson|sportage|cx-?5|forester|outlander|golf|passat|jetta|f-?150|mustang|camaro|silverado|wrangler|cherokee|model\s*[3syx]|cybertruck)\b/i;
+  const MODEL_MAKE: Record<string, string> = {
+    carina: 'Toyota',
+    'rav4': 'Toyota',
+    'rav-4': 'Toyota',
+    corolla: 'Toyota',
+    camry: 'Toyota',
+    yaris: 'Toyota',
+    hilux: 'Toyota',
+    prado: 'Toyota',
+    civic: 'Honda',
+    accord: 'Honda',
+    'cr-v': 'Honda',
+    crv: 'Honda',
+  };
+
+  function titleCaseModel(raw: string): string {
+    return raw
+      .trim()
+      .split(/\s+/)
+      .map((w) => (w.length <= 3 ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()))
+      .join(' ');
+  }
+
+  function looksLikeCarModelPhrase(text: string): boolean {
+    const t = text.trim();
+    if (!t || /^(yes|no|ok|okay|please|thanks|new|used|hybrid|le|xle)$/i.test(t)) return false;
+    if (CAR_MAKE_RE.test(t) || CAR_MODEL_RE.test(t)) return true;
+    const words = t.split(/\s+/).filter((w) => !/^(a|an|the|my|car|vehicle|suv)$/i.test(w) && !/^\d{4}$/.test(w));
+    if (words.length === 0 || words.length > 4) return false;
+    return words.some((w) => /[a-z]{3,}/i.test(w));
+  }
+
+  function hasCarMakeModel(text: string): boolean {
+    if (CAR_MAKE_RE.test(text) || CAR_MODEL_RE.test(text)) return true;
+    const fam = productFamily(text);
+    if (fam === 'car' && looksLikeCarModelPhrase(text)) return true;
+    return false;
+  }
+
+  function currentCarSpec(details: string[]): { make?: string; model?: string; year?: number; badYear?: number } {
+    let make: string | undefined;
+    let model: string | undefined;
+    let year: number | undefined;
+    let badYear: number | undefined;
+    for (const line of details) {
+      const makeHit = line.match(CAR_MAKE_RE);
+      const modelHit = line.match(CAR_MODEL_RE);
+      if (makeHit) make = titleCaseModel(makeHit[1].replace(/\bvw\b/i, 'VW'));
+      if (modelHit) {
+        model = titleCaseModel(modelHit[1].replace(/-/g, ''));
+        const key = modelHit[1].toLowerCase().replace(/\s+/g, '');
+        if (!make && MODEL_MAKE[key]) make = MODEL_MAKE[key];
+        if (!make && MODEL_MAKE[modelHit[1].toLowerCase()]) make = MODEL_MAKE[modelHit[1].toLowerCase()];
+      } else if (looksLikeCarModelPhrase(line) && !/^\d{4}$/.test(line.trim())) {
+        const words = line
+          .trim()
+          .split(/\s+/)
+          .filter((w) => !/^(a|an|the|my|car|vehicle|suv|i|want)$/i.test(w) && !/^\d{4}$/.test(w));
+        if (words.length && !CAR_MAKE_RE.test(line)) {
+          model = titleCaseModel(words.join(' '));
+          const key = words[0].toLowerCase();
+          if (!make && MODEL_MAKE[key]) make = MODEL_MAKE[key];
+        }
+      }
+      for (const y of extractCarYears(line)) {
+        const bad = implausibleCarYear(y);
+        if (bad) badYear = y;
+        else {
+          year = y;
+          badYear = undefined;
+        }
+      }
+    }
+    return { make, model, year, badYear };
+  }
+
+  function carSearchTitle(details: string[]): string | null {
+    const spec = currentCarSpec(details);
+    if (!spec.model && !spec.make) return null;
+    return [spec.make, spec.model, spec.year && !spec.badYear ? String(spec.year) : null].filter(Boolean).join(' ');
+  }
+
+  function hasLaptopModel(text: string): boolean {
+    return /\b(macbook\s*(air|pro)?|thinkpad|xps|surface|chromebook|vivobook|zenbook|pavilion|inspiron)\b/i.test(text);
+  }
+
+  function hasSpecificItem(text: string): boolean {
+    const fam = productFamily(text);
+    if (fam === 'phone') return hasPhoneModel(text);
+    if (fam === 'car') return hasCarMakeModel(text);
+    if (fam === 'laptop') return hasLaptopModel(text);
+    if (fam === 'tablet') return /\b(ipad|tab\s*[as]?\d|galaxy tab)\b/i.test(text);
+    return hasCarMakeModel(text) || hasPhoneModel(text) || hasLaptopModel(text);
+  }
+
+  function buildMarketQuery(details: string[]): string {
+    const car = carSearchTitle(details);
+    if (car) return car;
+    const stop = /^(i|i'm|im|wanna|want|to|buy|a|an|the|please|just|for|my|me|get|some|car|vehicle)$/i;
+    return details
+      .join(' ')
+      .split(/\s+/)
+      .filter((w) => w && !stop.test(w) && !/^https?:/i.test(w))
+      .join(' ')
+      .slice(0, 120)
+      .trim();
+  }
+
+  /** Offline fallback only for a named model — never a generic “Vehicle 2022”. */
   function heuristicPrice(details: string[], cur: string): { title: string; amount: string; explain: string } | null {
     const blob = details.join(' ').toLowerCase();
+    if (!hasSpecificItem(blob)) return null;
     const yearMatch = blob.match(/\b(20\d{2})\b/);
     const year = yearMatch ? Number(yearMatch[1]) : undefined;
     const isETB = cur === 'ETB';
-    const scale = isETB ? 55 : 1; // rough USD→ETB for local fallbacks
+    const scale = isETB ? 55 : 1;
 
     const pack = (title: string, usd: number) => ({
       title,
@@ -631,49 +917,75 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
     if (/honda\s*cr-?v|crv/.test(blob)) {
       return pack(`Honda CR-V${year ? ` ${year}` : ''}`, 28000);
     }
-    if (/macbook/.test(blob)) return pack('MacBook', 1800);
-    if (/iphone/.test(blob)) return pack('iPhone', 900);
-    if (/car|vehicle|suv|truck/.test(blob) && year) return pack(`Vehicle ${year}`, 22000);
-    if (/car|vehicle|suv|truck/.test(blob)) return pack('Used car', 15000);
     return null;
   }
 
   function enoughToEstimate(details: string[], text: string): boolean {
     if (parseStatedPrice(text)) return true;
-    if (/\b(estimate|price|how much|go ahead|that'?s all|save for it)\b/i.test(text)) return true;
-    if (/\bhttps?:\/\/|www\./i.test(text)) return true;
-    // Year alone is a detail, not enough by itself on turn 1.
-    if (details.length >= 2 && /\b(20\d{2})\b/.test(text)) return true;
-    if (details.length >= 3) return true;
     const blob = details.join(' ');
-    if (
-      details.length >= 2 &&
-      /\b(rav|toyota|honda|macbook|iphone|laptop|trip|dubai|japan|corolla)\b/i.test(blob) &&
-      /\b(20\d{2}|new|used|hybrid|awd|le|xle)\b/i.test(blob)
-    ) {
-      return true;
+    const fam = productFamily(blob);
+    if (fam === 'phone') return hasPhoneModel(blob);
+    if (fam === 'car') {
+      const spec = currentCarSpec(details);
+      return Boolean((spec.model || spec.make) && spec.year && !spec.badYear);
     }
-    return false;
+    if (fam === 'laptop') return hasLaptopModel(blob);
+    if (fam === 'tablet') return /\bipad\b/i.test(blob) && /\b(air|pro|mini|\d)\b/i.test(blob);
+    if (/\b(go ahead|that'?s all|how much)\b/i.test(text) && hasSpecificItem(blob)) return true;
+    return hasSpecificItem(blob) && (hasYear(blob) || /\b(new|used|refurb|gb|pro|air)\b/i.test(blob));
   }
 
   function askFollowUp(itemHint: string, details: string[]): string {
-    if (/car|vehicle|rav|toyota|honda|suv|truck/i.test(itemHint)) {
-      if (details.length <= 1) {
-        return 'What kind of car — make and model? Or paste a listing URL and I’ll scrape the live price.';
+    const blob = interviewBlob(itemHint, details);
+    const fam = productFamily(blob);
+
+    if (fam === 'phone') {
+      const bad = implausibleIPhone(blob);
+      if (bad) return bad;
+      if (!hasPhoneModel(blob)) {
+        if (/\biphone\b/i.test(blob)) return 'Which iPhone — 15, 16, 17, SE, Pro, or Pro Max?';
+        if (/\bgalaxy|samsung\b/i.test(blob)) return 'Which Galaxy — for example S24, S24 Ultra, A55?';
+        return 'Which phone model exactly (e.g. iPhone 16 Pro, Galaxy S24)?';
       }
-      if (!/\b(20\d{2})\b/.test(details.join(' '))) {
-        return 'Which model year? A product/listing link is even better — I’ll scrape that price and keep tracking it.';
+      if (!/\b(\d{2,4}\s*gb|new|used|refurb)\b/i.test(blob)) {
+        return 'What storage (128GB, 256GB, 512GB) and is it new or used? Then I’ll scrape current selling prices.';
       }
-      return 'New or used, and any trim (LE, XLE, Hybrid…)? Paste a listing URL if you have one.';
+      return 'I’ll scrape live listings next — any other detail (color, carrier locked) or say “go ahead”.';
     }
-    if (/phone|laptop|macbook|iphone|ipad|computer/i.test(itemHint)) {
-      return details.length <= 1
-        ? 'Which model (and storage/size)? Or paste a product URL and I’ll scrape the live price.'
-        : 'Any condition preference — new or refurbished? A product link lets me track price changes.';
+
+    if (fam === 'laptop') {
+      if (!hasLaptopModel(blob) || (/\bmacbook\b/i.test(blob) && !/\b(air|pro|14|16|13|m[1-4])\b/i.test(blob))) {
+        return 'Which laptop — MacBook Air or Pro, which size (13/14/16) and chip (M2, M3…)?';
+      }
+      return 'New or used, and how much RAM/storage if you know? Then I’ll scrape current selling prices.';
     }
-    return details.length <= 1
-      ? 'Can you be more specific — which product or model? Paste a listing URL and I’ll scrape it.'
-      : 'Any year, condition (new/used), or other details? Best: paste a product link so I can scrape and track the price.';
+
+    if (fam === 'tablet') {
+      if (!/\b(air|pro|mini|\d)\b/i.test(blob)) return 'Which iPad — Air, Pro, Mini, or which generation?';
+      return 'What storage, and new or used? Then I’ll scrape current selling prices.';
+    }
+
+    if (fam === 'car') {
+      const spec = currentCarSpec(details);
+      if (spec.badYear) return implausibleCarYear(spec.badYear) || 'Which model year?';
+      if (!spec.model && !hasCarMakeModel(blob)) {
+        return 'What make and model — for example Toyota RAV4 or Honda Civic?';
+      }
+      if (!spec.year) {
+        const item = [spec.make, spec.model].filter(Boolean).join(' ') || 'that car';
+        return `Which model year for the ${item}?`;
+      }
+      return 'I’ll scrape live listings next — new or used, or say “go ahead”.';
+    }
+
+    if (fam === 'travel') {
+      return details.length <= 1 ? 'Where to, and roughly when?' : 'How many people, and flights only or hotel too?';
+    }
+
+    if (!hasSpecificItem(blob)) {
+      return 'Which product or model exactly? For example “iPhone 15 Pro 256GB” or “Toyota RAV4 2022”.';
+    }
+    return 'New or used, and any details that affect the price? Then I’ll scrape current selling prices.';
   }
 
   async function runPriceEstimate(
@@ -696,10 +1008,12 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
     const urlMatch = blob.match(/\bhttps?:\/\/[^\s<>"']+/i) || latestText.match(/\bwww\.[^\s<>"']+/i);
     if (urlMatch) {
       const rawUrl = urlMatch[0].toLowerCase().startsWith('http') ? urlMatch[0] : `https://${urlMatch[0]}`;
+      setAiStatus('Reading the product page…');
       try {
         const preview = await api.previewGoalUrl(token, rawUrl);
         const p = preview.preview;
-        if (p?.price && !isYearAmount(Number(p.price))) {
+        // Server already filters bare years and "/mo" installments; a $2,000 item is a real price.
+        if (p?.price) {
           merged.target_amount = p.price;
           if (p.currency) merged.currency_code = p.currency.toUpperCase();
           if (p.title) merged.title = p.title;
@@ -742,60 +1056,74 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
       explain = `Using the price you stated: ${formatMoney(stated, (merged.currency_code || cur).toUpperCase(), user.locale)}.`;
     }
 
-    if (!merged.target_amount || isYearAmount(Number(merged.target_amount))) {
-      if (isYearAmount(Number(merged.target_amount))) merged.target_amount = undefined;
-      const prompt = [
-        `Estimate a realistic purchase price in ${cur} for this savings goal.`,
-        'Fill target_amount with a realistic market estimate (digits only, never a year like 2018 or 2024).',
-        'Set a clear title and goal_type purchase when buying something.',
-        'In note, start with "Estimated market price" and list the assumptions (year, condition, region).',
-        blob,
-      ].join('\n');
-      try {
-        const res = await api.extractGoalDraft(token, prompt);
-        for (const [key, value] of Object.entries(res.draft ?? {})) {
-          if (value !== undefined && value !== null && value !== '') {
-            if (key === 'target_amount' && merged.target_amount) continue;
-            (merged as Record<string, unknown>)[key] = value;
+    const carSpec = currentCarSpec(contextLines);
+    const badModel =
+      implausibleIPhone(blob) || (carSpec.badYear ? implausibleCarYear(carSpec.badYear) : null);
+    if (badModel) {
+      merged.target_amount = undefined;
+      return {
+        draft: merged,
+        financeNote: '',
+        warning: badModel,
+        source: 'market_estimate',
+        explain: '',
+      };
+    }
+
+    const trusted = source === 'product_link' || source === 'user_stated';
+    if (!merged.target_amount || (!trusted && isYearAmount(Number(merged.target_amount)))) {
+      if (!trusted && isYearAmount(Number(merged.target_amount))) merged.target_amount = undefined;
+      const q = buildMarketQuery(contextLines);
+      if (q) {
+        setAiStatus(`Scraping live listings for “${carSearchTitle(contextLines) || q}”… (up to ~10s)`);
+        try {
+          const res = await api.searchGoalMarket(token, q, cur);
+          const m = res.market;
+          if (m?.typical) {
+            merged.target_amount = m.typical;
+            merged.currency_code = (m.currency_code || cur).toUpperCase();
+            if (m.source_url) merged.source_url = m.source_url;
+            if (!merged.title) merged.title = carSearchTitle(contextLines) || m.query;
+            source = 'market_scrape';
+            const low = m.low ? formatMoney(m.low, merged.currency_code, user.locale) : '';
+            const high = m.high ? formatMoney(m.high, merged.currency_code, user.locale) : '';
+            const typical = formatMoney(m.typical, merged.currency_code, user.locale);
+            const n = m.sample_count || m.listings?.length || 0;
+            explain = [
+              `Scraped live selling prices for “${merged.title || m.query}”.`,
+              `Typical ${typical}` + (low && high ? ` (listings from ${low} to ${high}` + (n ? `, ${n} prices` : '') + ')' : ''),
+            ]
+              .filter(Boolean)
+              .join(' ');
+            merged.note = explain.slice(0, 240);
           }
-        }
-        if (merged.target_amount && !isYearAmount(Number(merged.target_amount))) {
-          source = 'market_estimate';
-          explain =
-            (merged.note && /estimat/i.test(merged.note) ? merged.note : null) ||
-            `Market estimate in ${cur} from what you described — not scraped from a live listing.`;
-        } else {
-          merged.target_amount = undefined;
-        }
-      } catch (e) {
-        warning = e instanceof Error ? e.message : 'AI extract unavailable';
-      }
-    }
-
-    if (!merged.target_amount || !merged.title) {
-      const fallback = heuristicPrice(contextLines, cur);
-      if (fallback) {
-        if (!merged.title) merged.title = fallback.title;
-        if (!merged.target_amount) {
-          merged.target_amount = Number(fallback.amount).toFixed(2);
-          merged.note = (merged.note ? `${merged.note} · ` : '') + 'Rough offline estimate';
-          source = 'offline_heuristic';
-          explain = fallback.explain;
+        } catch (e) {
+          warning = e instanceof Error ? e.message : 'Could not scrape live listings';
         }
       }
     }
 
-    if (merged.target_amount && isYearAmount(Number(merged.target_amount))) {
+    if (merged.target_amount && !trusted && source !== 'market_scrape' && isYearAmount(Number(merged.target_amount))) {
       merged.target_amount = undefined;
     }
 
     if (!merged.title) {
-      merged.title = contextLines[contextLines.length - 1]?.slice(0, 80) || 'New purchase';
+      merged.title = carSearchTitle(contextLines) || buildMarketQuery(contextLines) || heuristicPrice(contextLines, cur)?.title;
+    }
+
+    const genericTitle = !merged.title || /^(20\d{2}|new purchase|vehicle(?:\s+\d{4})?|used car)$/i.test(merged.title.trim());
+    if (genericTitle && !hasSpecificItem(blob)) {
+      merged.target_amount = undefined;
+      merged.title = undefined;
+    } else if (genericTitle) {
+      const named = heuristicPrice(contextLines, cur);
+      merged.title = named?.title || merged.title;
     }
     if (!merged.goal_type) merged.goal_type = 'purchase';
     if (!merged.currency_code) merged.currency_code = cur;
 
     let financeNote = '';
+    setAiStatus('Comparing with your cashflow…');
     try {
       const ov = await api.insightsOverview(token, cur);
       const income = Number(ov.overview?.income || 0);
@@ -827,6 +1155,7 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
     setAiMessages((prev) => [...prev, userMsg]);
     setAiInput('');
     setAiBusy(true);
+    setAiStatus('Thinking…');
     try {
       // Meta / source questions — always answer; never treat as a new product detail.
       if (isMetaPriceQuestion(text)) {
@@ -848,6 +1177,27 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
       const nextDetails = [...aiInterview.details, text];
       const itemHint = aiInterview.itemHint || text;
       const turns = aiInterview.turns + 1;
+      const implausible =
+        implausibleIPhone(interviewBlob(itemHint, nextDetails)) ||
+        (() => {
+          const spec = currentCarSpec(nextDetails);
+          return spec.badYear ? implausibleCarYear(spec.badYear) : null;
+        })();
+      if (implausible) {
+        setAiInterview({
+          phase: 'gather',
+          turns,
+          itemHint,
+          details: nextDetails,
+          estimateSource: aiInterview.estimateSource,
+          estimateExplain: aiInterview.estimateExplain,
+        });
+        setAiMessages((prev) => [
+          ...prev,
+          { id: `a-${Date.now()}`, role: 'assistant', content: implausible },
+        ]);
+        return;
+      }
       const ready = aiInterview.phase !== 'gather' || enoughToEstimate(nextDetails, text);
 
       if (!ready) {
@@ -885,9 +1235,10 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
             id: `a-${Date.now()}`,
             role: 'assistant',
             content: [
-              "I still don't have a solid price.",
+              implausibleIPhone(interviewBlob(itemHint, nextDetails)) ||
+                "I couldn't find live selling prices for that yet.",
               warning ? `(${warning})` : null,
-              'Tell me the model and year more clearly, paste a product link, or type a number like “about 25000 ETB”.',
+              askFollowUp(itemHint, nextDetails),
             ]
               .filter(Boolean)
               .join('\n'),
@@ -902,17 +1253,19 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
         user.locale,
       );
       const sourceLine =
-        source === 'product_link'
-          ? `Source: product link${draft.source_url ? ` (${draft.source_url})` : ''}.`
-          : source === 'user_stated'
-            ? 'Source: the price you typed.'
-            : source === 'offline_heuristic'
-              ? 'Source: rough offline ballpark (not a live listing).'
-              : 'Source: market estimate from your description — not a live listing.';
+        source === 'market_scrape'
+          ? 'Source: scraped live listings (compared current selling prices).'
+          : source === 'product_link'
+            ? 'Source: product page (paste links in the Link tab).'
+            : source === 'user_stated'
+              ? 'Source: the price you typed.'
+              : source === 'offline_heuristic'
+                ? 'Source: rough offline ballpark (listings unavailable).'
+                : 'Source: market estimate — live scrape didn’t return enough listings.';
       const content = [
         `That’s around ${priceLabel} for ${draft.title || 'that item'}.`,
         sourceLine,
-        explain && source === 'market_estimate' ? explain : null,
+        explain && (source === 'market_scrape' || source === 'market_estimate') ? explain : null,
         financeNote,
         'Does that price work for you? (Ask “where from?” anytime.)',
       ]
@@ -936,12 +1289,13 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
           role: 'assistant',
           content:
             e instanceof Error
-              ? `Something went wrong: ${e.message}. Try again with the model and year, or paste a product link.`
-              : "I couldn't estimate that yet — tell me the item, model, and year.",
+              ? `Something went wrong: ${e.message}. Try the exact model (e.g. iPhone 15 Pro).`
+              : "I couldn't scrape a price yet — tell me the exact model.",
         },
       ]);
     } finally {
       setAiBusy(false);
+      setAiStatus(null);
     }
   }
 
@@ -1267,6 +1621,29 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
                     </View>
                   );
                 })}
+                {aiBusy ? (
+                  <View
+                    style={{
+                      alignSelf: 'flex-start',
+                      maxWidth: '92%',
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      gap: 10,
+                      backgroundColor: colors.surfaceMuted,
+                      borderRadius: 16,
+                      borderBottomLeftRadius: 6,
+                      paddingHorizontal: 14,
+                      paddingVertical: 10,
+                      borderWidth: 1,
+                      borderColor: colors.border,
+                    }}
+                  >
+                    <ActivityIndicator size="small" color={colors.primary} />
+                    <Text style={{ flex: 1, color: colors.muted, fontFamily: fonts.ui, fontSize: 13, lineHeight: 18 }}>
+                      {aiStatus || t(user.locale, 'insights.thinking')}
+                    </Text>
+                  </View>
+                ) : null}
               </View>
             )}
             <Field
@@ -1287,6 +1664,9 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
                 onPress={() => void onAiSavePlan()}
                 disabled={busy}
               />
+            ) : null}
+            {aiMessages.length > 0 && !aiBusy ? (
+              <GhostButton label={t(user.locale, 'plan.clearChat') || 'Clear chat'} onPress={clearAiChat} />
             ) : null}
           </Card>
         ) : null}

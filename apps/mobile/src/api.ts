@@ -72,7 +72,7 @@ async function request<T>(
   path: string,
   init: RequestInit = {},
   token?: string,
-  opts?: { skipRefresh?: boolean },
+  opts?: { skipRefresh?: boolean; timeoutMs?: number },
 ): Promise<T> {
   const headers: Record<string, string> = {
     Accept: 'application/json',
@@ -83,7 +83,25 @@ async function request<T>(
     headers.Authorization = `Bearer ${token}`;
   }
 
-  const res = await fetch(`${apiBaseUrl}${path}`, { ...init, headers });
+  // Never let one slow upstream hang a screen; callers pick a budget per endpoint.
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer =
+    controller && opts?.timeoutMs
+      ? setTimeout(() => controller.abort(), opts.timeoutMs)
+      : null;
+  let res: Response;
+  try {
+    res = await fetch(`${apiBaseUrl}${path}`, {
+      ...init,
+      headers,
+      ...(controller ? { signal: controller.signal } : {}),
+    });
+  } catch (e) {
+    if (timer) clearTimeout(timer);
+    const aborted = (e as Error)?.name === 'AbortError';
+    throw new Error(aborted ? 'Timed out waiting for the server' : (e as Error)?.message || 'Network error');
+  }
+  if (timer) clearTimeout(timer);
   if (res.status === 204) {
     return undefined as T;
   }
@@ -505,12 +523,17 @@ export const api = {
     request<{ preview: GoalUrlPreview }>('/goals/preview-url', {
       method: 'POST',
       body: JSON.stringify({ url }),
-    }, token),
+    }, token, { timeoutMs: 15_000 }),
   extractGoalDraft: (token: string, text: string) =>
     request<{ draft: GoalDraft }>('/goals/extract', {
       method: 'POST',
       body: JSON.stringify({ text }),
     }, token),
+  searchGoalMarket: (token: string, query: string, currency_code: string) =>
+    request<{ market: GoalMarketSearch }>('/goals/market-search', {
+      method: 'POST',
+      body: JSON.stringify({ query, currency_code }),
+    }, token, { timeoutMs: 12_000 }),
   refreshGoalPrices: (token: string) =>
     request<{ updated: Goal[]; changes: GoalPriceChange[] }>('/goals/refresh-prices', {
       method: 'POST',
@@ -840,6 +863,7 @@ export const api = {
       counterparty?: string;
       title?: string;
       note?: string;
+      stated_balance?: string;
     },
   ) =>
     request<{
@@ -1267,6 +1291,25 @@ export type GoalProjection = {
   on_track?: boolean | null;
   target_date?: string | null;
   contribution_count: number;
+};
+
+export type GoalMarketListing = {
+  title?: string;
+  price: string;
+  currency_code: string;
+  url?: string;
+  site?: string;
+};
+
+export type GoalMarketSearch = {
+  query: string;
+  currency_code: string;
+  low?: string;
+  high?: string;
+  typical?: string;
+  listings?: GoalMarketListing[];
+  source_url?: string;
+  sample_count?: number;
 };
 
 export type GoalUrlPreview = {

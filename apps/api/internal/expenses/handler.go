@@ -323,16 +323,17 @@ func (h *Handler) DeleteBudget(w http.ResponseWriter, r *http.Request) {
 }
 
 type smsIngestBody struct {
-	Text         string     `json:"text"`
-	AccountID    *uuid.UUID `json:"account_id"`
-	Create       bool       `json:"create"`
-	Kind         string     `json:"kind"`
-	Amount       string     `json:"amount"`
-	CurrencyCode string     `json:"currency_code"`
-	AccountLast4 string     `json:"account_last4"`
-	Counterparty string     `json:"counterparty"`
-	Title        string     `json:"title"`
-	Note         string     `json:"note"`
+	Text          string     `json:"text"`
+	AccountID     *uuid.UUID `json:"account_id"`
+	Create        bool       `json:"create"`
+	Kind          string     `json:"kind"`
+	Amount        string     `json:"amount"`
+	CurrencyCode  string     `json:"currency_code"`
+	AccountLast4  string     `json:"account_last4"`
+	Counterparty  string     `json:"counterparty"`
+	Title         string     `json:"title"`
+	Note          string     `json:"note"`
+	StatedBalance string     `json:"stated_balance"`
 }
 
 func (h *Handler) IngestSMS(w http.ResponseWriter, r *http.Request) {
@@ -342,16 +343,17 @@ func (h *Handler) IngestSMS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := h.svc.IngestSMS(r.Context(), auth.UserIDFrom(r.Context()), SMSIngestInput{
-		Text:         body.Text,
-		AccountID:    body.AccountID,
-		Create:       body.Create,
-		Kind:         body.Kind,
-		Amount:       body.Amount,
-		CurrencyCode: body.CurrencyCode,
-		AccountLast4: body.AccountLast4,
-		Counterparty: body.Counterparty,
-		Title:        body.Title,
-		Note:         body.Note,
+		Text:          body.Text,
+		AccountID:     body.AccountID,
+		Create:        body.Create,
+		Kind:          body.Kind,
+		Amount:        body.Amount,
+		CurrencyCode:  body.CurrencyCode,
+		AccountLast4:  body.AccountLast4,
+		Counterparty:  body.Counterparty,
+		Title:         body.Title,
+		Note:          body.Note,
+		StatedBalance: body.StatedBalance,
 	})
 	if err != nil {
 		httpx.Error(w, err)
@@ -361,10 +363,10 @@ func (h *Handler) IngestSMS(w http.ResponseWriter, r *http.Request) {
 }
 
 type receiptScanBody struct {
-	Mime         string     `json:"mime"`
-	ImageBase64  string     `json:"image_base64"`
-	AccountID    *uuid.UUID `json:"account_id"`
-	Create       bool       `json:"create"`
+	Mime        string     `json:"mime"`
+	ImageBase64 string     `json:"image_base64"`
+	AccountID   *uuid.UUID `json:"account_id"`
+	Create      bool       `json:"create"`
 }
 
 func (h *Handler) ScanReceipt(w http.ResponseWriter, r *http.Request) {

@@ -15,6 +15,8 @@ export type ParsedSmsTransfer = {
   confidence: number;
   /** Short UI summary — never the raw SMS. */
   summaryTitle: string | null;
+  /** Bank-stated remaining balance (not the transfer amount). */
+  statedBalance: string | null;
 };
 
 function normalizeAmount(raw: string): string | null {
@@ -44,16 +46,40 @@ export function classifySmsAccountType(text: string): { type: SmsAccountType; in
   if (/\btelebirr|tele\s*birr|ethio\s*telecom|e-money\b/i.test(raw)) {
     return { type: 'mobile_money', institution: 'Telebirr' };
   }
+  if (/\bmpesa|m-pesa\b/i.test(raw)) return { type: 'mobile_money', institution: 'M-Pesa' };
+  if (/\bcash\s*app\b/i.test(raw)) return { type: 'wallet', institution: 'Cash App' };
+  if (/\bvenmo\b/i.test(raw)) return { type: 'wallet', institution: 'Venmo' };
+  if (/\bpaypal\b/i.test(raw)) return { type: 'wallet', institution: 'PayPal' };
+  if (/\bairtel\s*money|mtn\s*momo|hellocash|amole\b/i.test(raw)) {
+    return { type: 'mobile_money', institution: 'Mobile money' };
+  }
   if (/\bcbe\b|commercial\s*bank\s*of\s*ethiopia|banking with cbe/i.test(raw)) {
     return { type: 'bank', institution: 'CBE' };
   }
   if (/\bdashen\b/i.test(raw)) return { type: 'bank', institution: 'Dashen' };
   if (/\bawash\b/i.test(raw)) return { type: 'bank', institution: 'Awash' };
-  if (/\babyssinia|boa\b/i.test(raw)) return { type: 'bank', institution: 'Abyssinia' };
-  if (/\bmpesa|m-pesa|airtel\s*money|mtn\s*momo|hellocash|amole\b/i.test(raw)) {
-    return { type: 'mobile_money', institution: 'Mobile money' };
-  }
-  if (/\b(?:a\/c|account)\b/i.test(raw)) return { type: 'bank', institution: 'Bank' };
+  if (/\babyssinia\b/i.test(raw)) return { type: 'bank', institution: 'Abyssinia' };
+  if (/\bhibret\b/i.test(raw)) return { type: 'bank', institution: 'Hibret' };
+  if (/\bwegagen\b/i.test(raw)) return { type: 'bank', institution: 'Wegagen' };
+  if (/\bzemen\b/i.test(raw)) return { type: 'bank', institution: 'Zemen' };
+  if (/\bcoop(?:erative)?\s*bank\b/i.test(raw)) return { type: 'bank', institution: 'Coop' };
+  if (/\bchase\b/i.test(raw)) return { type: 'bank', institution: 'Chase' };
+  if (/\bwells\s*fargo\b/i.test(raw)) return { type: 'bank', institution: 'Wells Fargo' };
+  if (/\bbank of america|\bbofa\b/i.test(raw)) return { type: 'bank', institution: 'Bank of America' };
+  if (/\bcapital one\b/i.test(raw)) return { type: 'bank', institution: 'Capital One' };
+  if (/\bciti(?:bank)?\b/i.test(raw)) return { type: 'bank', institution: 'Citi' };
+  if (/\bus bank\b/i.test(raw)) return { type: 'bank', institution: 'US Bank' };
+  if (/\bpnc\b/i.test(raw)) return { type: 'bank', institution: 'PNC' };
+  if (/\btd bank\b/i.test(raw)) return { type: 'bank', institution: 'TD Bank' };
+  if (/\bally\b/i.test(raw)) return { type: 'bank', institution: 'Ally' };
+  if (/\bschwab\b/i.test(raw)) return { type: 'bank', institution: 'Schwab' };
+  if (/\bdiscover\b/i.test(raw)) return { type: 'card', institution: 'Discover' };
+  if (/\bamerican express|\bamex\b/i.test(raw)) return { type: 'card', institution: 'Amex' };
+  if (/\bsofi\b/i.test(raw)) return { type: 'bank', institution: 'SoFi' };
+  if (/\bchime\b/i.test(raw)) return { type: 'bank', institution: 'Chime' };
+  if (/\bwise\b|transferwise/i.test(raw)) return { type: 'wallet', institution: 'Wise' };
+  if (/\brevolut\b/i.test(raw)) return { type: 'wallet', institution: 'Revolut' };
+  if (/\b(?:a\/c|acct|account|card ending)\b/i.test(raw)) return { type: 'bank', institution: null };
   return { type: 'other', institution: null };
 }
 
@@ -67,14 +93,16 @@ function extractTransferAmount(raw: string): { amount: string | null; currency: 
   const withoutBalance = raw
     .replace(/\b(?:your\s+)?(?:current\s+)?(?:e-?money\s+)?(?:account\s+)?balance\s+is\s+[A-Z$€£]*\s*[\d,]+\.?\d*/gi, ' ')
     .replace(/\bAvail(?:able)?\.?\s*Bal(?:ance)?[:\s]+[A-Z$€£]*\s*[\d,]+\.?\d*/gi, ' ')
+    .replace(/\b(?:available|current|ledger)\s+balance\s*[:.]?\s*\$?\s*[\d,]+\.?\d*/gi, ' ')
     .replace(/\bwith a (?:total|S\.?\s*charge|VAT)[^.]*?/gi, ' ');
 
   const patterns = [
-    /\b(?:transfered|transferred|received|paid|sent|debited|credited)\s+(?:with\s+)?(?:ETB|USD|EUR|GBP|Br)\s*([\d,]+\.?\d*)/i,
-    /\b(?:has been|was)\s+(?:debited|credited)\s+(?:with\s+)?(?:ETB|USD|EUR|GBP|Br)\s*([\d,]+\.?\d*)/i,
-    /\btransaction of\s+(?:ETB|USD|EUR|GBP|Br)\s*([\d,]+\.?\d*)/i,
+    /\b(?:transfered|transferred|received|paid|sent|debited|credited|purchase(?:d)?|withdrew)\s+(?:with\s+)?(?:ETB|USD|EUR|GBP|Br|\$)\s*([\d,]+\.?\d*)/i,
+    /\b(?:has been|was)\s+(?:debited|credited)\s+(?:with\s+)?(?:ETB|USD|EUR|GBP|Br|\$)\s*([\d,]+\.?\d*)/i,
+    /\b(?:purchase|transaction|deposit|withdrawal) of\s+(?:ETB|USD|EUR|GBP|Br|\$)?\s*([\d,]+\.?\d*)/i,
     /\b(?:ETB|USD|EUR|GBP|Br)\s*([\d,]+\.?\d*)\s+(?:to|from|for)\b/i,
-    /\b(?:amount|amt|sum|transferred amount)[:\s]+(?:ETB|USD|EUR|GBP|Br)?\s*([\d,]+\.?\d*)/i,
+    /\$\s*([\d,]+\.?\d*)/,
+    /\b(?:amount|amt|sum|transferred amount)[:\s]+(?:ETB|USD|EUR|GBP|Br|\$)?\s*([\d,]+\.?\d*)/i,
     /(?:ETB|USD|EUR|GBP|Br)\s*([\d,]{1,}(?:\.\d{1,2})?)/i,
   ];
   for (const re of patterns) {
@@ -82,13 +110,39 @@ function extractTransferAmount(raw: string): { amount: string | null; currency: 
     if (m) {
       const amt = normalizeAmount(m[1]);
       if (!amt) continue;
-      const cur =
-        withoutBalance.match(/\b(ETB|USD|EUR|GBP)\b/i)?.[1]?.toUpperCase() ||
-        (/\bBr\b/.test(withoutBalance) ? 'ETB' : null);
+      const cur = detectCurrency(raw, withoutBalance);
       return { amount: amt, currency: cur };
     }
   }
   return { amount: null, currency: null };
+}
+
+function detectCurrency(raw: string, hint?: string): string | null {
+  const s = `${raw} ${hint || ''}`;
+  if (/\bETB\b|\bBr\b/i.test(s)) return 'ETB';
+  if (/\bUSD\b/i.test(s) || /\$/.test(s)) return 'USD';
+  if (/\bEUR\b|€/.test(s)) return 'EUR';
+  if (/\bGBP\b|£/.test(s)) return 'GBP';
+  return null;
+}
+
+/** Remaining balance the bank printed — never the transfer principal. */
+export function extractSmsStatedBalance(text: string): string | null {
+  const raw = text || '';
+  const patterns = [
+    /\b(?:your\s+)?(?:current\s+)?(?:e-?money\s+)?(?:account\s+)?balance\s+is\s+(?:ETB|USD|EUR|GBP|Br|\$)?\s*([\d,]+\.?\d*)/i,
+    /\bAvail(?:able)?\.?\s*Bal(?:ance)?\s*[:.]?\s*(?:ETB|USD|EUR|GBP|Br|\$)?\s*([\d,]+\.?\d*)/i,
+    /\b(?:available|current|ledger)\s+balance\s*[:.]?\s*(?:ETB|USD|EUR|GBP|Br|\$)?\s*([\d,]+\.?\d*)/i,
+    /\b(?:new|remaining|updated|closing)\s+balance\s*[:.]?\s*(?:ETB|USD|EUR|GBP|Br|\$)?\s*([\d,]+\.?\d*)/i,
+    /\$\s*([\d,]+\.?\d*)\s*(?:available|avail(?:able)?\s+bal)/i,
+  ];
+  for (const re of patterns) {
+    const m = raw.match(re);
+    if (!m) continue;
+    const amt = normalizeAmount(m[1]);
+    if (amt) return amt;
+  }
+  return null;
 }
 
 function extractDirection(raw: string): 'income' | 'expense' | null {
@@ -96,16 +150,16 @@ function extractDirection(raw: string): 'income' | 'expense' | null {
   if (
     /\byou have (?:received|been credited)\b/i.test(raw) ||
     /\bhas been credited\b/i.test(raw) ||
-    /\b(?:credited|deposit(?:ed)?|money received)\b/i.test(raw) ||
-    /\breceived\s+(?:ETB|USD|Br)/i.test(raw)
+    /\b(?:credited|deposit(?:ed)?|direct deposit|money received|ach credit)\b/i.test(raw) ||
+    /\breceived\s+(?:ETB|USD|Br|\$)/i.test(raw)
   ) {
     return 'income';
   }
   if (
     /\byou have (?:transfered|transferred|sent|paid|been debited)\b/i.test(raw) ||
     /\bhas been debited\b/i.test(raw) ||
-    /\b(?:debited|withdrawn|money sent|transfered|transferred)\b/i.test(raw) ||
-    /\b(?:paid|sent)\s+(?:ETB|USD|Br)/i.test(raw) ||
+    /\b(?:debited|withdrawn|withdrawal|money sent|transfered|transferred|purchase(?:d)?)\b/i.test(raw) ||
+    /\b(?:paid|sent)\s+(?:ETB|USD|Br|\$)/i.test(raw) ||
     (/\bfrom your account\b/i.test(raw) && /\bto\b/i.test(raw))
   ) {
     return 'expense';
@@ -116,22 +170,26 @@ function extractDirection(raw: string): 'income' | 'expense' | null {
 }
 
 function extractOwnAccount(raw: string): { last4: string | null; number: string | null } {
-  // ONLY patterns that clearly mean *your* account — never beneficiary / sender A/c.
+  // Patterns that clearly mean *your* account — never beneficiary / sender A/c.
   const yours =
     raw.match(/\bfrom your account\s+([0-9*xX]{4,24})\b/i) ||
     raw.match(/\byour account\s+([0-9*xX]{4,24})\b/i) ||
     raw.match(/\byour (?:a\/c|acct|acc)(?:\s*(?:no|number|#)?)?[:\s]*([0-9*xX]{4,24})\b/i) ||
     raw.match(/\byour account\s+([0-9*xX]{4,24})\s+has been\s+(?:debited|credited)\b/i) ||
-    raw.match(/\byour account\s+([0-9])\*{3,}([0-9]{4})\b/i);
+    raw.match(/\byour account\s+([0-9])\*{3,}([0-9]{4})\b/i) ||
+    raw.match(/\b(?:card|account|acct|a\/c)\s+ending(?:\s+in)?\s+(\d{4})\b/i) ||
+    raw.match(/\bending(?:\s+in)?\s+(\d{4})\b/i);
   if (yours) {
-    // Last alt has two capture groups (digit + last4).
     if (yours.length >= 3 && yours[2] && /^\d{4}$/.test(yours[2])) {
       return { last4: yours[2], number: null };
     }
     const digits = yours[1].replace(/\D/g, '');
     return { last4: last4(digits), number: digits.length > 4 ? digits : null };
   }
-  // Do NOT fall back to the first masked number in the SMS — that is often the counterparty.
+  const masked = [...raw.matchAll(/\b[0-9][0-9*xX]{3,20}([0-9]{4})\b/g)].map((m) => m[1]);
+  const unique = [...new Set(masked)];
+  // Only if the SMS has a single masked number — two usually means yours + counterparty.
+  if (unique.length === 1) return { last4: unique[0], number: null };
   return { last4: null, number: null };
 }
 
@@ -185,13 +243,27 @@ export function isTransferSms(text: string): boolean {
   if (/\b(otp|one[-\s]?time|verification code|pin code)\b/i.test(raw)) return false;
   if (
     /\bbalance is\b/i.test(raw) &&
-    !/\b(received|transfered|transferred|paid|sent|debited|credited|transaction of)\b/i.test(raw)
+    !/\b(received|transfered|transferred|paid|sent|debited|credited|transaction of|purchase|deposit|withdraw)\b/i.test(
+      raw,
+    )
   ) {
     return false;
   }
-  return /\b(received|transfered|transferred|paid|sent|debited|credited|money (?:received|sent)|transaction of)\b/i.test(
+  return /\b(received|transfered|transferred|paid|sent|debited|credited|money (?:received|sent)|transaction of|purchase(?:d)?|deposit(?:ed)?|withdraw(?:al|n)?|zelle|ach)\b/i.test(
     raw,
   );
+}
+
+/** SMS that can discover an account (transfer, card alert, or balance notice). */
+export function isAccountHintSms(text: string): boolean {
+  const raw = (text || '').trim();
+  if (raw.length < 20) return false;
+  if (/\b(otp|one[-\s]?time|verification code|pin code)\b/i.test(raw)) return false;
+  if (isTransferSms(raw)) return true;
+  if (extractSmsStatedBalance(raw)) return true;
+  if (/\bending(?:\s+in)?\s+\d{4}\b/i.test(raw)) return true;
+  if (/\byour account\b/i.test(raw) && /\b\d{4}\b/.test(raw)) return true;
+  return false;
 }
 
 export function parseTransferSms(text: string): ParsedSmsTransfer {
@@ -209,7 +281,12 @@ export function parseTransferSms(text: string): ParsedSmsTransfer {
     institutionHint: typed.institution,
     confidence: 0,
     summaryTitle: null,
+    statedBalance: extractSmsStatedBalance(raw),
   };
+  const own = extractOwnAccount(raw);
+  out.accountLast4 = own.last4;
+  out.accountNumber = own.number;
+  out.currency = detectCurrency(raw);
   if (!raw || !isTransferSms(raw)) return out;
 
   let score = 0.2;
@@ -218,13 +295,9 @@ export function parseTransferSms(text: string): ParsedSmsTransfer {
 
   const { amount, currency } = extractTransferAmount(raw);
   out.amount = amount;
-  out.currency = currency || (/\bETB\b|\bBr\b/i.test(raw) ? 'ETB' : null);
+  out.currency = currency || out.currency;
   if (out.amount) score += 0.4;
   if (out.currency) score += 0.05;
-
-  const own = extractOwnAccount(raw);
-  out.accountLast4 = own.last4;
-  out.accountNumber = own.number;
   if (own.last4) score += 0.15;
   out.otherAccountLast4 = extractOtherAccount(raw, own.last4);
 

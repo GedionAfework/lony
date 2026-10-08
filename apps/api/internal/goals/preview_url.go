@@ -37,9 +37,29 @@ var (
 	itemPropPriceRe = regexp.MustCompile(`(?is)itemprop\s*=\s*["']price["'][^>]*content\s*=\s*["']([^"']+)["']|content\s*=\s*["']([^"']+)["'][^>]*itemprop\s*=\s*["']price["']`)
 	jsonPriceRe    = regexp.MustCompile(`(?i)"(?:price|salePrice|sale_price|currentPrice|current_price|amount)"\s*:\s*"?([0-9]+(?:\.[0-9]{1,2})?)"?`)
 	jsonCurrencyRe = regexp.MustCompile(`(?i)"(?:priceCurrency|currency|currencyCode|currency_code)"\s*:\s*"([A-Z]{3})"`)
-	priceTokenRe   = regexp.MustCompile(`(?i)(?:USD|EUR|GBP|ETB|CAD|AUD|JPY|CHF|CNY|INR|\$|€|£)\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)`)
+	// Comma-grouped alternative must come first *and* require at least one group; otherwise
+	// leftmost-first matching turns "$2000" into "200".
+	priceTokenRe   = regexp.MustCompile(`(?i)(?:USD|EUR|GBP|ETB|CAD|AUD|JPY|CHF|CNY|INR|\$|€|£)\s*([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)`)
 	barePriceRe    = regexp.MustCompile(`(?i)(?:["']?(?:price|salePrice|sale_price|amount|cost)["']?\s*[:=]\s*["']?)([0-9]{2,}(?:\.[0-9]{1,2})?)`)
+	// "$68/mo", "$68 per month", "$68 a month", "68/mo." — financing, not the item price.
+	installmentAfterRe  = regexp.MustCompile(`(?i)^\s*(?:</?[a-z][^>]*>\s*)*(?:/|per|a|each|every)\s*(?:mo\b|month|mth|wk|week|yr|year|bi-?weekly|fortnight)`)
+	// Keyword must sit right before the amount (only tags / short filler in between), so a
+	// "/mo" in a *previous* list item doesn't poison the next full price.
+	installmentBeforeRe = regexp.MustCompile(`(?i)(?:as low as|starting at|starting from|from just|or\s+just|per month|monthly|installment|instalment|financ|affirm|klarna|afterpay|sezzle|zip pay|pay in \d|\bapr\b|est\.?\s*payment|payments? of|x\s*\d+\s*months?)[^0-9$€£<]{0,12}(?:<[^>]*>\s*){0,3}$`)
+	bareYearRe          = regexp.MustCompile(`^\s*(?:19|20)[0-9]{2}\s*$`)
+	leadingNonDigitRe   = regexp.MustCompile(`^[^0-9]+`)
+	installmentJSONRe   = regexp.MustCompile(`(?i)(installment|instalment|monthly|per_?month|financ|affirm|klarna|afterpay|paymentPlan|payment_plan|subscription|recurring)`)
 )
+
+// isInstallmentContext reports whether the price token at [start,end) is a "/mo"-style payment, not the full price.
+func isInstallmentContext(html string, start, end int) bool {
+	after := html[end:min(len(html), end+48)]
+	if installmentAfterRe.MatchString(after) {
+		return true
+	}
+	before := html[max(0, start-120):start]
+	return installmentBeforeRe.MatchString(before)
+}
 
 func (h *Handler) PreviewURL(w http.ResponseWriter, r *http.Request) {
 	var body PreviewURLInput
@@ -126,8 +146,20 @@ func PreviewProductURL(ctx context.Context, raw string) (PreviewURLResult, error
 		}
 	}
 	if out.Price == "" {
-		if m := jsonPriceRe.FindStringSubmatch(html); len(m) >= 2 {
-			out.Price = m[1]
+		for _, loc := range jsonPriceRe.FindAllStringSubmatchIndex(html, 30) {
+			if len(loc) < 4 || loc[2] < 0 {
+				continue
+			}
+			before := html[max(0, loc[0]-160):loc[0]]
+			if installmentJSONRe.MatchString(before) {
+				continue
+			}
+			p := normalizePrice(html[loc[2]:loc[3]])
+			if p == "" {
+				continue
+			}
+			out.Price = p
+			break
 		}
 	}
 	if out.Currency == "" {
@@ -275,15 +307,19 @@ func guessPrice(html string) (price, currency string) {
 		score int
 	}
 	var cands []cand
-	for _, m := range priceTokenRe.FindAllStringSubmatch(html, 40) {
-		if len(m) < 2 {
+	for _, loc := range priceTokenRe.FindAllStringSubmatchIndex(html, 60) {
+		if len(loc) < 4 || loc[2] < 0 {
 			continue
 		}
-		p := normalizePrice(m[1])
-		if p == "" || isYearLikePrice(p) {
+		if isInstallmentContext(html, loc[0], loc[1]) {
 			continue
 		}
-		tok := m[0]
+		// Pass the whole token: its currency marker means "$2000" is a price, not a year.
+		tok := html[loc[0]:loc[1]]
+		p := normalizePrice(tok)
+		if p == "" {
+			continue
+		}
 		cur := ""
 		switch {
 		case strings.Contains(tok, "$"):
@@ -310,12 +346,16 @@ func guessPrice(html string) (price, currency string) {
 		}
 		cands = append(cands, cand{price: p, cur: cur, score: score})
 	}
-	for _, m := range barePriceRe.FindAllStringSubmatch(html, 20) {
-		if len(m) < 2 {
+	for _, loc := range barePriceRe.FindAllStringSubmatchIndex(html, 20) {
+		if len(loc) < 4 || loc[2] < 0 {
 			continue
 		}
-		p := normalizePrice(m[1])
-		if p == "" || isYearLikePrice(p) {
+		if installmentJSONRe.MatchString(html[max(0, loc[0]-160):loc[0]]) {
+			continue
+		}
+		// No currency marker here, so a bare "2018" stays suspicious (normalizePrice drops it).
+		p := normalizePrice(html[loc[2]:loc[3]])
+		if p == "" {
 			continue
 		}
 		f, _ := strconv.ParseFloat(p, 64)
@@ -325,9 +365,20 @@ func guessPrice(html string) (price, currency string) {
 		}
 		cands = append(cands, cand{price: p, score: score})
 	}
+	// Among equally-scored candidates prefer the one that repeats most (the headline price
+	// is usually rendered several times; a stray financing figure usually isn't).
+	freq := map[string]int{}
+	for _, c := range cands {
+		freq[c.price]++
+	}
 	bestIdx := -1
 	for i, c := range cands {
-		if bestIdx < 0 || c.score > cands[bestIdx].score {
+		if bestIdx < 0 {
+			bestIdx = i
+			continue
+		}
+		b := cands[bestIdx]
+		if c.score > b.score || (c.score == b.score && freq[c.price] > freq[b.price]) {
 			bestIdx = i
 		}
 	}
@@ -348,12 +399,15 @@ func isYearLikePrice(p string) bool {
 	return f >= 1900 && f <= 2099
 }
 
+// normalizePrice turns "$2,000.00" into "2000.00". A bare 4-digit integer in 1900–2099 with no
+// currency marker, thousands separator or decimals ("2018") is treated as a model year and dropped;
+// "$2,000", "2,000" and "2000.00" are real prices and kept.
 func normalizePrice(p string) string {
 	p = strings.TrimSpace(p)
+	bareYearCandidate := bareYearRe.MatchString(p)
 	p = strings.ReplaceAll(p, ",", "")
-	p = strings.TrimPrefix(p, "$")
-	p = strings.TrimPrefix(p, "€")
-	p = strings.TrimPrefix(p, "£")
+	// Strip any currency marker ("$", "USD ", "ETB ", "Br ") so the full token can be passed in.
+	p = strings.TrimSpace(leadingNonDigitRe.ReplaceAllString(p, ""))
 	if p == "" {
 		return ""
 	}
@@ -361,7 +415,7 @@ func normalizePrice(p string) string {
 	if err != nil || f <= 0 {
 		return ""
 	}
-	if isYearLikePrice(p) {
+	if bareYearCandidate && isYearLikePrice(p) {
 		return ""
 	}
 	return p

@@ -29,6 +29,9 @@ import { NetWorthCard } from './NetWorthCard';
 import { fonts, radii, space, useTheme } from './theme';
 import { t } from './i18n';
 import { Card, EmptyState, Field, Money, PrimaryButton, SecondaryButton, SectionLabel } from './ui';
+import { storageGet, storageSet } from './secureStorage';
+
+const WEALTH_CACHE_KEY = 'lony.wealth_cache.v1';
 
 function cashflowActionLabel(entry: CashflowEntry, locale?: string | null): string {
   const cat = (entry.category || '').toLowerCase();
@@ -226,11 +229,33 @@ export function ExpensesScreen({
   const reloadWealth = useCallback(async () => {
     try {
       const wealthRes = await api.wealth(token, preferred).catch(() => null);
-      setWealth(wealthRes?.wealth ?? null);
+      if (wealthRes?.wealth) {
+        setWealth(wealthRes.wealth);
+        void storageSet(WEALTH_CACHE_KEY, JSON.stringify({ preferred, wealth: wealthRes.wealth }));
+      }
     } catch {
       /* keep last snapshot */
     }
   }, [token, preferred]);
+
+  // Paint the last known Total Balance immediately; the live value replaces it when it arrives.
+  useEffect(() => {
+    let cancelled = false;
+    void storageGet(WEALTH_CACHE_KEY).then((raw) => {
+      if (cancelled || !raw) return;
+      try {
+        const cached = JSON.parse(raw) as { preferred?: string; wealth?: WealthSummary };
+        if (cached?.wealth && cached.preferred === preferred) {
+          setWealth((current) => current ?? cached.wealth ?? null);
+        }
+      } catch {
+        /* ignore corrupt cache */
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [preferred]);
 
   const upcomingBills = useMemo(() => {
     const today = new Date();

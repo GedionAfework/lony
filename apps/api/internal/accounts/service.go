@@ -26,12 +26,12 @@ type PrefsReader interface {
 }
 
 type Service struct {
-	store          Store
-	loans          LoanNets
-	prefs          PrefsReader
-	banks          BankProfiles
-	accountNotify  AccountNumberNotifier
-	now            func() time.Time
+	store         Store
+	loans         LoanNets
+	prefs         PrefsReader
+	banks         BankProfiles
+	accountNotify AccountNumberNotifier
+	now           func() time.Time
 }
 
 func NewService(store Store) *Service {
@@ -222,8 +222,13 @@ func (s *Service) SetBalance(ctx context.Context, userID, id uuid.UUID, in SetBa
 	rec.BalanceAsOf = now
 	rec.UpdatedAt = now
 	source := "manual"
-	if in.Note != nil && strings.Contains(strings.ToLower(*in.Note), "reconcile") {
-		source = "reconcile"
+	if in.Note != nil {
+		n := strings.ToLower(*in.Note)
+		if strings.Contains(n, "reconcile") {
+			source = "reconcile"
+		} else if strings.Contains(n, "sms") {
+			source = "sms"
+		}
 	}
 	event := BalanceEvent{
 		AccountID: rec.ID,
@@ -334,6 +339,19 @@ func (s *Service) ApplyCashflowDelta(ctx context.Context, userID, accountID uuid
 		return err
 	}
 	return nil
+}
+
+// SetStatedBalance records the remaining balance printed on a bank/wallet SMS.
+func (s *Service) SetStatedBalance(ctx context.Context, userID, accountID uuid.UUID, balance, note string) error {
+	n := strings.TrimSpace(note)
+	if n == "" {
+		n = "sms stated balance"
+	}
+	_, err := s.SetBalance(ctx, userID, accountID, SetBalanceInput{
+		Balance: balance,
+		Note:    &n,
+	})
+	return err
 }
 
 // PickAccount returns preferred when valid, otherwise the first non-archived account in currency.

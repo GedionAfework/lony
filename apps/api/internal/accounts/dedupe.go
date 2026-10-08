@@ -7,7 +7,6 @@ import (
 	"unicode"
 
 	"github.com/google/uuid"
-	"github.com/shopspring/decimal"
 )
 
 var last4RE = regexp.MustCompile(`(?:\D|^)(\d{4})(?:\D|$)`)
@@ -25,7 +24,8 @@ func accountFingerprint(rec Account) string {
 		last4 = extractLast4(*rec.InstitutionLabel)
 	}
 	if last4 != "" {
-		return atype + "|" + cur + "|••••" + last4
+		// Same last4 is the same account even if currency was mis-detected (USD vs ETB).
+		return atype + "|••••" + last4
 	}
 	inst := normalizeInstitution(rec)
 	return atype + "|" + cur + "|" + inst
@@ -79,7 +79,14 @@ func normalizeInstitution(rec Account) string {
 }
 
 func preferAccount(a, b Account) Account {
-	// Prefer accepted payment profile, then richer balance, then older row.
+	a4 := extractLast4(a.Name) != ""
+	b4 := extractLast4(b.Name) != ""
+	if a4 != b4 {
+		if a4 {
+			return a
+		}
+		return b
+	}
 	aHas := a.BankProfileID != nil
 	bHas := b.BankProfileID != nil
 	if aHas != bHas {
@@ -88,10 +95,10 @@ func preferAccount(a, b Account) Account {
 		}
 		return b
 	}
-	if a.Balance.GreaterThan(b.Balance) {
+	if a.BalanceAsOf.After(b.BalanceAsOf) {
 		return a
 	}
-	if b.Balance.GreaterThan(a.Balance) {
+	if b.BalanceAsOf.After(a.BalanceAsOf) {
 		return b
 	}
 	if a.CreatedAt.Before(b.CreatedAt) {
@@ -121,14 +128,14 @@ func (s *Service) MergeDuplicates(ctx context.Context, userID uuid.UUID) (int, e
 		for _, cand := range group[1:] {
 			keeper = preferAccount(keeper, cand)
 		}
-		sum := decimal.Zero
-		var profile *uuid.UUID
-		var interest = keeper.InterestRatePercent
-		var compounding = keeper.Compounding
-		var label = keeper.InstitutionLabel
+		sum := keeper.Balance
+		profile := keeper.BankProfileID
+		interest := keeper.InterestRatePercent
+		compounding := keeper.Compounding
+		label := keeper.InstitutionLabel
 		for _, cand := range group {
-			if cand.Balance.GreaterThan(sum) {
-				sum = cand.Balance
+			if cand.ID == keeper.ID {
+				continue
 			}
 			if cand.BankProfileID != nil {
 				profile = cand.BankProfileID
@@ -139,9 +146,6 @@ func (s *Service) MergeDuplicates(ctx context.Context, userID uuid.UUID) (int, e
 			}
 			if (label == nil || strings.TrimSpace(*label) == "") && cand.InstitutionLabel != nil {
 				label = cand.InstitutionLabel
-			}
-			if cand.ID == keeper.ID {
-				continue
 			}
 			if err := s.store.ReassignCashflows(ctx, cand.ID, keeper.ID); err != nil {
 				return merged, err
