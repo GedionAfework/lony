@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"equilend/api/internal/goals"
@@ -157,6 +158,18 @@ func (a goalStoreAdapter) ClaimMilestone(ctx context.Context, goalID uuid.UUID, 
 	return a.Inner.ClaimGoalMilestone(ctx, goalID, threshold)
 }
 
+func (a goalStoreAdapter) InsertPriceHistory(ctx context.Context, rec goals.PriceHistory) (goals.PriceHistory, error) {
+	return a.Inner.InsertGoalPriceHistory(ctx, rec)
+}
+
+func (a goalStoreAdapter) ListPriceHistory(ctx context.Context, userID, goalID uuid.UUID, limit int) ([]goals.PriceHistory, error) {
+	return a.Inner.ListGoalPriceHistory(ctx, userID, goalID, limit)
+}
+
+func (a goalStoreAdapter) ListActiveWithSource(ctx context.Context, limit int) ([]goals.Goal, error) {
+	return a.Inner.ListActiveGoalsWithSource(ctx, limit)
+}
+
 // GoalsAdapter exposes SQLStore as goals.Store.
 func GoalsAdapter(s *SQLStore) goals.Store {
 	return goalStoreAdapter{Inner: s}
@@ -204,6 +217,92 @@ func lastSeenArg(d *decimal.Decimal) any {
 		return nil
 	}
 	return d.StringFixed(goals.Scale)
+}
+
+func (s *SQLStore) InsertGoalPriceHistory(ctx context.Context, rec goals.PriceHistory) (goals.PriceHistory, error) {
+	row := s.pool.QueryRow(ctx, `
+		INSERT INTO goal_price_history (goal_id, user_id, price, currency_code, source_url, direction, created_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
+		RETURNING id, goal_id, user_id, price::text, currency_code, source_url, direction, created_at
+	`, rec.GoalID, rec.UserID, rec.Price.StringFixed(goals.Scale), rec.CurrencyCode, nullIfEmpty(rec.SourceURL), rec.Direction, rec.CreatedAt)
+	return scanPriceHistory(row)
+}
+
+func (s *SQLStore) ListGoalPriceHistory(ctx context.Context, userID, goalID uuid.UUID, limit int) ([]goals.PriceHistory, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id, goal_id, user_id, price::text, currency_code, source_url, direction, created_at
+		FROM goal_price_history
+		WHERE goal_id = $1 AND user_id = $2
+		ORDER BY created_at DESC
+		LIMIT $3
+	`, goalID, userID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []goals.PriceHistory
+	for rows.Next() {
+		rec, err := scanPriceHistory(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLStore) ListActiveGoalsWithSource(ctx context.Context, limit int) ([]goals.Goal, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 80
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT `+goalSelect+`
+		FROM goals
+		WHERE status = 'active'
+		  AND source_url IS NOT NULL
+		  AND btrim(source_url) <> ''
+		ORDER BY last_price_checked_at NULLS FIRST, updated_at ASC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []goals.Goal
+	for rows.Next() {
+		rec, err := scanGoal(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, rec)
+	}
+	return out, rows.Err()
+}
+
+func scanPriceHistory(row goalScannable) (goals.PriceHistory, error) {
+	var rec goals.PriceHistory
+	var price string
+	var source *string
+	if err := row.Scan(
+		&rec.ID, &rec.GoalID, &rec.UserID, &price, &rec.CurrencyCode, &source, &rec.Direction, &rec.CreatedAt,
+	); err != nil {
+		return goals.PriceHistory{}, err
+	}
+	rec.Price = mustDec(price)
+	if source != nil {
+		rec.SourceURL = *source
+	}
+	return rec, nil
+}
+
+func nullIfEmpty(s string) any {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	return s
 }
 
 func scanContribution(row goalScannable) (goals.Contribution, error) {

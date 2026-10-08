@@ -2,6 +2,7 @@ package goals
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"regexp"
 	"strings"
@@ -124,6 +125,14 @@ func (s *Service) Extract(ctx context.Context, userID uuid.UUID, text string) (P
 			draft = mergeDraft(draft, refined)
 		}
 	}
+	if draft.TargetAmount != "" && draft.SourceURL != "" {
+		line := fmt.Sprintf("Scraped live price %s %s from %s", draft.TargetAmount, draft.CurrencyCode, draft.SourceURL)
+		if strings.TrimSpace(draft.Note) == "" {
+			draft.Note = line
+		} else if !strings.Contains(strings.ToLower(draft.Note), "scraped") {
+			draft.Note = line + " · " + draft.Note
+		}
+	}
 	return draft, nil
 }
 
@@ -162,6 +171,87 @@ func truncateRunes(s string, max int) string {
 	return string([]rune(s)[:max])
 }
 
+func (s *Service) applyScrapedPrice(ctx context.Context, rec Goal, prev PreviewURLResult) (GoalDTO, *PriceChange, error) {
+	newPrice, err := parsePositive(prev.Price)
+	if err != nil {
+		return GoalDTO{}, nil, err
+	}
+	if prev.Currency != "" && !strings.EqualFold(prev.Currency, rec.CurrencyCode) {
+		rec.CurrencyCode = strings.ToUpper(prev.Currency)
+	}
+	old := rec.TargetAmount
+	if rec.LastSeenPrice != nil {
+		old = *rec.LastSeenPrice
+	}
+	now := s.now().UTC()
+	rec.LastSeenPrice = &newPrice
+	rec.LastPriceCheckedAt = &now
+	moved := !newPrice.Equal(old)
+	dir := DirectionSame
+	if moved {
+		if newPrice.GreaterThan(old) {
+			dir = DirectionUp
+		} else {
+			dir = DirectionDown
+		}
+		rec.TargetAmount = newPrice
+		if rec.CurrentAmount.GreaterThanOrEqual(rec.TargetAmount) {
+			rec.CurrentAmount = rec.TargetAmount
+			rec.Status = StatusCompleted
+		}
+		rec.UpdatedAt = now
+	}
+	saved, err := s.store.Update(ctx, rec)
+	if err != nil {
+		return GoalDTO{}, nil, err
+	}
+	source := ""
+	if saved.SourceURL != nil {
+		source = *saved.SourceURL
+	}
+	_, _ = s.store.InsertPriceHistory(ctx, PriceHistory{
+		GoalID:       saved.ID,
+		UserID:       saved.UserID,
+		Price:        newPrice,
+		CurrencyCode: saved.CurrencyCode,
+		SourceURL:    source,
+		Direction:    dir,
+		CreatedAt:    now,
+	})
+	dto := toDTO(saved, nil)
+	delta := newPrice.Sub(old)
+	deltaStr := delta.StringFixed(Scale)
+	dto.PriceDelta = &deltaStr
+	dto.PriceDirection = &dir
+	change := &PriceChange{
+		GoalID:       saved.ID,
+		Title:        saved.Title,
+		CurrencyCode: saved.CurrencyCode,
+		OldPrice:     old.StringFixed(Scale),
+		NewPrice:     newPrice.StringFixed(Scale),
+		Delta:        deltaStr,
+		Direction:    dir,
+	}
+	if moved && s.prices != nil {
+		_ = s.prices.OnGoalPriceChange(ctx, saved.UserID, saved.ID, saved.Title, change.OldPrice, change.NewPrice, saved.CurrencyCode, dir)
+	}
+	if !moved {
+		return dto, nil, nil
+	}
+	return dto, change, nil
+}
+
+func (s *Service) scrapeAndApply(ctx context.Context, rec Goal) (GoalDTO, *PriceChange, error) {
+	if rec.SourceURL == nil || strings.TrimSpace(*rec.SourceURL) == "" {
+		return GoalDTO{}, nil, httpx.E(http.StatusUnprocessableEntity, "NO_SOURCE", "goal has no product URL to scrape")
+	}
+	prev, err := PreviewProductURL(ctx, *rec.SourceURL)
+	if err != nil {
+		return GoalDTO{}, nil, err
+	}
+	return s.applyScrapedPrice(ctx, rec, prev)
+}
+
 // RefreshSourcePrices re-fetches the source URL of each active goal, updating the
 // target amount when the price moved. Failures for individual goals are skipped.
 func (s *Service) RefreshSourcePrices(ctx context.Context, userID uuid.UUID) (RefreshResult, error) {
@@ -179,61 +269,65 @@ func (s *Service) RefreshSourcePrices(ctx context.Context, userID uuid.UUID) (Re
 			break
 		}
 		checked++
-		prev, err := PreviewProductURL(ctx, *rec.SourceURL)
+		dto, change, err := s.scrapeAndApply(ctx, rec)
 		if err != nil {
 			continue
 		}
-		newPrice, err := parsePositive(prev.Price)
-		if err != nil {
-			continue
+		if change != nil {
+			out.Updated = append(out.Updated, dto)
+			out.Changes = append(out.Changes, *change)
 		}
-		if prev.Currency != "" && !strings.EqualFold(prev.Currency, rec.CurrencyCode) {
-			continue
-		}
-		old := rec.TargetAmount
-		if rec.LastSeenPrice != nil {
-			old = *rec.LastSeenPrice
-		}
-		now := s.now().UTC()
-		rec.LastSeenPrice = &newPrice
-		rec.LastPriceCheckedAt = &now
-		moved := !newPrice.Equal(old)
-		if moved {
-			rec.TargetAmount = newPrice
-			if rec.CurrentAmount.GreaterThanOrEqual(rec.TargetAmount) {
-				rec.CurrentAmount = rec.TargetAmount
-				rec.Status = StatusCompleted
-			}
-			rec.UpdatedAt = now
-		}
-		saved, err := s.store.Update(ctx, rec)
-		if err != nil {
-			continue
-		}
-		if !moved {
-			continue
-		}
-		delta := newPrice.Sub(old)
-		dir := DirectionUp
-		if delta.IsNegative() {
-			dir = DirectionDown
-		}
-		dto := toDTO(saved, nil)
-		deltaStr := delta.StringFixed(Scale)
-		dto.PriceDelta = &deltaStr
-		dto.PriceDirection = &dir
-		out.Updated = append(out.Updated, dto)
-		out.Changes = append(out.Changes, PriceChange{
-			GoalID:       saved.ID,
-			Title:        saved.Title,
-			CurrencyCode: saved.CurrencyCode,
-			OldPrice:     old.StringFixed(Scale),
-			NewPrice:     newPrice.StringFixed(Scale),
-			Delta:        deltaStr,
-			Direction:    dir,
+	}
+	return out, nil
+}
+
+func (s *Service) RefreshOneSourcePrice(ctx context.Context, userID, goalID uuid.UUID) (GoalDTO, *PriceChange, error) {
+	rec, err := s.store.Get(ctx, userID, goalID)
+	if err != nil {
+		return GoalDTO{}, nil, err
+	}
+	return s.scrapeAndApply(ctx, rec)
+}
+
+func (s *Service) ListPriceHistory(ctx context.Context, userID, goalID uuid.UUID) ([]PriceHistoryDTO, error) {
+	if _, err := s.store.Get(ctx, userID, goalID); err != nil {
+		return nil, err
+	}
+	rows, err := s.store.ListPriceHistory(ctx, userID, goalID, 50)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]PriceHistoryDTO, 0, len(rows))
+	for _, rec := range rows {
+		out = append(out, PriceHistoryDTO{
+			ID:           rec.ID,
+			GoalID:       rec.GoalID,
+			Price:        rec.Price.StringFixed(Scale),
+			CurrencyCode: rec.CurrencyCode,
+			SourceURL:    rec.SourceURL,
+			Direction:    rec.Direction,
+			CreatedAt:    rec.CreatedAt,
 		})
 	}
 	return out, nil
+}
+
+// TickTrackedPrices is the worker cron: scrape every active listing URL and record history.
+func (s *Service) TickTrackedPrices(ctx context.Context) (int, error) {
+	rows, err := s.store.ListActiveWithSource(ctx, 80)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, rec := range rows {
+		if ctx.Err() != nil {
+			break
+		}
+		if _, _, err := s.scrapeAndApply(ctx, rec); err == nil {
+			n++
+		}
+	}
+	return n, nil
 }
 
 type extractBody struct {
@@ -261,4 +355,35 @@ func (h *Handler) RefreshPrices(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, out)
+}
+
+func (h *Handler) RefreshOnePrice(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	goal, change, err := h.svc.RefreshOneSourcePrice(r.Context(), auth.UserIDFrom(r.Context()), id)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"goal": goal, "change": change})
+}
+
+func (h *Handler) ListPriceHistory(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	out, err := h.svc.ListPriceHistory(r.Context(), auth.UserIDFrom(r.Context()), id)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	if out == nil {
+		out = []PriceHistoryDTO{}
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"history": out})
 }

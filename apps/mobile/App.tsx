@@ -68,6 +68,12 @@ import { resolveInstitutionLabel } from './src/institutions';
 import { scanReceiptWithCamera } from './src/receiptScan';
 import { activateAndSyncSms, syncBankSms } from './src/smsAutoIngest';
 import {
+  isDailySmsCheckup,
+  runDailySmsCheckup,
+  startLiveSmsWatch,
+  stopLiveSmsWatch,
+} from './src/smsWatcher';
+import {
   configureSmsNotificationHandler,
   parseSmsNotificationData,
   smsNotifyToPrefill,
@@ -985,8 +991,17 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         }
 
         sub = Notifications.addNotificationResponseReceivedListener((response) => {
+          const data = response.notification.request.content.data as Record<string, unknown>;
+          if (isDailySmsCheckup(data)) {
+            void runDailySmsCheckup().then(() => {
+              setCashflowReload((x) => x + 1);
+              setWealthReload((x) => x + 1);
+              setAccountsReload((x) => x + 1);
+            });
+            return;
+          }
           const id = response.notification.request.identifier || String(Date.now());
-          openFromData(response.notification.request.content.data as Record<string, unknown>, id);
+          openFromData(data, id);
         });
       } catch {
         /* Expo Go / notifications unavailable */
@@ -1023,26 +1038,48 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   }, [screen, token, user?.default_currency_code]);
 
   useEffect(() => {
-    if (!token) return;
-    const sub = AppState.addEventListener('change', (next) => {
-      if (next !== 'active') return;
-      void (async () => {
-        try {
-          const res = await syncBankSms(token, undefined, {
-            defaultCurrency: user?.default_currency_code || 'ETB',
-          });
-          if (res.imported > 0 || res.accountsAdded > 0) {
-            setCashflowReload((n) => n + 1);
-            setWealthReload((n) => n + 1);
-            setAccountsReload((n) => n + 1);
-          }
-        } catch {
-          /* silent */
-        }
-      })();
+    if (!token) {
+      stopLiveSmsWatch();
+      return;
+    }
+    startLiveSmsWatch({
+      token,
+      defaultCurrency: user?.default_currency_code || 'ETB',
+      onImported: () => {
+        setCashflowReload((n) => n + 1);
+        setWealthReload((n) => n + 1);
+        setAccountsReload((n) => n + 1);
+      },
     });
-    return () => sub.remove();
+    return () => stopLiveSmsWatch();
   }, [token, user?.default_currency_code]);
+
+  useEffect(() => {
+    if (!token) return;
+    let received: { remove: () => void } | undefined;
+    let cancelled = false;
+    (async () => {
+      try {
+        const Notifications = await import('expo-notifications');
+        if (cancelled) return;
+        received = Notifications.addNotificationReceivedListener((n) => {
+          const data = n.request.content.data as Record<string, unknown> | undefined;
+          if (!isDailySmsCheckup(data)) return;
+          void runDailySmsCheckup().then(() => {
+            setCashflowReload((x) => x + 1);
+            setWealthReload((x) => x + 1);
+            setAccountsReload((x) => x + 1);
+          });
+        });
+      } catch {
+        /* Expo Go */
+      }
+    })();
+    return () => {
+      cancelled = true;
+      received?.remove();
+    };
+  }, [token]);
 
   async function onActivateSmsImport() {
     if (!token || !user) return;

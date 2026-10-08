@@ -6,6 +6,12 @@ import { api, type AppCalendar, type AppLocale } from './api';
 import { COUNTRIES, CURRENCIES, CALENDARS, TIMEZONES, resolveTimezoneId } from './catalogs';
 import { getSmsAutoImportEnabled, setSmsAutoImportEnabled } from './smsAutoIngest';
 import {
+  cancelDailySmsCheckup,
+  getSmsCheckupTime,
+  scheduleDailySmsCheckup,
+  setSmsCheckupTime,
+} from './smsWatcher';
+import {
   disableBiometricsLock,
   enableBiometricsLock,
   getBiometricsAvailability,
@@ -148,6 +154,7 @@ export function SettingsScreen(props: Props) {
   const [pushGoals, setPushGoals] = useState(true);
   const [inAppAll, setInAppAll] = useState(true);
   const [smsAutoImport, setSmsAutoImport] = useState(true);
+  const [smsCheckupHour, setSmsCheckupHour] = useState('8');
   const [biometricsLock, setBiometricsLock] = useState(false);
   const [biometricsLabel, setBiometricsLabel] = useState('Biometrics');
   const [biometricsSupported, setBiometricsSupported] = useState(false);
@@ -164,7 +171,11 @@ export function SettingsScreen(props: Props) {
     let cancelled = false;
     (async () => {
       const on = await getSmsAutoImportEnabled();
-      if (!cancelled) setSmsAutoImport(on);
+      const t = await getSmsCheckupTime();
+      if (!cancelled) {
+        setSmsAutoImport(on);
+        setSmsCheckupHour(String(t.hour));
+      }
     })();
     return () => {
       cancelled = true;
@@ -295,6 +306,10 @@ export function SettingsScreen(props: Props) {
       id: h.value,
       label: t(props.locale, h.labelKey),
     }));
+    const smsHourOpts = Array.from({ length: 24 }, (_, h) => ({
+      id: String(h),
+      label: `${String(h).padStart(2, '0')}:00`,
+    }));
     return (
       <View style={{ gap: space.md }}>
         <Back title={t(props.locale, 'settings.region')} />
@@ -381,8 +396,10 @@ export function SettingsScreen(props: Props) {
                     } else {
                       await setSmsAutoImportEnabled(true);
                     }
+                    await scheduleDailySmsCheckup();
                   } else {
                     await setSmsAutoImportEnabled(false);
+                    await cancelDailySmsCheckup();
                   }
                 })();
               }}
@@ -390,6 +407,25 @@ export function SettingsScreen(props: Props) {
               thumbColor={smsAutoImport ? colors.primary : colors.muted}
             />
           </View>
+          {smsAutoImport ? (
+            <>
+              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12, marginTop: 4 }}>
+                {t(props.locale, 'settings.smsAutoImportHint')}
+              </Text>
+              <SearchSelect
+                label={t(props.locale, 'settings.smsDailyCheckup')}
+                value={smsCheckupHour}
+                onChange={(id) => {
+                  setSmsCheckupHour(id);
+                  void setSmsCheckupTime(Number(id), 0);
+                }}
+                options={smsHourOpts}
+              />
+              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12, marginBottom: 8 }}>
+                {t(props.locale, 'settings.smsDailyCheckupHint')}
+              </Text>
+            </>
+          ) : null}
           <View
             style={{
               flexDirection: 'row',

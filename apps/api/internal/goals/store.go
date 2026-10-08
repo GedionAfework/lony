@@ -45,6 +45,27 @@ type Goal struct {
 	LastPriceCheckedAt *time.Time
 }
 
+type PriceHistory struct {
+	ID           uuid.UUID
+	GoalID       uuid.UUID
+	UserID       uuid.UUID
+	Price        decimal.Decimal
+	CurrencyCode string
+	SourceURL    string
+	Direction    string
+	CreatedAt    time.Time
+}
+
+type PriceHistoryDTO struct {
+	ID           uuid.UUID `json:"id"`
+	GoalID       uuid.UUID `json:"goal_id"`
+	Price        string    `json:"price"`
+	CurrencyCode string    `json:"currency_code"`
+	SourceURL    string    `json:"source_url,omitempty"`
+	Direction    string    `json:"direction"` // up | down | same
+	CreatedAt    time.Time `json:"created_at"`
+}
+
 type Contribution struct {
 	ID           uuid.UUID
 	GoalID       uuid.UUID
@@ -161,6 +182,10 @@ type Store interface {
 	SumContributionsSince(ctx context.Context, userID, goalID uuid.UUID, since time.Time) (decimal.Decimal, int, error)
 	// ClaimMilestone returns true when this threshold was newly recorded for the goal.
 	ClaimMilestone(ctx context.Context, goalID uuid.UUID, threshold int) (bool, error)
+	InsertPriceHistory(ctx context.Context, rec PriceHistory) (PriceHistory, error)
+	ListPriceHistory(ctx context.Context, userID, goalID uuid.UUID, limit int) ([]PriceHistory, error)
+	// ListActiveWithSource returns active goals that have a product URL, across all users.
+	ListActiveWithSource(ctx context.Context, limit int) ([]Goal, error)
 }
 
 func toDTO(rec Goal, monthlyRate *decimal.Decimal) GoalDTO {

@@ -77,15 +77,23 @@ type RawSms = { body: string; date?: number };
 export async function ensureSmsPermission(): Promise<boolean> {
   if (Platform.OS !== 'android') return false;
   try {
-    const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.READ_SMS, {
-      title: 'Read bank SMS',
-      message: 'Lony reads transfer SMS to suggest accounts and import income/expenses.',
-      buttonPositive: 'Allow',
-      buttonNegative: 'Not now',
-    });
-    return granted === PermissionsAndroid.RESULTS.GRANTED;
+    const result = await PermissionsAndroid.requestMultiple([
+      PermissionsAndroid.PERMISSIONS.READ_SMS,
+      PermissionsAndroid.PERMISSIONS.RECEIVE_SMS,
+    ]);
+    return result[PermissionsAndroid.PERMISSIONS.READ_SMS] === PermissionsAndroid.RESULTS.GRANTED;
   } catch {
-    return false;
+    try {
+      const granted = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.READ_SMS, {
+        title: 'Read bank SMS',
+        message: 'Lony reads transfer SMS to suggest accounts and import income/expenses.',
+        buttonPositive: 'Allow',
+        buttonNegative: 'Not now',
+      });
+      return granted === PermissionsAndroid.RESULTS.GRANTED;
+    } catch {
+      return false;
+    }
   }
 }
 

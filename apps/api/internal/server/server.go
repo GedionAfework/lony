@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -137,7 +138,9 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 	notifySvc := notifications.NewService(sqlStore, notifications.NewPusher(cfg.ExpoAccessToken))
 	notifyH := notifications.NewHandler(notifySvc)
 	accountsSvc.SetAccountNotifier(notifySvc)
-	goalsSvc.SetMilestoneNotifier(notifications.GoalHooks{Svc: notifySvc})
+	goalHooks := notifications.GoalHooks{Svc: notifySvc}
+	goalsSvc.SetMilestoneNotifier(goalHooks)
+	goalsSvc.SetPriceNotifier(goalHooks)
 	loansSvc.SetHooks(notifications.LoanHooks{Svc: notifySvc})
 	loansSvc.SetBond(friendsSvc)
 	friendsSvc.SetNotifier(notifications.FriendHooks{Svc: notifySvc})
@@ -147,6 +150,20 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 	expensesSvc.SetReceipts(aiSvc)
 	goalsSvc.SetPlanExtractor(aiSvc)
 	aiSvc.SetGoalPrices(goalsSvc)
+	go func() {
+		time.Sleep(60 * time.Second)
+		for {
+			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+			n, err := goalsSvc.TickTrackedPrices(ctx)
+			cancel()
+			if err != nil {
+				log.Printf("goal price scrape: %v", err)
+			} else if n > 0 {
+				log.Printf("goal price scrape: checked %d listing(s)", n)
+			}
+			time.Sleep(24 * time.Hour)
+		}
+	}()
 
 	chatSvc := chat.NewService(sqlStore, mediaStore, friendsSvc)
 	chatSvc.SetLoans(loansSvc)
@@ -279,6 +296,8 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 			r.Post("/goals/preview-url", goalsH.PreviewURL)
 			r.Post("/goals/extract", goalsH.Extract)
 			r.Post("/goals/refresh-prices", goalsH.RefreshPrices)
+			r.Get("/goals/{id}/price-history", goalsH.ListPriceHistory)
+			r.Post("/goals/{id}/refresh-price", goalsH.RefreshOnePrice)
 			r.Get("/goals/{id}", goalsH.Get)
 			r.Patch("/goals/{id}", goalsH.Update)
 			r.With(idem.Handler("goals.cover")).Post("/goals/{id}/cover", goalsH.UploadCover)

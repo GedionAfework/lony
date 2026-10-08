@@ -516,6 +516,13 @@ export const api = {
       method: 'POST',
       body: '{}',
     }, token),
+  refreshGoalPrice: (token: string, id: string) =>
+    request<{ goal: Goal; change: GoalPriceChange | null }>(`/goals/${id}/refresh-price`, {
+      method: 'POST',
+      body: '{}',
+    }, token),
+  listGoalPriceHistory: (token: string, id: string) =>
+    request<{ history: GoalPricePoint[] }>(`/goals/${id}/price-history`, { method: 'GET' }, token),
   updateGoal: (token: string, id: string, body: UpdateGoalBody) =>
     request<{ goal: Goal }>(`/goals/${id}`, {
       method: 'PATCH',
@@ -1287,9 +1294,21 @@ export type GoalDraft = {
 export type GoalPriceChange = {
   goal_id: string;
   title: string;
+  currency_code?: string;
   old_price: string;
   new_price: string;
+  delta?: string;
   direction: 'up' | 'down' | 'same';
+};
+
+export type GoalPricePoint = {
+  id: string;
+  goal_id: string;
+  price: string;
+  currency_code: string;
+  source_url?: string;
+  direction: 'up' | 'down' | 'same';
+  created_at: string;
 };
 
 export type CreateGoalBody = {

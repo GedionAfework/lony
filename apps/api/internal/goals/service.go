@@ -24,10 +24,15 @@ type MilestoneNotifier interface {
 	OnGoalMilestone(ctx context.Context, userID, goalID uuid.UUID, title string, threshold int, progressPercent float64) error
 }
 
+type PriceChangeNotifier interface {
+	OnGoalPriceChange(ctx context.Context, userID, goalID uuid.UUID, title, oldPrice, newPrice, currency, direction string) error
+}
+
 type Service struct {
 	store      Store
 	accounts   AccountDebiter
 	milestones MilestoneNotifier
+	prices     PriceChangeNotifier
 	extractor  PlanExtractor
 	now        func() time.Time
 }
@@ -42,6 +47,10 @@ func (s *Service) SetAccounts(a AccountDebiter) {
 
 func (s *Service) SetMilestoneNotifier(n MilestoneNotifier) {
 	s.milestones = n
+}
+
+func (s *Service) SetPriceNotifier(n PriceChangeNotifier) {
+	s.prices = n
 }
 
 func (s *Service) List(ctx context.Context, userID uuid.UUID, includeArchived bool) ([]GoalDTO, error) {

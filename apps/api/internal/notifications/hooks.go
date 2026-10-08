@@ -113,6 +113,31 @@ func (h GoalHooks) OnGoalMilestone(ctx context.Context, userID, goalID uuid.UUID
 	)
 }
 
+func (h GoalHooks) OnGoalPriceChange(ctx context.Context, userID, goalID uuid.UUID, title, oldPrice, newPrice, currency, direction string) error {
+	if h.Svc == nil {
+		return nil
+	}
+	verb := "changed"
+	if direction == "up" {
+		verb = "went up"
+	} else if direction == "down" {
+		verb = "dropped"
+	}
+	return h.Svc.Notify(ctx, userID, TypeGoalPriceChange, nil,
+		fmt.Sprintf("%s price %s", title, verb),
+		fmt.Sprintf("%s → %s %s", oldPrice, newPrice, currency),
+		map[string]any{
+			"goal_id":   goalID.String(),
+			"title":     title,
+			"old_price": oldPrice,
+			"new_price": newPrice,
+			"currency":  currency,
+			"direction": direction,
+			"screen":    "plan",
+		},
+	)
+}
+
 // CashflowHooks notifies users about recurring bills / SMS imports.
 type CashflowHooks struct {
 	Svc *Service

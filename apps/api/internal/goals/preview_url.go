@@ -79,8 +79,9 @@ func PreviewProductURL(ctx context.Context, raw string) (PreviewURLResult, error
 	if err != nil {
 		return PreviewURLResult{}, err
 	}
-	req.Header.Set("User-Agent", "LonyBot/1.0 (+https://lony.app; product preview)")
-	req.Header.Set("Accept", "text/html,application/xhtml+xml")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 
 	client := &http.Client{
 		Timeout: 12 * time.Second,

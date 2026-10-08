@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Image, Pressable, Text, View } from 'react-native';
 import { EncodingType, cacheDirectory, documentDirectory, downloadAsync, readAsStringAsync } from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
-import { api, type Goal, type GoalDraft, type MoneyAccount, type User } from './api';
+import { api, type Goal, type GoalDraft, type GoalPricePoint, type MoneyAccount, type User } from './api';
 import { stripAmount } from './amountFormat';
 import { CURRENCIES } from './catalogs';
 import { DateField } from './DateField';
@@ -164,6 +164,9 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
   });
   /** Survives re-renders so “where did you get that?” always has context. */
   const estimateMemoryRef = useRef<EstimateMemory | null>(null);
+  const pricesRefreshedRef = useRef(false);
+  const [priceHistory, setPriceHistory] = useState<GoalPricePoint[]>([]);
+  const [priceBusy, setPriceBusy] = useState(false);
 
   const reload = useCallback(async () => {
     try {
@@ -197,6 +200,17 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
     void reload();
   }, [reload, reloadToken]);
 
+  useEffect(() => {
+    if (!token || pricesRefreshedRef.current) return;
+    pricesRefreshedRef.current = true;
+    void api
+      .refreshGoalPrices(token)
+      .then((r) => {
+        if (r.changes?.length) void reload();
+      })
+      .catch(() => undefined);
+  }, [token, reload]);
+
   const showFilters = goals.length >= 5;
   const filterOptions = useMemo(() => {
     if (!showFilters) return [];
@@ -214,6 +228,42 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
   }, [goals, filter, showFilters]);
 
   const selected = goals.find((g) => g.id === selectedId) ?? null;
+
+  const loadPriceHistory = useCallback(
+    async (goalId: string) => {
+      try {
+        const res = await api.listGoalPriceHistory(token, goalId);
+        setPriceHistory(res.history ?? []);
+      } catch {
+        setPriceHistory([]);
+      }
+    },
+    [token],
+  );
+
+  useEffect(() => {
+    if (!selectedId || !selected?.source_url) {
+      setPriceHistory([]);
+      return;
+    }
+    void loadPriceHistory(selectedId);
+  }, [selectedId, selected?.source_url, loadPriceHistory]);
+
+  async function onCheckPriceNow() {
+    if (!selectedId || !selected?.source_url) return;
+    setPriceBusy(true);
+    try {
+      const res = await api.refreshGoalPrice(token, selectedId);
+      if (res.goal) {
+        setGoals((prev) => prev.map((g) => (g.id === res.goal.id ? res.goal : g)));
+      }
+      await loadPriceHistory(selectedId);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Could not scrape that listing');
+    } finally {
+      setPriceBusy(false);
+    }
+  }
 
   function resetForm() {
     setTitle('');
@@ -608,18 +658,22 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
 
   function askFollowUp(itemHint: string, details: string[]): string {
     if (/car|vehicle|rav|toyota|honda|suv|truck/i.test(itemHint)) {
-      if (details.length <= 1) return 'What kind of car — make and model?';
-      if (!/\b(20\d{2})\b/.test(details.join(' '))) return 'Which model year?';
-      return 'New or used, and any trim (LE, XLE, Hybrid…)?';
+      if (details.length <= 1) {
+        return 'What kind of car — make and model? Or paste a listing URL and I’ll scrape the live price.';
+      }
+      if (!/\b(20\d{2})\b/.test(details.join(' '))) {
+        return 'Which model year? A product/listing link is even better — I’ll scrape that price and keep tracking it.';
+      }
+      return 'New or used, and any trim (LE, XLE, Hybrid…)? Paste a listing URL if you have one.';
     }
     if (/phone|laptop|macbook|iphone|ipad|computer/i.test(itemHint)) {
       return details.length <= 1
-        ? 'Which model (and storage/size) do you want?'
-        : 'Any condition preference — new or refurbished?';
+        ? 'Which model (and storage/size)? Or paste a product URL and I’ll scrape the live price.'
+        : 'Any condition preference — new or refurbished? A product link lets me track price changes.';
     }
     return details.length <= 1
-      ? 'Can you be more specific — which product or model?'
-      : 'Any year, condition (new/used), or other details that affect the price? Or paste a product link.';
+      ? 'Can you be more specific — which product or model? Paste a listing URL and I’ll scrape it.'
+      : 'Any year, condition (new/used), or other details? Best: paste a product link so I can scrape and track the price.';
   }
 
   async function runPriceEstimate(
@@ -639,29 +693,53 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
     let source: NonNullable<AiInterview['estimateSource']> = 'market_estimate';
     let explain = '';
 
-    const stated = parseStatedPrice(latestText) || contextLines.map(parseStatedPrice).find(Boolean);
+    const urlMatch = blob.match(/\bhttps?:\/\/[^\s<>"']+/i) || latestText.match(/\bwww\.[^\s<>"']+/i);
+    if (urlMatch) {
+      const rawUrl = urlMatch[0].toLowerCase().startsWith('http') ? urlMatch[0] : `https://${urlMatch[0]}`;
+      try {
+        const preview = await api.previewGoalUrl(token, rawUrl);
+        const p = preview.preview;
+        if (p?.price && !isYearAmount(Number(p.price))) {
+          merged.target_amount = p.price;
+          if (p.currency) merged.currency_code = p.currency.toUpperCase();
+          if (p.title) merged.title = p.title;
+          if (p.image_url) merged.image_url = p.image_url;
+          merged.source_url = p.url || rawUrl;
+          source = 'product_link';
+          explain = `Scraped live price ${formatMoney(p.price, (merged.currency_code || cur).toUpperCase(), user.locale)} from ${merged.source_url}. I’ll keep tracking this listing for price changes.`;
+        } else {
+          merged.source_url = p?.url || rawUrl;
+          if (p?.title) merged.title = p.title;
+          warning = 'Opened the page but could not find a listed price.';
+        }
+      } catch (e) {
+        warning = e instanceof Error ? e.message : 'Could not scrape that link';
+        merged.source_url = rawUrl;
+      }
+      try {
+        const res = await api.extractGoalDraft(token, `${rawUrl}\n${blob}`);
+        for (const [key, value] of Object.entries(res.draft ?? {})) {
+          if (value === undefined || value === null || value === '') continue;
+          if (key === 'target_amount' && merged.target_amount) continue;
+          (merged as Record<string, unknown>)[key] = value;
+        }
+        if (!merged.source_url && res.draft?.source_url) merged.source_url = res.draft.source_url;
+        if (merged.target_amount && !isYearAmount(Number(merged.target_amount)) && source !== 'product_link') {
+          source = merged.source_url ? 'product_link' : source;
+          explain =
+            explain ||
+            `Pulled ${formatMoney(merged.target_amount, (merged.currency_code || cur).toUpperCase(), user.locale)} from the product page (${merged.source_url || rawUrl}).`;
+        }
+      } catch (e) {
+        if (!warning) warning = e instanceof Error ? e.message : 'Could not read that link';
+      }
+    }
+
+    const stated = parseStatedPrice(latestText);
     if (stated) {
       merged.target_amount = stated;
       source = 'user_stated';
-      explain = `Using the price you stated: ${formatMoney(stated, cur, user.locale)}.`;
-    }
-
-    const urlMatch = blob.match(/\bhttps?:\/\/[^\s<>"']+/i) || latestText.match(/\bwww\.[^\s<>"']+/i);
-    if (urlMatch && !merged.target_amount) {
-      try {
-        const res = await api.extractGoalDraft(token, urlMatch[0]);
-        for (const [key, value] of Object.entries(res.draft ?? {})) {
-          if (value !== undefined && value !== null && value !== '') {
-            (merged as Record<string, unknown>)[key] = value;
-          }
-        }
-        if (merged.target_amount && !isYearAmount(Number(merged.target_amount))) {
-          source = 'product_link';
-          explain = `Pulled ${formatMoney(merged.target_amount, (merged.currency_code || cur).toUpperCase(), user.locale)} from the product page (${merged.source_url || urlMatch[0]}).`;
-        }
-      } catch (e) {
-        warning = e instanceof Error ? e.message : 'Could not read that link';
-      }
+      explain = `Using the price you stated: ${formatMoney(stated, (merged.currency_code || cur).toUpperCase(), user.locale)}.`;
     }
 
     if (!merged.target_amount || isYearAmount(Number(merged.target_amount))) {
@@ -1258,9 +1336,68 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
             <Text style={{ color: colors.textSecondary, fontFamily: fonts.ui, fontSize: 14 }}>{selected.note}</Text>
           ) : null}
           {selected.source_url ? (
-            <Text style={{ color: colors.primary, fontFamily: fonts.ui, fontSize: 12 }} numberOfLines={2}>
-              {t(user.locale, 'plan.trackingPriceFrom').replace('{url}', selected.source_url)}
-            </Text>
+            <View style={{ gap: 8 }}>
+              <Text style={{ color: colors.primary, fontFamily: fonts.ui, fontSize: 12 }} numberOfLines={2}>
+                {t(user.locale, 'plan.trackingPriceFrom').replace('{url}', selected.source_url)}
+              </Text>
+              {selected.last_price_checked_at ? (
+                <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
+                  {t(user.locale, 'plan.lastChecked').replace(
+                    '{when}',
+                    new Date(selected.last_price_checked_at).toLocaleString(user.locale || undefined),
+                  )}
+                </Text>
+              ) : null}
+              <SecondaryButton
+                label={priceBusy ? t(user.locale, 'plan.checkingPrice') : t(user.locale, 'plan.checkPriceNow')}
+                onPress={() => void onCheckPriceNow()}
+                disabled={priceBusy}
+              />
+              <SectionLabel>{t(user.locale, 'plan.priceHistory')}</SectionLabel>
+              {priceHistory.length === 0 ? (
+                <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
+                  {t(user.locale, 'plan.noPriceHistory')}
+                </Text>
+              ) : (
+                priceHistory.slice(0, 12).map((row) => {
+                  const dirLabel =
+                    row.direction === 'up'
+                      ? t(user.locale, 'plan.priceWentUp')
+                      : row.direction === 'down'
+                        ? t(user.locale, 'plan.priceDropped')
+                        : t(user.locale, 'plan.priceUnchanged');
+                  const dirColor =
+                    row.direction === 'up'
+                      ? colors.warning
+                      : row.direction === 'down'
+                        ? colors.success
+                        : colors.muted;
+                  return (
+                    <View
+                      key={row.id}
+                      style={{
+                        flexDirection: 'row',
+                        justifyContent: 'space-between',
+                        gap: 8,
+                        paddingVertical: 6,
+                        borderBottomWidth: 1,
+                        borderBottomColor: colors.border,
+                      }}
+                    >
+                      <View style={{ flex: 1 }}>
+                        <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }}>
+                          {formatMoney(row.price, row.currency_code, user.locale)}
+                        </Text>
+                        <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
+                          {new Date(row.created_at).toLocaleString(user.locale || undefined)}
+                        </Text>
+                      </View>
+                      <Text style={{ color: dirColor, fontFamily: fonts.ui, fontSize: 12 }}>{dirLabel}</Text>
+                    </View>
+                  );
+                })
+              )}
+            </View>
           ) : null}
 
           {!done && selected.status === 'active' ? (
