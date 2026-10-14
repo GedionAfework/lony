@@ -8,8 +8,7 @@ import {
   type LonyScore,
   type User,
 } from './api';
-import { fonts, radii, space, useTheme } from './theme';
-import { PrimaryButton, SecondaryButton } from './ui';
+import { fonts, space, useTheme } from './theme';
 
 type Season = 'month' | 'year';
 
@@ -212,23 +211,11 @@ export function SeasonRecapScreen({ user, token, season, formatMoney, onClose }:
           ))}
         </View>
 
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Text style={{ color: 'rgba(255,255,255,0.8)', fontFamily: fonts.uiSemi, fontSize: 13 }}>
-            Lony · {season === 'year' ? 'Year recap' : 'Month recap'}
-          </Text>
-          <Pressable onPress={onClose} hitSlop={10}>
-            <Text style={{ color: '#fff', fontFamily: fonts.uiSemi, fontSize: 15 }}>Close</Text>
-          </Pressable>
-        </View>
+        <Text style={{ color: 'rgba(255,255,255,0.8)', fontFamily: fonts.uiSemi, fontSize: 13 }}>
+          Lony · {season === 'year' ? 'Year recap' : 'Month recap'}
+        </Text>
 
-        <Pressable style={{ flex: 1, justifyContent: 'center', gap: 16 }} onPress={next}>
-          <Pressable
-            onPress={(e) => {
-              e.stopPropagation();
-              prev();
-            }}
-            style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: '30%' }}
-          />
+        <View style={{ flex: 1, justifyContent: 'center', gap: 16 }}>
           <Text style={{ color: 'rgba(255,255,255,0.75)', fontFamily: fonts.uiSemi, fontSize: 14, letterSpacing: 1.2 }}>
             {slide.eyebrow.toUpperCase()}
           </Text>
@@ -239,14 +226,18 @@ export function SeasonRecapScreen({ user, token, season, formatMoney, onClose }:
           <Text style={{ color: 'rgba(255,255,255,0.9)', fontFamily: fonts.ui, fontSize: 17, lineHeight: 26 }}>
             {busy ? 'Loading your season…' : slide.body}
           </Text>
-        </Pressable>
-
-        <View style={{ gap: 10 }}>
-          <PrimaryButton
-            label={index >= slides.length - 1 ? 'Done' : 'Next'}
-            onPress={next}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Previous"
+            onPress={prev}
+            style={{ position: 'absolute', left: 0, top: 0, bottom: 0, width: '50%' }}
           />
-          {index > 0 ? <SecondaryButton label="Back" onPress={prev} /> : null}
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Next"
+            onPress={next}
+            style={{ position: 'absolute', right: 0, top: 0, bottom: 0, width: '50%' }}
+          />
         </View>
 
         {/* Decorative gradient-ish wash */}

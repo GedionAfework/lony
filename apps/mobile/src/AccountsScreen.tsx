@@ -5,6 +5,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import * as WebBrowser from 'expo-web-browser';
 import { api, type AccountReconcile, type BankLinkConnection, type BankLinkStatus, type MoneyAccount, type User } from './api';
+import { listSmsForAccount, type ArchivedSms } from './smsArchive';
 import { stripAmount } from './amountFormat';
 import type { CatalogOption } from './catalogs';
 import { CURRENCIES } from './catalogs';
@@ -130,6 +131,10 @@ export function AccountsScreen({
   const [acceptAccountNumber, setAcceptAccountNumber] = useState('');
   const [acceptProfit, setAcceptProfit] = useState('');
   const [acceptBusy, setAcceptBusy] = useState(false);
+  const [viewAccount, setViewAccount] = useState<MoneyAccount | null>(null);
+  const [viewMessage, setViewMessage] = useState<ArchivedSms | null>(null);
+  const [accountSms, setAccountSms] = useState<ArchivedSms[]>([]);
+  const [smsBusy, setSmsBusy] = useState(false);
 
   const accountTypes = useMemo(
     () => localizeOptionLabels(mergeOptions(remoteTypes, FALLBACK_ACCOUNT_TYPES), ACCOUNT_TYPE_LABEL_KEYS, user.locale),
@@ -600,7 +605,8 @@ export function AccountsScreen({
   }
 
   const formOpen = creating || Boolean(editId);
-  const panelOpen = formOpen || transferOpen || reconcileOpen || Boolean(importId) || Boolean(balanceId);
+  const panelOpen =
+    formOpen || transferOpen || reconcileOpen || Boolean(importId) || Boolean(balanceId) || Boolean(viewAccount);
   useEffect(() => {
     onPanelChange?.(Boolean(panelOpen));
   }, [panelOpen, onPanelChange]);
@@ -614,9 +620,33 @@ export function AccountsScreen({
     setNewBalance('');
     setReconcileRows([]);
     setAcceptId(null);
+    setViewMessage(null);
+    setViewAccount(null);
+    setAccountSms([]);
+  }
+
+  async function openAccountSms(a: MoneyAccount) {
+    setCreating(false);
+    setEditId(null);
+    setBalanceId(null);
+    setTransferOpen(false);
+    setReconcileOpen(false);
+    resetImport();
+    setViewMessage(null);
+    setViewAccount(a);
+    setSmsBusy(true);
+    try {
+      setAccountSms(await listSmsForAccount(a.id, user.id));
+    } catch {
+      setAccountSms([]);
+    } finally {
+      setSmsBusy(false);
+    }
   }
 
   function panelTitle() {
+    if (viewMessage) return viewMessage.title || 'Message';
+    if (viewAccount) return viewAccount.name;
     if (importId) return t(user.locale, 'accounts.importStatement');
     if (reconcileOpen) return t(user.locale, 'accounts.reconcile');
     if (transferOpen) return t(user.locale, 'accounts.transfer');
@@ -635,7 +665,16 @@ export function AccountsScreen({
   return (
     <View style={{ gap: space.md }}>
       {panelOpen ? (
-        <ScreenHeader title={panelTitle()} onBack={closePanel} />
+        <ScreenHeader
+          title={panelTitle()}
+          onBack={() => {
+            if (viewMessage) {
+              setViewMessage(null);
+              return;
+            }
+            closePanel();
+          }}
+        />
       ) : (
         <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>
           {t(user.locale, 'accounts')}
@@ -646,11 +685,6 @@ export function AccountsScreen({
       <>
       <Card>
         <SectionLabel>{t(user.locale, 'linkedBanks')}</SectionLabel>
-        <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13, marginBottom: 8 }}>
-          {bankStatus?.available
-            ? t(user.locale, 'bankLinkReady')
-            : bankStatus?.message || t(user.locale, 'bankLinkUnavailable')}
-        </Text>
         {bankConnections.map((c) => (
           <View
             key={c.id}
@@ -996,6 +1030,72 @@ export function AccountsScreen({
           </Card>
         ) : null}
 
+        {viewAccount && viewMessage ? (
+          <Card>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 12, marginBottom: 8 }}>
+              <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16, flex: 1 }}>
+                {viewMessage.title}
+              </Text>
+              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
+                {formatSmsDate(viewMessage.date, user.locale)}
+              </Text>
+            </View>
+            {viewMessage.amount ? (
+              <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 15, marginBottom: 10 }}>
+                {viewMessage.kind === 'income' ? '+' : viewMessage.kind === 'expense' ? '−' : ''}
+                {formatMoney(viewMessage.amount, viewMessage.currency || viewAccount.currency_code, user.locale)}
+              </Text>
+            ) : null}
+            <Text style={{ color: colors.text, fontFamily: fonts.ui, fontSize: 14, lineHeight: 22 }}>
+              {viewMessage.body}
+            </Text>
+          </Card>
+        ) : null}
+
+        {viewAccount && !viewMessage ? (
+          <Card>
+            <SectionLabel>{t(user.locale, 'accounts.messages') || 'Messages'}</SectionLabel>
+            {smsBusy ? (
+              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>Loading…</Text>
+            ) : accountSms.length === 0 ? (
+              <EmptyState
+                title={t(user.locale, 'accounts.noMessagesTitle') || 'No messages yet'}
+                body={t(user.locale, 'accounts.noMessagesBody') || 'Refresh on Home to read bank SMS for this account.'}
+              />
+            ) : (
+              accountSms.map((m) => (
+                <Pressable
+                  key={m.id}
+                  onPress={() => setViewMessage(m)}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 12,
+                    paddingVertical: 12,
+                    borderBottomWidth: 1,
+                    borderBottomColor: colors.border,
+                  }}
+                >
+                  <View style={{ flex: 1, gap: 4, minWidth: 0 }}>
+                    <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }} numberOfLines={1}>
+                      {m.body.replace(/\s+/g, ' ').trim() || m.title}
+                    </Text>
+                    {m.amount ? (
+                      <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }} numberOfLines={1}>
+                        {m.kind === 'income' ? '+' : '−'}
+                        {formatMoney(m.amount, m.currency || viewAccount.currency_code, user.locale)}
+                      </Text>
+                    ) : null}
+                  </View>
+                  <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
+                    {formatSmsDate(m.date, user.locale)}
+                  </Text>
+                </Pressable>
+              ))
+            )}
+          </Card>
+        ) : null}
+
       {!panelOpen ? (
       <Card>
         <SectionLabel>{t(user.locale, 'accounts.yourAccounts')}</SectionLabel>
@@ -1018,7 +1118,10 @@ export function AccountsScreen({
                 borderBottomColor: colors.border,
               }}
             >
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 8 }}>
+              <Pressable
+                onPress={() => void openAccountSms(a)}
+                style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 8 }}
+              >
                 <View style={{ flex: 1, gap: 6 }}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                     <View
@@ -1081,7 +1184,7 @@ export function AccountsScreen({
                 <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>
                   {formatMoney(a.balance, a.currency_code, user.locale)}
                 </Text>
-              </View>
+              </Pressable>
               {a.interest_rate_percent ? (
                 <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
                   {a.interest_rate_percent}% {a.compounding || 'none'}
@@ -1226,6 +1329,13 @@ export function AccountsScreen({
       </Modal>
     </View>
   );
+}
+
+function formatSmsDate(ms: number, locale?: string | null): string {
+  if (!ms) return '';
+  const d = new Date(ms);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString(locale || undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
 function IconAction({

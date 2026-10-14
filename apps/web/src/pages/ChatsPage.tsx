@@ -9,6 +9,7 @@ import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { EmptyState } from '../components/EmptyState';
 import { useToast } from '../components/Toast';
+import { Avatar } from '../components/Avatar';
 
 function formatChatListTime(iso?: string | null): string {
   if (!iso) return '';
@@ -75,8 +76,13 @@ export function ChatsPage() {
 
       <Card tight>
         <div className="list-row clickable-row" onClick={() => navigate(`/chats/${user.id}`)}>
-          <div className="avatar" style={{ background: 'var(--primary-soft)', color: 'var(--primary)' }}>
-            {(user.display_name || 'U').slice(0, 1).toUpperCase()}
+          <div
+            onClick={(e) => {
+              e.stopPropagation();
+              navigate(`/people/${user.id}`);
+            }}
+          >
+            <Avatar src={user.avatar_url} token={token} letter={user.display_name || 'U'} />
           </div>
           <div className="main">
             <div className="title">Self</div>
@@ -86,7 +92,14 @@ export function ChatsPage() {
 
         {startRows.map((f) => (
           <div key={f.peer.id} className="list-row clickable-row" onClick={() => navigate(`/chats/${f.peer.id}`)}>
-            <div className="avatar">{f.peer.display_name.slice(0, 1).toUpperCase()}</div>
+            <div
+              onClick={(e) => {
+                e.stopPropagation();
+                navigate(`/people/${f.peer.id}`);
+              }}
+            >
+              <Avatar src={f.peer.avatar_url} token={token} letter={f.peer.display_name} />
+            </div>
             <div className="main">
               <div className="title">{f.peer.display_name}</div>
               <div className="sub">Start chat</div>
@@ -98,7 +111,14 @@ export function ChatsPage() {
           const money = c.money?.length ? c.money : c.money_role && (c.active_loan_id || c.loan_id) ? [{ loan_id: c.active_loan_id || c.loan_id || '', role: c.money_role, amount: c.money_amount, currency: c.money_currency }] : [];
           return (
             <div key={c.id} className="list-row clickable-row" onClick={() => navigate(`/chats/${c.peer.id}`)}>
-              <div className="avatar">{c.peer.display_name.slice(0, 1).toUpperCase()}</div>
+              <div
+                onClick={(e) => {
+                  e.stopPropagation();
+                  navigate(`/people/${c.peer.id}`);
+                }}
+              >
+                <Avatar src={c.peer.avatar_url} token={token} letter={c.peer.display_name} />
+              </div>
               <div className="main">
                 <div className="title flex-row" style={{ gap: 6 }}>
                   {c.peer.display_name}

@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"equilend/api/internal/httpx"
+	"equilend/api/internal/users"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -70,13 +71,14 @@ func (s *Service) LookupPhone(ctx context.Context, viewer uuid.UUID, phone strin
 		return nil, err
 	}
 	return map[string]any{
-		"found": true,
-		"phone": phone,
+		"found":             true,
+		"phone":             phone,
 		"friendship_status": status,
 		"user": SearchHit{
 			ID:          u.ID,
 			DisplayName: u.DisplayName,
 			Username:    u.Username,
+			AvatarURL:   users.AvatarMediaURL(u.AvatarObjectKey),
 		},
 	}, nil
 }
@@ -477,6 +479,7 @@ func (s *Service) toDTO(ctx context.Context, actor uuid.UUID, row Record) (Frien
 			ID:          peer.ID,
 			DisplayName: peer.DisplayName,
 			Username:    peer.Username,
+			AvatarURL:   users.AvatarMediaURL(peer.AvatarObjectKey),
 		},
 	}, nil
 }

@@ -1094,6 +1094,7 @@ export type SearchHit = {
   id: string;
   display_name: string;
   username: string | null;
+  avatar_url?: string | null;
 };
 
 export type Friendship = {
@@ -1110,6 +1111,7 @@ export type PeerHit = {
   id: string;
   display_name: string;
   username?: string | null;
+  avatar_url?: string | null;
   interaction_count: number;
   bond: string;
   is_bonded: boolean;
@@ -1867,7 +1869,7 @@ export type ConversationMoney = {
 
 export type Conversation = {
   id: string;
-  peer: { id: string; display_name: string };
+  peer: { id: string; display_name: string; avatar_url?: string | null };
   loan_id?: string | null;
   active_loan_id?: string | null;
   money_role?: 'lent' | 'borrowed' | null;

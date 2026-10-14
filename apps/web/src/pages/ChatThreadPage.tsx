@@ -6,6 +6,7 @@ import { api, type ChatMessage, type Conversation, type ConversationMoney } from
 import { formatMoney } from '../lib/format';
 import { Button } from '../components/Button';
 import { useToast } from '../components/Toast';
+import { Avatar } from '../components/Avatar';
 
 const REACTION_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏', '🔥', '👏'];
 const COMPOSER_EMOJIS = ['😀', '😁', '😂', '🤣', '😊', '😍', '😘', '😎', '🤔', '😅', '😭', '😡', '👍', '👎', '❤️', '🔥', '🙏', '👏', '🎉', '✅', '💯', '🤝', '💪', '✨', '📌', '💰', '🏦', '📱'];
@@ -190,10 +191,13 @@ export function ChatThreadPage() {
         <Button variant="icon" aria-label="Back" onClick={() => navigate('/chats')}>
           ←
         </Button>
-        <button className="peer-bubble" onClick={() => !isSelfChat && navigate(`/people/${conversation.peer.id}`)}>
-          <div className="avatar" style={isSelfChat ? { background: 'var(--primary-soft)', color: 'var(--primary)' } : undefined}>
-            {peerInitial}
-          </div>
+        <button className="peer-bubble" onClick={() => navigate(`/people/${conversation.peer.id}`)}>
+          <Avatar
+            src={isSelfChat ? user?.avatar_url : conversation.peer.avatar_url}
+            token={token}
+            letter={peerInitial}
+            size={28}
+          />
           <span style={{ fontWeight: 700 }}>{peerTitle}</span>
         </button>
         {!isSelfChat ? (

@@ -46,6 +46,7 @@ type LoanParty interface {
 type Peer struct {
 	ID          uuid.UUID `json:"id"`
 	DisplayName string    `json:"display_name"`
+	AvatarURL   *string   `json:"avatar_url,omitempty"`
 }
 
 type Conversation struct {

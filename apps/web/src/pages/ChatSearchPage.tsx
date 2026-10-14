@@ -5,6 +5,7 @@ import { api, type SearchHit } from '../lib/api';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
 import { useToast } from '../components/Toast';
+import { Avatar } from '../components/Avatar';
 
 export function ChatSearchPage() {
   const { token } = useAuth();
@@ -65,7 +66,7 @@ export function ChatSearchPage() {
       <div className="flex-col" style={{ marginTop: 12 }}>
         {hits.map((hit) => (
           <div key={hit.id} className="list-row clickable-row" onClick={() => navigate(`/chats/${hit.id}`)}>
-            <div className="avatar">{hit.display_name.slice(0, 1).toUpperCase()}</div>
+            <Avatar src={hit.avatar_url} token={token} letter={hit.display_name} />
             <div className="main">
               <div className="title">{hit.display_name}</div>
               {hit.username ? <div className="sub">@{hit.username}</div> : null}

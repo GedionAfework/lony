@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"equilend/api/internal/chat"
+	"equilend/api/internal/users"
 
 	"github.com/google/uuid"
 )
@@ -197,7 +198,7 @@ func (s *SQLStore) DeleteConversation(ctx context.Context, id uuid.UUID) error {
 func (s *SQLStore) CanAccessMediaKey(ctx context.Context, userID uuid.UUID, objectKey string) (bool, error) {
 	const q = `
 SELECT EXISTS (
-  SELECT 1 FROM users u WHERE u.id = $1 AND u.avatar_object_key = $2 AND u.deleted_at IS NULL
+  SELECT 1 FROM users u WHERE u.avatar_object_key = $2 AND u.deleted_at IS NULL
 )
 OR EXISTS (
   SELECT 1 FROM messages m
@@ -331,9 +332,13 @@ func (s *SQLStore) ListReactions(ctx context.Context, messageIDs []uuid.UUID) ([
 }
 
 func (s *SQLStore) GetUserPeer(ctx context.Context, id uuid.UUID) (chat.Peer, error) {
-	const q = `SELECT id, display_name FROM users WHERE id=$1 AND deleted_at IS NULL`
+	const q = `SELECT id, display_name, avatar_object_key FROM users WHERE id=$1 AND deleted_at IS NULL`
 	var p chat.Peer
-	err := s.pool.QueryRow(ctx, q, id).Scan(&p.ID, &p.DisplayName)
-	return p, err
+	var key *string
+	err := s.pool.QueryRow(ctx, q, id).Scan(&p.ID, &p.DisplayName, &key)
+	if err != nil {
+		return p, err
+	}
+	p.AvatarURL = users.AvatarMediaURL(key)
+	return p, nil
 }
-

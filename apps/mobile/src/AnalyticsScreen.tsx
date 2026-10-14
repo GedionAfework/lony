@@ -355,7 +355,6 @@ export function AnalyticsScreen({
   const [goals, setGoals] = useState<InsightsGoal[]>([]);
   const [lonyScore, setLonyScore] = useState<LonyScore | null>(null);
   const [insights, setInsights] = useState<AIInsight[]>([]);
-  const [disclaimer, setDisclaimer] = useState('');
   const [coachMsg, setCoachMsg] = useState('');
   const [coachMessages, setCoachMessages] = useState<CoachMessage[]>([]);
   const [coachActions, setCoachActions] = useState<CoachAction[]>([]);
@@ -388,12 +387,10 @@ export function AnalyticsScreen({
         const ai = await api.listAIInsights(token).catch(() => null);
         if (ai) {
           setInsights(ai.insights ?? []);
-          setDisclaimer(ai.disclaimer || '');
         }
         const thread = await api.getCoachThread(token).catch(() => null);
         if (thread?.thread?.messages) {
           setCoachMessages(thread.thread.messages);
-          if (thread.disclaimer) setDisclaimer(thread.disclaimer);
         }
       } else {
         setInsights([]);
@@ -480,7 +477,6 @@ export function AnalyticsScreen({
     try {
       const res = await api.aiReport(token, preferred, 6);
       setReport(res.report);
-      setDisclaimer(res.report.disclaimer || disclaimer);
     } catch (e) {
       onError?.(e instanceof Error ? e.message : 'Could not build report');
     } finally {
@@ -503,7 +499,6 @@ export function AnalyticsScreen({
         api.getScore(token, preferred, true),
       ]);
       setInsights(ai.insights ?? []);
-      setDisclaimer(ai.disclaimer || '');
       setLonyScore(sc.score);
     } catch (e) {
       onError?.(e instanceof Error ? e.message : 'Could not refresh analysis');
@@ -541,7 +536,6 @@ export function AnalyticsScreen({
           );
         },
         onDone: (coach) => {
-          setDisclaimer(coach.disclaimer || disclaimer);
           setCoachActions(coach.actions ?? []);
           setCoachMessages((prev) =>
             prev.map((m) => (m.id === assistantId ? { ...m, content: coach.reply } : m)),
@@ -975,10 +969,6 @@ export function AnalyticsScreen({
                   </View>
                 ))
               )}
-              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 11, marginTop: 10 }}>
-                {disclaimer ||
-                  'Lony insights are educational estimates, not credit scores, investment advice, or guaranteed outcomes.'}
-              </Text>
             </Card>
           ) : null}
 
@@ -1051,9 +1041,6 @@ export function AnalyticsScreen({
                   {(report.tables ?? []).map((table) => (
                     <ReportTableView key={table.id} table={table} />
                   ))}
-                  <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 11 }}>
-                    {report.disclaimer || disclaimer}
-                  </Text>
                 </View>
               )}
             </Card>
@@ -1061,28 +1048,6 @@ export function AnalyticsScreen({
 
           {tab === 'coach' ? (
             <Card>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 4 }}>
-                <View
-                  style={{
-                    width: 36,
-                    height: 36,
-                    borderRadius: 12,
-                    backgroundColor: colors.primarySoft,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
-                  <Text style={{ color: colors.primary, fontFamily: fonts.uiBold, fontSize: 16 }}>✦</Text>
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>
-                    {t(user.locale, 'insights.coach')}
-                  </Text>
-                  <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
-                    {t(user.locale, 'insights.coachSubtitle')}
-                  </Text>
-                </View>
-              </View>
               {coachMessages.length === 0 ? (
                 <View
                   style={{
@@ -1141,20 +1106,6 @@ export function AnalyticsScreen({
                           borderColor: colors.border,
                         }}
                       >
-                        {!isUser ? (
-                          <Text
-                            style={{
-                              color: colors.primary,
-                              fontFamily: fonts.uiSemi,
-                              fontSize: 10,
-                              marginBottom: 4,
-                              letterSpacing: 0.4,
-                              textTransform: 'uppercase',
-                            }}
-                          >
-                            {t(user.locale, 'insights.coach')}
-                          </Text>
-                        ) : null}
                         {isUser ? (
                           <Text style={{ color: colors.onPrimary, fontFamily: fonts.ui, fontSize: 14, lineHeight: 20 }}>
                             {m.content}
@@ -1198,7 +1149,7 @@ export function AnalyticsScreen({
                 placeholder="Where can I cut spending?"
               />
               <PrimaryButton
-                label={coachBusy ? t(user.locale, 'insights.thinking') : t(user.locale, 'insights.askCoach')}
+                label={coachBusy ? t(user.locale, 'insights.thinking') : t(user.locale, 'common.send')}
                 onPress={onAskCoach}
                 disabled={coachBusy}
               />
@@ -1211,11 +1162,6 @@ export function AnalyticsScreen({
                   }}
                 />
               ) : null}
-              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 11, marginTop: 10 }}>
-                {disclaimer ||
-                  t(user.locale, 'insights.disclaimer') ||
-                  'Lony insights are educational estimates, not investment advice or guaranteed outcomes.'}
-              </Text>
             </Card>
           ) : null}
         </>

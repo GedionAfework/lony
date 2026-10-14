@@ -1,10 +1,24 @@
 package users
 
 import (
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// AvatarMediaURL is the authenticated media path for a stored avatar object key.
+func AvatarMediaURL(objectKey *string) *string {
+	if objectKey == nil {
+		return nil
+	}
+	key := strings.TrimSpace(*objectKey)
+	if key == "" {
+		return nil
+	}
+	url := "/api/v1/media/" + key
+	return &url
+}
 
 type PublicUser struct {
 	ID                    uuid.UUID  `json:"id"`

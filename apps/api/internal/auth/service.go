@@ -789,10 +789,7 @@ func ToPublic(user UserRecord) users.PublicUser {
 	if out.HourCycle == "" {
 		out.HourCycle = "24h"
 	}
-	if user.AvatarObjectKey != nil && *user.AvatarObjectKey != "" {
-		url := "/api/v1/media/" + *user.AvatarObjectKey
-		out.AvatarURL = &url
-	}
+	out.AvatarURL = users.AvatarMediaURL(user.AvatarObjectKey)
 	out.ProfileComplete = profileComplete(user)
 	return out
 }

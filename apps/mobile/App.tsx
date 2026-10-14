@@ -219,6 +219,8 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   const { colors, resolved } = useTheme();
   const googleAuth = useGoogleIdTokenAuth();
   const scrollRef = useRef<ScrollView>(null);
+  const smsSyncingRef = useRef(false);
+  const smsStartNoticeRef = useRef(0);
 
   const [screen, setScreen] = useState<Screen>('login');
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -313,7 +315,12 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   const [onboardingTos, setOnboardingTos] = useState(false);
   const [chatLoanId, setChatLoanId] = useState<string | null>(null);
   const [chatPeerId, setChatPeerId] = useState<string | null>(null);
-  const [peerProfile, setPeerProfile] = useState<{ id: string; display_name: string; username?: string | null } | null>(null);
+  const [peerProfile, setPeerProfile] = useState<{
+    id: string;
+    display_name: string;
+    username?: string | null;
+    avatar_url?: string | null;
+  } | null>(null);
   const [editingBankId, setEditingBankId] = useState<string | null>(null);
   const [editBankLabel, setEditBankLabel] = useState('');
   const [email, setEmail] = useState('');
@@ -2014,27 +2021,33 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     showChrome && screen === 'home' && token ? (
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
         <Pressable
-          disabled={statusModal?.busy === true}
           onPress={() => {
-            // Open the sheet synchronously so the tap is acknowledged before any work starts.
-            setStatusModal({ title: 'Checking messages…', body: 'Reading your inbox.', busy: true });
+            if (smsSyncingRef.current) {
+              smsStartNoticeRef.current += 1;
+              setStatusModal({
+                title: 'Already in progress',
+                body: 'A message scan is still running. You’ll see the results when it finishes.',
+              });
+              return;
+            }
+            smsSyncingRef.current = true;
+            const noticeId = ++smsStartNoticeRef.current;
+            setError(null);
+            setStatusModal({
+              title: 'Started',
+              body: 'Reading your messages.',
+            });
+            setTimeout(() => {
+              if (smsStartNoticeRef.current !== noticeId) return;
+              setStatusModal((cur) => (cur?.title === 'Started' ? null : cur));
+            }, 2200);
             void (async () => {
               try {
-                setError(null);
-                const stageText: Record<string, string> = {
-                  reading: 'Reading your inbox.',
-                  balances: 'Updating account balances from bank SMS.',
-                  importing: 'Importing new transfers.',
-                };
                 const res = await syncBankSms(token, undefined, {
                   force: true,
                   userId: user?.id,
                   maxCount: 200,
                   defaultCurrency: user?.default_currency_code || 'USD',
-                  onProgress: (stage, detail) => {
-                    if (stage === 'done') return;
-                    setStatusModal({ title: 'Checking messages…', body: detail || stageText[stage], busy: true });
-                  },
                   onBalancesReady: (updated) => {
                     if (updated > 0) {
                       setWealthReload((n) => n + 1);
@@ -2070,6 +2083,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                 ]
                   .filter(Boolean)
                   .join(' · ');
+                smsStartNoticeRef.current += 1;
                 if (res.paused) {
                   setStatusModal({
                     title: 'Still reading',
@@ -2115,11 +2129,14 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                   });
                 }
               } catch (e) {
+                smsStartNoticeRef.current += 1;
                 setStatusModal({
                   title: 'Could not refresh messages',
                   body: e instanceof Error ? e.message : 'Please try again.',
                   tone: 'tertiary',
                 });
+              } finally {
+                smsSyncingRef.current = false;
               }
             })();
           }}
@@ -2241,6 +2258,8 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               token={token}
               userId={user.id}
               selfInitial={selfInitial}
+              selfAvatarUrl={user.avatar_url}
+              selfAvatarLocalUri={avatarLocalUri}
               locale={user.locale}
               friends={friends}
               openLoanId={chatLoanId}
@@ -2720,6 +2739,10 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               peer={peerProfile}
               isSelf={peerProfile.id === user.id}
               selfInitial={selfInitial}
+              avatarUrl={user.avatar_url}
+              avatarLocalUri={avatarLocalUri}
+              avatarBusy={busy}
+              onChangeAvatar={peerProfile.id === user.id ? () => void onPickAvatar() : undefined}
               onBack={() => setScreen('chats')}
               onMessage={() => {
                 setChatPeerId(peerProfile.id);

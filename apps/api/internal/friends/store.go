@@ -16,18 +16,20 @@ const (
 )
 
 type UserRef struct {
-	ID          uuid.UUID
-	Email       string
-	Username    *string
-	DisplayName string
-	Status      string
-	Verified    bool
+	ID              uuid.UUID
+	Email           string
+	Username        *string
+	DisplayName     string
+	AvatarObjectKey *string
+	Status          string
+	Verified        bool
 }
 
 type SearchHit struct {
 	ID          uuid.UUID `json:"id"`
 	DisplayName string    `json:"display_name"`
 	Username    *string   `json:"username"`
+	AvatarURL   *string   `json:"avatar_url,omitempty"`
 }
 
 type Record struct {
@@ -60,6 +62,7 @@ type PeerHit struct {
 	ID               uuid.UUID `json:"id"`
 	DisplayName      string    `json:"display_name"`
 	Username         *string   `json:"username,omitempty"`
+	AvatarURL        *string   `json:"avatar_url,omitempty"`
 	InteractionCount int       `json:"interaction_count"`
 	Bond             string    `json:"bond"`
 	IsBonded         bool      `json:"is_bonded"`

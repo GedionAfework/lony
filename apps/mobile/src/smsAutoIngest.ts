@@ -14,6 +14,7 @@ import {
   type ParsedSmsTransfer,
   type SmsAccountType,
 } from './smsParse';
+import { rememberSmsMany, type ArchivedSms } from './smsArchive';
 import { notifySmsTransfer } from './smsTransferNotify';
 
 function mapAccountType(t: SmsAccountType): MoneyAccount['account_type'] {
@@ -1002,6 +1003,7 @@ export async function syncBankSms(
     let lastSavedMs = scanMark;
     let importAborted = false;
     const transfers: { parsed: ParsedSmsTransfer; when: number }[] = [];
+    const archiveBuf: ArchivedSms[] = [];
 
     for (const msg of messages) {
       if (!isTransferSms(msg.body)) {
@@ -1016,19 +1018,31 @@ export async function syncBankSms(
       }
       const fp = smsFingerprint(msg.body);
       transfers.push({ parsed: local, when: smsTime(msg) });
-      // Only messages the server confirmed are skipped. Anything that failed or had no
-      // account last time is tried again.
-      if (saved.has(fp)) {
-        alreadySaved++;
-        continue;
-      }
       try {
         // Auto-create missing bank/wallet accounts during sync (Odit-style).
         const resolved = await resolveAccountForSms(token, local, defaultCurrency, accounts, {
-          autoCreate: true,
+          autoCreate: !saved.has(fp),
         });
         accounts = resolved.accounts;
         accountsAdded += resolved.added;
+        if (resolved.accountId) {
+          archiveBuf.push({
+            id: `${fp}:${smsTime(msg) || 0}`,
+            accountId: resolved.accountId,
+            title: local.summaryTitle || (local.kind === 'income' ? 'Money received' : 'Money sent'),
+            body: msg.body,
+            date: smsTime(msg) || Date.now(),
+            amount: local.amount || undefined,
+            currency: (local.currency || defaultCurrency).toUpperCase(),
+            kind: local.kind,
+          });
+        }
+        // Only messages the server confirmed are skipped. Anything that failed or had no
+        // account last time is tried again.
+        if (saved.has(fp)) {
+          alreadySaved++;
+          continue;
+        }
         if (!resolved.accountId) {
           unlinked++;
           skipped++;
@@ -1039,7 +1053,10 @@ export async function syncBankSms(
         lastSavedMs = Math.max(lastSavedMs, smsTime(msg));
         if (processed % 15 === 0) {
           opts?.onProgress?.('importing', `Saving transfers… ${processed} so far`);
-          if (processed > 0) await storeSaved(saved, opts?.userId);
+          if (processed > 0) {
+            await storeSaved(saved, opts?.userId);
+            await rememberSmsMany(archiveBuf, opts?.userId);
+          }
         }
         processed++;
         seen.add(fp);
@@ -1074,6 +1091,7 @@ export async function syncBankSms(
 
     await saveSeen(seen);
     await storeSaved(saved, opts?.userId);
+    await rememberSmsMany(archiveBuf, opts?.userId);
     // A paused pass only records what was actually saved, so the next tap continues.
     const ceiling = importAborted
       ? lastSavedMs

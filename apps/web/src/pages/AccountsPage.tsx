@@ -420,9 +420,6 @@ export function AccountsPage() {
 
       <Card>
         <div className="section-label">Linked banks</div>
-        <div className="muted" style={{ fontSize: 13, marginBottom: 8 }}>
-          {bankStatus?.available ? 'Bank linking is ready — connect an institution to auto-import transactions.' : bankStatus?.message || 'Bank linking is unavailable right now.'}
-        </div>
         {bankConnections.map((c) => (
           <div key={c.id} className="list-row">
             <div className="main">

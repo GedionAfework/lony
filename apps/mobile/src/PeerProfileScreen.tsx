@@ -2,9 +2,10 @@ import { useEffect, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import type { PeerTrust } from './api';
 import { api } from './api';
-import { IconBack } from './icons';
+import { AuthenticatedAvatar } from './AuthenticatedAvatar';
+import { IconBack, IconCamera } from './icons';
 import { t } from './i18n';
-import { fonts, radii, space, useTheme } from './theme';
+import { fonts, space, useTheme } from './theme';
 import { Card, PrimaryButton, SecondaryButton } from './ui';
 import { TrustGradeModal } from './TrustGradeModal';
 
@@ -12,6 +13,7 @@ type Peer = {
   id: string;
   display_name: string;
   username?: string | null;
+  avatar_url?: string | null;
 };
 
 type Props = {
@@ -19,6 +21,10 @@ type Props = {
   peer: Peer;
   isSelf?: boolean;
   selfInitial?: string;
+  avatarUrl?: string | null;
+  avatarLocalUri?: string | null;
+  avatarBusy?: boolean;
+  onChangeAvatar?: () => void;
   onBack: () => void;
   onMessage: () => void;
   onCreateLoan?: () => void;
@@ -29,12 +35,17 @@ export function PeerProfileScreen({
   peer,
   isSelf,
   selfInitial,
+  avatarUrl,
+  avatarLocalUri,
+  avatarBusy,
+  onChangeAvatar,
   onBack,
   onMessage,
   onCreateLoan,
 }: Props) {
   const { colors } = useTheme();
   const avatarLetter = (isSelf ? selfInitial : peer.display_name.slice(0, 1))?.toUpperCase() || '?';
+  const photoPath = isSelf ? avatarUrl ?? peer.avatar_url : peer.avatar_url;
   const [trust, setTrust] = useState<PeerTrust | null>(null);
   const [bondLabel, setBondLabel] = useState<string | null>(null);
   const [gradeOpen, setGradeOpen] = useState(false);
@@ -91,20 +102,42 @@ export function PeerProfileScreen({
       </Pressable>
       <Card>
         <View style={{ alignItems: 'center', gap: 12, paddingVertical: 12 }}>
-          <View
-            style={{
-              width: 72,
-              height: 72,
-              borderRadius: radii.full,
-              backgroundColor: colors.primarySoft,
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
+          <Pressable
+            onPress={isSelf && onChangeAvatar ? onChangeAvatar : undefined}
+            disabled={!isSelf || !onChangeAvatar || avatarBusy}
+            accessibilityRole={isSelf ? 'button' : undefined}
+            accessibilityLabel={isSelf ? t(undefined, 'profile.changePhoto') || 'Change photo' : undefined}
+            style={{ alignItems: 'center' }}
           >
-            <Text style={{ color: colors.primary, fontFamily: fonts.uiBold, fontSize: 28 }}>
-              {avatarLetter}
-            </Text>
-          </View>
+            <View>
+              <AuthenticatedAvatar
+                path={photoPath}
+                localUri={isSelf ? avatarLocalUri : undefined}
+                token={token}
+                size={88}
+                fallbackLetter={avatarLetter}
+              />
+              {isSelf && onChangeAvatar ? (
+                <View
+                  style={{
+                    position: 'absolute',
+                    right: 0,
+                    bottom: 0,
+                    width: 28,
+                    height: 28,
+                    borderRadius: 14,
+                    backgroundColor: colors.primary,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    borderWidth: 2,
+                    borderColor: colors.surface,
+                  }}
+                >
+                  <IconCamera size={13} color={colors.onPrimary} />
+                </View>
+              ) : null}
+            </View>
+          </Pressable>
           <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>
             {isSelf ? 'Self' : peer.display_name}
           </Text>

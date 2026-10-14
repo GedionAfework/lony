@@ -155,7 +155,6 @@ export function InsightsPage() {
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [rates, setRates] = useState<Record<string, number>>({});
   const [insights, setInsights] = useState<AIInsight[]>([]);
-  const [disclaimer, setDisclaimer] = useState('');
   const [coachMsg, setCoachMsg] = useState('');
   const [coachMessages, setCoachMessages] = useState<CoachMessage[]>([]);
   const [coachActions, setCoachActions] = useState<{ label: string; deep_link: string }[]>([]);
@@ -184,7 +183,6 @@ export function InsightsPage() {
         const ai = await api.listAIInsights(token).catch(() => null);
         if (ai) {
           setInsights(ai.insights ?? []);
-          setDisclaimer(ai.disclaimer || '');
         }
         const thread = await api.getCoachThread(token).catch(() => null);
         if (thread?.thread?.messages) setCoachMessages(thread.thread.messages);
@@ -253,7 +251,6 @@ export function InsightsPage() {
     try {
       const [ai, sc] = await Promise.all([api.refreshAIInsights(token, preferred), api.getScore(token, preferred, true)]);
       setInsights(ai.insights ?? []);
-      setDisclaimer(ai.disclaimer || '');
       setLonyScore(sc.score);
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Could not refresh analysis');
@@ -266,7 +263,6 @@ export function InsightsPage() {
     try {
       const res = await api.aiReport(token, preferred, 6);
       setReport(res.report);
-      setDisclaimer(res.report.disclaimer || disclaimer);
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Could not build report');
     } finally {
@@ -288,7 +284,6 @@ export function InsightsPage() {
         onToken: (text) => setCoachMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, content: m.content + text } : m))),
         onReplace: (text) => setCoachMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, content: text } : m))),
         onDone: (coach) => {
-          setDisclaimer(coach.disclaimer || disclaimer);
           setCoachActions(coach.actions ?? []);
           setCoachMessages((prev) => prev.map((m) => (m.id === assistantId ? { ...m, content: coach.reply } : m)));
         },
@@ -511,9 +506,6 @@ export function InsightsPage() {
               ))}
             </div>
           )}
-          <div className="muted" style={{ fontSize: 11, marginTop: 10 }}>
-            {disclaimer || 'Lony insights are educational estimates, not credit scores, investment advice, or guaranteed outcomes.'}
-          </div>
         </Card>
       ) : null}
 
@@ -573,7 +565,6 @@ export function InsightsPage() {
                   </table>
                 </div>
               ))}
-              <div className="muted" style={{ fontSize: 11 }}>{report.disclaimer || disclaimer}</div>
             </div>
           )}
         </Card>
@@ -581,29 +572,6 @@ export function InsightsPage() {
 
       {tab === 'coach' ? (
         <Card>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
-            <div
-              style={{
-                width: 40,
-                height: 40,
-                borderRadius: 14,
-                background: 'var(--primary-soft)',
-                color: 'var(--primary)',
-                display: 'grid',
-                placeItems: 'center',
-                fontWeight: 800,
-                fontSize: 18,
-              }}
-            >
-              ✦
-            </div>
-            <div>
-              <div className="section-label" style={{ margin: 0 }}>Coach</div>
-              <p className="muted" style={{ fontSize: 13, margin: 0 }}>
-                Cut spending, debt health, score tips — never new borrowing.
-              </p>
-            </div>
-          </div>
           {coachMessages.length === 0 ? (
             <div
               style={{
@@ -651,11 +619,6 @@ export function InsightsPage() {
                       border: isUser ? 'none' : '1px solid var(--border)',
                     }}
                   >
-                    {!isUser ? (
-                      <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--primary)', textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 4 }}>
-                        Coach
-                      </div>
-                    ) : null}
                     {isUser ? (
                       <div style={{ fontSize: 14, lineHeight: 1.45 }}>{m.content}</div>
                     ) : m.content ? (
@@ -691,11 +654,8 @@ export function InsightsPage() {
           ) : null}
           <Field label="Your question" value={coachMsg} onChange={setCoachMsg} placeholder="Where can I cut spending?" />
           <Button onClick={onAskCoach} disabled={coachBusy || !coachMsg.trim()} busy={coachBusy}>
-            {coachBusy ? 'Thinking…' : 'Ask Coach'}
+            {coachBusy ? 'Thinking…' : 'Send'}
           </Button>
-          <div className="muted" style={{ fontSize: 11, marginTop: 10 }}>
-            {disclaimer || 'Lony insights are educational estimates, not credit scores, investment advice, or guaranteed outcomes.'}
-          </div>
         </Card>
       ) : null}
     </div>

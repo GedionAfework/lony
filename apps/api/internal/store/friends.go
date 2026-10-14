@@ -6,6 +6,7 @@ import (
 
 	"equilend/api/internal/friends"
 	"equilend/api/internal/store/sqlc"
+	"equilend/api/internal/users"
 
 	"github.com/google/uuid"
 )
@@ -27,11 +28,11 @@ func (s *SQLStore) LookupByEmail(ctx context.Context, email string) (friends.Use
 }
 
 func (s *SQLStore) LookupByPhone(ctx context.Context, phoneE164 string) (friends.UserRef, error) {
-	const q = `SELECT id, email, username, display_name, status, email_verified_at IS NOT NULL
+	const q = `SELECT id, email, username, display_name, avatar_object_key, status, email_verified_at IS NOT NULL
 		FROM users WHERE phone_e164 = $1 AND deleted_at IS NULL`
 	var u friends.UserRef
 	var verified bool
-	err := s.pool.QueryRow(ctx, q, phoneE164).Scan(&u.ID, &u.Email, &u.Username, &u.DisplayName, &u.Status, &verified)
+	err := s.pool.QueryRow(ctx, q, phoneE164).Scan(&u.ID, &u.Email, &u.Username, &u.DisplayName, &u.AvatarObjectKey, &u.Status, &verified)
 	if err != nil {
 		return friends.UserRef{}, err
 	}
@@ -49,7 +50,7 @@ func (s *SQLStore) LookupByUsername(ctx context.Context, username string) (frien
 
 func (s *SQLStore) SearchUsers(ctx context.Context, viewer uuid.UUID, query string) ([]friends.SearchHit, error) {
 	const q = `
-SELECT id, username, display_name
+SELECT id, username, display_name, avatar_object_key
 FROM users
 WHERE deleted_at IS NULL
   AND email_verified_at IS NOT NULL
@@ -77,9 +78,11 @@ LIMIT 20`
 	out := make([]friends.SearchHit, 0)
 	for rows.Next() {
 		var hit friends.SearchHit
-		if err := rows.Scan(&hit.ID, &hit.Username, &hit.DisplayName); err != nil {
+		var key *string
+		if err := rows.Scan(&hit.ID, &hit.Username, &hit.DisplayName, &key); err != nil {
 			return nil, err
 		}
+		hit.AvatarURL = users.AvatarMediaURL(key)
 		out = append(out, hit)
 	}
 	return out, rows.Err()
@@ -238,7 +241,7 @@ merged AS (
   FROM bonded b
   FULL OUTER JOIN loan_peers lp ON lp.peer_id = b.peer_id
 )
-SELECT u.id, u.display_name, u.username, m.interaction_count, m.is_bonded
+SELECT u.id, u.display_name, u.username, u.avatar_object_key, m.interaction_count, m.is_bonded
 FROM merged m
 JOIN users u ON u.id = m.peer_id AND u.deleted_at IS NULL AND u.status = 'active'
 WHERE ($2 = '' OR lower(u.display_name) LIKE '%' || $2 || '%' OR lower(COALESCE(u.username,'')) LIKE $2 || '%')
@@ -252,9 +255,11 @@ LIMIT $3`
 	var out []friends.PeerHit
 	for rows.Next() {
 		var p friends.PeerHit
-		if err := rows.Scan(&p.ID, &p.DisplayName, &p.Username, &p.InteractionCount, &p.IsBonded); err != nil {
+		var key *string
+		if err := rows.Scan(&p.ID, &p.DisplayName, &p.Username, &key, &p.InteractionCount, &p.IsBonded); err != nil {
 			return nil, err
 		}
+		p.AvatarURL = users.AvatarMediaURL(key)
 		p.Bond = friends.BondLevel(p.InteractionCount)
 		out = append(out, p)
 	}
@@ -316,12 +321,13 @@ WHERE id = $1 AND resolved_at IS NULL`, id, resolvedUserID)
 
 func mapUserRef(row sqlc.User) friends.UserRef {
 	return friends.UserRef{
-		ID:          row.ID,
-		Email:       row.Email,
-		Username:    row.Username,
-		DisplayName: row.DisplayName,
-		Status:      row.Status,
-		Verified:    row.EmailVerifiedAt != nil,
+		ID:              row.ID,
+		Email:           row.Email,
+		Username:        row.Username,
+		DisplayName:     row.DisplayName,
+		AvatarObjectKey: row.AvatarObjectKey,
+		Status:          row.Status,
+		Verified:        row.EmailVerifiedAt != nil,
 	}
 }
 

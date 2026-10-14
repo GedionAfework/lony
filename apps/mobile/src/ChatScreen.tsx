@@ -29,7 +29,10 @@ import {
 import { formatMoney } from './amountFormat';
 import { t } from './i18n';
 import { apiBaseUrl, fonts, useTheme, type ThemeColors } from './theme';
+import { AuthenticatedAvatar } from './AuthenticatedAvatar';
 import { IconAttach, IconBack, IconEmoji, IconLoans, IconMic, IconSend } from './icons';
+
+type ChatPeer = { id: string; display_name: string; username?: string | null; avatar_url?: string | null };
 
 const REACTION_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏', '🔥', '👏'];
 const COMPOSER_EMOJIS = [
@@ -42,14 +45,16 @@ type Props = {
   token: string;
   userId: string;
   selfInitial: string;
+  selfAvatarUrl?: string | null;
+  selfAvatarLocalUri?: string | null;
   locale?: string | null;
-  friends: { peer: { id: string; display_name: string; username?: string | null } }[];
+  friends: { peer: ChatPeer }[];
   openLoanId?: string | null;
   openPeerId?: string | null;
   onLoanOpened?: () => void;
   onPeerOpened?: () => void;
   onError: (message: string) => void;
-  onOpenProfile?: (peer: { id: string; display_name: string; username?: string | null }) => void;
+  onOpenProfile?: (peer: ChatPeer) => void;
   onCreateLoanWith?: (peer: { id: string; display_name: string }) => void;
   onOpenLoan?: (loanId: string) => void;
   onActiveChange?: (active: boolean) => void;
@@ -59,6 +64,8 @@ export function ChatScreen({
   token,
   userId,
   selfInitial,
+  selfAvatarUrl,
+  selfAvatarLocalUri,
   locale,
   friends,
   openLoanId,
@@ -427,13 +434,23 @@ export function ChatScreen({
         <Pressable
           style={styles.row}
           onPress={() => openSelfChat()}
-          onLongPress={() => onOpenProfile?.({ id: userId, display_name: 'Self' })}
+          onLongPress={() => onOpenProfile?.({ id: userId, display_name: 'Self', avatar_url: selfAvatarUrl })}
           accessibilityRole="button"
           accessibilityLabel={t(locale, 'chats.self')}
         >
-          <View style={[styles.avatar, { backgroundColor: colors.primarySoft }]}>
-            <Text style={[styles.avatarText, { color: colors.primary }]}>{selfInitial}</Text>
-          </View>
+          <Pressable
+            onPress={() => onOpenProfile?.({ id: userId, display_name: 'Self', avatar_url: selfAvatarUrl })}
+            hitSlop={4}
+          >
+            <AuthenticatedAvatar
+              path={selfAvatarUrl}
+              localUri={selfAvatarLocalUri}
+              token={token}
+              size={46}
+              fallbackLetter={selfInitial}
+              style={{ backgroundColor: colors.primarySoft }}
+            />
+          </Pressable>
           <View style={styles.flex}>
             <Text style={styles.rowTitle}>{t(locale, 'chats.self')}</Text>
           </View>
@@ -447,9 +464,14 @@ export function ChatScreen({
             accessibilityRole="button"
             accessibilityLabel={`Chat with ${f.peer.display_name}`}
           >
-            <View style={styles.avatar}>
-              <Text style={styles.avatarText}>{f.peer.display_name.slice(0, 1).toUpperCase()}</Text>
-            </View>
+            <Pressable onPress={() => onOpenProfile?.(f.peer)} hitSlop={4}>
+              <AuthenticatedAvatar
+                path={f.peer.avatar_url}
+                token={token}
+                size={46}
+                fallbackLetter={f.peer.display_name}
+              />
+            </Pressable>
             <View style={styles.flex}>
               <Text style={styles.rowTitle}>{f.peer.display_name}</Text>
               <Text style={styles.muted}>{t(locale, 'chats.startChat')}</Text>
@@ -478,9 +500,14 @@ export function ChatScreen({
               }}
               onLongPress={() => onOpenProfile?.(c.peer)}
             >
-              <View style={styles.avatar}>
-                <Text style={styles.avatarText}>{c.peer.display_name.slice(0, 1).toUpperCase()}</Text>
-              </View>
+              <Pressable onPress={() => onOpenProfile?.(c.peer)} hitSlop={4}>
+                <AuthenticatedAvatar
+                  path={c.peer.avatar_url}
+                  token={token}
+                  size={46}
+                  fallbackLetter={c.peer.display_name}
+                />
+              </Pressable>
               <View style={styles.flex}>
                 <View style={styles.rowTop}>
                   <View style={styles.nameRow}>
@@ -577,9 +604,14 @@ export function ChatScreen({
           accessibilityRole="button"
           accessibilityLabel={peerTitle}
         >
-          <View style={[styles.headerAvatar, isSelfChat && { backgroundColor: colors.primarySoft }]}>
-            <Text style={[styles.headerAvatarText, isSelfChat && { color: colors.primary }]}>{peerInitial}</Text>
-          </View>
+          <AuthenticatedAvatar
+            path={isSelfChat ? selfAvatarUrl : active.peer.avatar_url}
+            localUri={isSelfChat ? selfAvatarLocalUri : undefined}
+            token={token}
+            size={28}
+            fallbackLetter={peerInitial}
+            style={isSelfChat ? { backgroundColor: colors.primarySoft } : undefined}
+          />
           <Text style={styles.peerBubbleName} numberOfLines={1}>
             {peerTitle}
           </Text>

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, Text, TextInput, View } from 'react-native';
 import { api, type SearchHit } from './api';
+import { AuthenticatedAvatar } from './AuthenticatedAvatar';
 import { fonts, radii, space, useTheme } from './theme';
 
 type Props = {
@@ -92,20 +93,12 @@ export function ChatSearchScreen({ token, onOpenChat, onError }: Props) {
             borderColor: colors.border,
           }}
         >
-          <View
-            style={{
-              width: 44,
-              height: 44,
-              borderRadius: radii.full,
-              backgroundColor: colors.surfaceMuted,
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <Text style={{ color: colors.text, fontFamily: fonts.uiBold, fontSize: 17 }}>
-              {hit.display_name.slice(0, 1).toUpperCase()}
-            </Text>
-          </View>
+          <AuthenticatedAvatar
+            path={hit.avatar_url}
+            token={token}
+            size={44}
+            fallbackLetter={hit.display_name}
+          />
           <View style={{ flex: 1 }}>
             <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>{hit.display_name}</Text>
             {hit.username ? (

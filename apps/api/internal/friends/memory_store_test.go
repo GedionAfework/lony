@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"equilend/api/internal/users"
+
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
@@ -82,7 +84,7 @@ func (m *memoryStore) SearchUsers(_ context.Context, viewer uuid.UUID, query str
 			continue
 		}
 		if u.Email == query || (u.Username != nil && *u.Username == query) || containsFold(u.DisplayName, query) {
-			out = append(out, SearchHit{ID: u.ID, DisplayName: u.DisplayName, Username: u.Username})
+			out = append(out, SearchHit{ID: u.ID, DisplayName: u.DisplayName, Username: u.Username, AvatarURL: users.AvatarMediaURL(u.AvatarObjectKey)})
 		}
 	}
 	return out, nil
