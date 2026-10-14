@@ -15,7 +15,7 @@ import (
 const cashflowSelect = `
 	id, user_id, kind, COALESCE(title, ''), amount::text, currency_code, category, category_id, note,
 	occurred_at, COALESCE(is_template, false), recurrence, next_occurrence_at, template_id, linked_loan_id,
-	account_id, COALESCE(status, 'confirmed'), created_at, updated_at
+	account_id, COALESCE(status, 'confirmed'), COALESCE(paused, false), created_at, updated_at
 `
 
 func (s *SQLStore) InsertCashflow(ctx context.Context, rec expenses.Entry) (expenses.Entry, error) {
@@ -26,11 +26,11 @@ func (s *SQLStore) InsertCashflow(ctx context.Context, rec expenses.Entry) (expe
 	row := s.pool.QueryRow(ctx, `
 		INSERT INTO cashflow_entries (
 			user_id, kind, title, amount, currency_code, category, category_id, note, occurred_at,
-			is_template, recurrence, next_occurrence_at, template_id, linked_loan_id, account_id, status, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+			is_template, recurrence, next_occurrence_at, template_id, linked_loan_id, account_id, status, paused, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
 		RETURNING `+cashflowSelect+`
 	`, rec.UserID, rec.Kind, rec.Title, rec.Amount.StringFixed(expenses.Scale), rec.CurrencyCode, rec.Category, rec.CategoryID, rec.Note, rec.OccurredAt,
-		rec.IsTemplate, rec.Recurrence, rec.NextOccurrenceAt, rec.TemplateID, rec.LinkedLoanID, rec.AccountID, status, rec.CreatedAt, rec.UpdatedAt)
+		rec.IsTemplate, rec.Recurrence, rec.NextOccurrenceAt, rec.TemplateID, rec.LinkedLoanID, rec.AccountID, status, rec.Paused, rec.CreatedAt, rec.UpdatedAt)
 	return scanCashflow(row)
 }
 
@@ -65,6 +65,7 @@ func (s *SQLStore) ListCashflow(ctx context.Context, userID uuid.UUID, q expense
 		clauses = append(clauses, "is_template = $"+itoa(len(args)))
 	} else {
 		clauses = append(clauses, "COALESCE(is_template, false) = false")
+		clauses = append(clauses, "COALESCE(status, 'confirmed') <> 'skipped'")
 	}
 	limit := q.Limit
 	if limit <= 0 {
@@ -101,11 +102,11 @@ func (s *SQLStore) UpdateCashflow(ctx context.Context, rec expenses.Entry) (expe
 	row := s.pool.QueryRow(ctx, `
 		UPDATE cashflow_entries SET
 			title = $3, amount = $4, currency_code = $5, category = $6, category_id = $7, note = $8,
-			occurred_at = $9, is_template = $10, recurrence = $11, next_occurrence_at = $12, account_id = $13, status = $14, updated_at = $15
+			occurred_at = $9, is_template = $10, recurrence = $11, next_occurrence_at = $12, account_id = $13, status = $14, paused = $15, updated_at = $16
 		WHERE id = $1 AND user_id = $2
 		RETURNING `+cashflowSelect+`
 	`, rec.ID, rec.UserID, rec.Title, rec.Amount.StringFixed(expenses.Scale), rec.CurrencyCode, rec.Category, rec.CategoryID, rec.Note,
-		rec.OccurredAt, rec.IsTemplate, rec.Recurrence, rec.NextOccurrenceAt, rec.AccountID, status, rec.UpdatedAt)
+		rec.OccurredAt, rec.IsTemplate, rec.Recurrence, rec.NextOccurrenceAt, rec.AccountID, status, rec.Paused, rec.UpdatedAt)
 	return scanCashflow(row)
 }
 
@@ -315,6 +316,7 @@ func (s *SQLStore) ListDueCashflowTemplates(ctx context.Context, before time.Tim
 		SELECT `+cashflowSelect+`
 		FROM cashflow_entries
 		WHERE is_template = true
+		  AND COALESCE(paused, false) = false
 		  AND recurrence IS NOT NULL
 		  AND next_occurrence_at IS NOT NULL
 		  AND next_occurrence_at <= $1
@@ -360,7 +362,7 @@ func scanCashflow(row scannable) (expenses.Entry, error) {
 	if err := row.Scan(
 		&rec.ID, &rec.UserID, &rec.Kind, &rec.Title, &amount, &rec.CurrencyCode, &rec.Category, &rec.CategoryID, &rec.Note,
 		&rec.OccurredAt, &rec.IsTemplate, &rec.Recurrence, &rec.NextOccurrenceAt, &rec.TemplateID, &rec.LinkedLoanID,
-		&rec.AccountID, &rec.Status, &rec.CreatedAt, &rec.UpdatedAt,
+		&rec.AccountID, &rec.Status, &rec.Paused, &rec.CreatedAt, &rec.UpdatedAt,
 	); err != nil {
 		return expenses.Entry{}, err
 	}

@@ -19,6 +19,7 @@ const (
 
 	StatusExpected  = "expected"
 	StatusConfirmed = "confirmed"
+	StatusSkipped   = "skipped"
 )
 
 type Category struct {
@@ -58,6 +59,7 @@ type Entry struct {
 	LinkedLoanID     *uuid.UUID
 	AccountID        *uuid.UUID
 	Status           string
+	Paused           bool
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 }
@@ -79,6 +81,7 @@ type EntryDTO struct {
 	LinkedLoanID     *uuid.UUID `json:"linked_loan_id,omitempty"`
 	AccountID        *uuid.UUID `json:"account_id,omitempty"`
 	Status           string     `json:"status"`
+	Paused           bool       `json:"paused"`
 	CreatedAt        time.Time  `json:"created_at"`
 	UpdatedAt        time.Time  `json:"updated_at"`
 }
@@ -223,6 +226,7 @@ func toDTO(rec Entry) EntryDTO {
 		LinkedLoanID:     rec.LinkedLoanID,
 		AccountID:        rec.AccountID,
 		Status:           status,
+		Paused:           rec.Paused,
 		CreatedAt:        rec.CreatedAt,
 		UpdatedAt:        rec.UpdatedAt,
 	}

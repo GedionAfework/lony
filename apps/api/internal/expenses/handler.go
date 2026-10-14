@@ -257,6 +257,77 @@ func (h *Handler) Receive(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"entry": out})
 }
 
+func (h *Handler) ListBills(w http.ResponseWriter, r *http.Request) {
+	days := 60
+	if raw := strings.TrimSpace(r.URL.Query().Get("days")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil {
+			days = n
+		}
+	}
+	out, err := h.svc.ListBills(r.Context(), auth.UserIDFrom(r.Context()), days)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"bills": out})
+}
+
+type postponeBody struct {
+	Days int `json:"days"`
+}
+
+func (h *Handler) Skip(w http.ResponseWriter, r *http.Request) {
+	id, err := parseEntryID(r)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	out, err := h.svc.Skip(r.Context(), auth.UserIDFrom(r.Context()), id)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"bill": out})
+}
+
+func (h *Handler) Postpone(w http.ResponseWriter, r *http.Request) {
+	id, err := parseEntryID(r)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	var body postponeBody
+	_ = httpx.Decode(r, &body)
+	out, err := h.svc.Postpone(r.Context(), auth.UserIDFrom(r.Context()), id, body.Days)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"bill": out})
+}
+
+func (h *Handler) Pause(w http.ResponseWriter, r *http.Request) {
+	h.setPaused(w, r, true)
+}
+
+func (h *Handler) Resume(w http.ResponseWriter, r *http.Request) {
+	h.setPaused(w, r, false)
+}
+
+func (h *Handler) setPaused(w http.ResponseWriter, r *http.Request, paused bool) {
+	id, err := parseEntryID(r)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	out, err := h.svc.SetPaused(r.Context(), auth.UserIDFrom(r.Context()), id, paused)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"bill": out})
+}
+
 func (h *Handler) ListCategories(w http.ResponseWriter, r *http.Request) {
 	out, err := h.svc.ListCategories(r.Context(), auth.UserIDFrom(r.Context()), r.URL.Query().Get("kind"))
 	if err != nil {

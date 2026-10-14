@@ -517,6 +517,12 @@ func (s *Service) Receive(ctx context.Context, userID, id uuid.UUID, accountID *
 		return EntryDTO{}, err
 	}
 	now := s.now().UTC()
+	if rec.Paused {
+		return EntryDTO{}, httpx.E(http.StatusUnprocessableEntity, "PAUSED", "this bill is paused")
+	}
+	if rec.Status == StatusSkipped {
+		return EntryDTO{}, httpx.E(http.StatusUnprocessableEntity, "SKIPPED", "this cycle was skipped")
+	}
 	if rec.IsTemplate {
 		amt := rec.Amount
 		if amountOverride != nil {

@@ -3,6 +3,7 @@ import { Modal, Pressable, Text, View } from 'react-native';
 import {
   api,
   type Budget,
+  type CashflowBill,
   type CashflowEntry,
   type CashflowSummary,
   type CategorySpend,
@@ -94,7 +95,7 @@ export function displayCashflowNote(entry: CashflowEntry): string | null {
   return first.slice(0, 120);
 }
 
-export type ExpensesTab = 'dashboard' | 'income' | 'expenses';
+export type ExpensesTab = 'dashboard' | 'income' | 'expenses' | 'bills';
 
 type Props = {
   user: User;
@@ -157,6 +158,26 @@ function loanRemaining(loan: Loan): number {
   return Number(loan.expected_total || loan.principal || 0);
 }
 
+function billAsEntry(b: CashflowBill): CashflowEntry {
+  return {
+    id: b.id,
+    kind: b.kind,
+    title: b.title,
+    amount: b.amount,
+    currency_code: b.currency_code,
+    category: b.category,
+    occurred_at: b.due_at,
+    is_template: b.is_template,
+    recurrence: b.recurrence,
+    template_id: b.template_id,
+    account_id: b.account_id,
+    status: 'expected',
+    paused: b.paused,
+    created_at: b.due_at,
+    updated_at: b.due_at,
+  };
+}
+
 export function ExpensesScreen({
   user,
   token,
@@ -180,6 +201,8 @@ export function ExpensesScreen({
   const [expenseRows, setExpenseRows] = useState<CashflowEntry[]>([]);
   const [incomeTemplates, setIncomeTemplates] = useState<CashflowEntry[]>([]);
   const [expenseTemplates, setExpenseTemplates] = useState<CashflowEntry[]>([]);
+  const [bills, setBills] = useState<CashflowBill[]>([]);
+  const [billBusy, setBillBusy] = useState<string | null>(null);
   const [breakdown, setBreakdown] = useState<CategorySpend[]>([]);
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const [budgetCategory, setBudgetCategory] = useState('');
@@ -209,7 +232,7 @@ export function ExpensesScreen({
       setLoadError(null);
       const from = new Date(`${period.from}T00:00:00`).toISOString();
       const to = new Date(`${period.to}T00:00:00`).toISOString();
-      const [sum, inc, exp, incT, expT, breakRes, budgetRes] = await Promise.all([
+      const [sum, inc, exp, incT, expT, breakRes, budgetRes, billsRes] = await Promise.all([
         api.cashflowSummary(token, { from, to }),
         api.listCashflow(token, { kind: 'income', from, to, limit: 2000 }),
         api.listCashflow(token, { kind: 'expense', from, to, limit: 2000 }),
@@ -217,6 +240,7 @@ export function ExpensesScreen({
         api.listCashflow(token, { kind: 'expense', templates: true }),
         api.cashflowBreakdown(token, { kind: 'expense', from, to }).catch(() => ({ breakdown: [] })),
         api.listBudgets(token, period.from).catch(() => ({ budgets: [] })),
+        api.listCashflowBills(token, 90).catch(() => ({ bills: [] })),
       ]);
       setSummary(sum.summary);
       setIncome(inc.entries ?? []);
@@ -225,6 +249,7 @@ export function ExpensesScreen({
       setExpenseTemplates(expT.entries ?? []);
       setBreakdown(breakRes.breakdown ?? []);
       setBudgets(budgetRes.budgets ?? []);
+      setBills(billsRes.bills ?? []);
       setDrafts(await listCashflowDrafts());
     } catch (e) {
       const message = formatError(e, t(user.locale, 'expenses.loadErrorFallback'));
@@ -269,18 +294,18 @@ export function ExpensesScreen({
     const today = new Date();
     const start = today.toISOString().slice(0, 10);
     const horizon = new Date(today.getTime() + 45 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    const expected = [...income, ...expenseRows]
-      .filter((e) => e.status === 'expected' && !e.is_template)
-      .map((e) => ({
-        id: e.id,
+    const expected = bills
+      .filter((b) => !b.paused)
+      .map((b) => ({
+        id: b.id,
         title:
-          e.title ||
-          (e.kind === 'income' ? t(user.locale, 'expenses.expectedIncome') : t(user.locale, 'expenses.expectedBill')),
-        amount: e.amount,
-        currency: e.currency_code,
-        at: localDay(e.occurred_at),
+          b.title ||
+          (b.kind === 'income' ? t(user.locale, 'expenses.expectedIncome') : t(user.locale, 'expenses.expectedBill')),
+        amount: b.amount,
+        currency: b.currency_code,
+        at: localDay(b.due_at),
         type: 'cashflow' as const,
-        entry: e,
+        entry: billAsEntry(b),
         loanId: null as string | null,
       }));
     const dues = loans
@@ -304,7 +329,7 @@ export function ExpensesScreen({
       .filter((b) => b.at >= start && b.at <= horizon)
       .sort((a, b) => a.at.localeCompare(b.at))
       .slice(0, 12);
-  }, [income, expenseRows, loans, preferred, user.locale]);
+  }, [bills, loans, preferred, user.locale]);
 
   async function syncDrafts() {
     if (!drafts.length) return;
@@ -331,6 +356,22 @@ export function ExpensesScreen({
       setDrafts(await listCashflowDrafts());
     } finally {
       setDraftBusy(false);
+    }
+  }
+
+  async function onBillAction(id: string, action: 'record' | 'skip' | 'postpone' | 'pause' | 'resume') {
+    setBillBusy(`${id}:${action}`);
+    try {
+      if (action === 'record') await api.receiveCashflow(token, id);
+      else if (action === 'skip') await api.skipCashflow(token, id);
+      else if (action === 'postpone') await api.postponeCashflow(token, id, 7);
+      else if (action === 'pause') await api.pauseCashflow(token, id);
+      else await api.resumeCashflow(token, id);
+      await reload();
+    } catch (e) {
+      onError(formatError(e, t(user.locale, 'expenses.billActionError')));
+    } finally {
+      setBillBusy(null);
     }
   }
 
@@ -606,11 +647,12 @@ export function ExpensesScreen({
         </Pressable>
       </Modal>
 
-      <View style={{ flexDirection: 'row', gap: 8 }}>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
         {([
           ['dashboard', 'expenses.tabDashboard'],
           ['income', 'expenses.tabIncome'],
           ['expenses', 'expenses.tabExpenses'],
+          ['bills', 'expenses.tabBills'],
         ] as const).map(([id, key]) => {
           const active = tab === id;
           const label = t(user.locale, key);
@@ -619,7 +661,8 @@ export function ExpensesScreen({
               key={id}
               onPress={() => onTab(id)}
               style={{
-                flex: 1,
+                flexGrow: 1,
+                flexBasis: '22%',
                 minHeight: 40,
                 borderRadius: radii.full,
                 alignItems: 'center',
@@ -627,9 +670,10 @@ export function ExpensesScreen({
                 backgroundColor: active ? colors.primary : colors.surfaceMuted,
                 borderWidth: 1,
                 borderColor: active ? colors.primary : colors.border,
+                paddingHorizontal: 6,
               }}
             >
-              <Text style={{ color: active ? colors.onPrimary : colors.text, fontFamily: fonts.uiSemi, fontSize: 13 }}>
+              <Text style={{ color: active ? colors.onPrimary : colors.text, fontFamily: fonts.uiSemi, fontSize: 12 }}>
                 {label}
               </Text>
             </Pressable>
@@ -948,6 +992,33 @@ export function ExpensesScreen({
         </>
       ) : null}
 
+      {tab === 'bills' ? (
+        <Card>
+          <SectionLabel>{t(user.locale, 'expenses.tabBills')}</SectionLabel>
+          <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13, marginBottom: 4 }}>
+            {t(user.locale, 'expenses.billsHint')}
+          </Text>
+          {bills.length === 0 ? (
+            <EmptyState
+              title={t(user.locale, 'expenses.billsEmptyTitle')}
+              body={t(user.locale, 'expenses.billsEmptyBody')}
+            />
+          ) : (
+            bills.map((bill) => (
+              <BillRow
+                key={bill.id}
+                bill={bill}
+                locale={user.locale}
+                formatMoney={formatMoney}
+                busy={billBusy}
+                onOpen={() => onOpenEntry(billAsEntry(bill))}
+                onAction={(action) => void onBillAction(bill.id, action)}
+              />
+            ))
+          )}
+        </Card>
+      ) : null}
+
       {tab === 'income' || tab === 'expenses' ? (
         <Card>
           <SectionLabel>
@@ -1000,6 +1071,128 @@ function Mini({
     >
       <Text style={{ color: colors.muted, fontFamily: fonts.uiMedium, fontSize: 12 }}>{label}</Text>
       <Money value={value} size="md" tone={tone} />
+    </View>
+  );
+}
+
+function BillChip({
+  label,
+  onPress,
+  disabled,
+}: {
+  label: string;
+  onPress: () => void;
+  disabled?: boolean;
+}) {
+  const { colors } = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={disabled}
+      accessibilityRole="button"
+      style={{
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: radii.full,
+        backgroundColor: colors.surfaceMuted,
+        borderWidth: 1,
+        borderColor: colors.border,
+        opacity: disabled ? 0.45 : 1,
+      }}
+    >
+      <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 12 }}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function BillRow({
+  bill,
+  locale,
+  formatMoney,
+  busy,
+  onOpen,
+  onAction,
+}: {
+  bill: CashflowBill;
+  locale?: string | null;
+  formatMoney: (amount: string | null | undefined, currency: string | null | undefined, locale?: string) => string;
+  busy: string | null;
+  onOpen: () => void;
+  onAction: (action: 'record' | 'skip' | 'postpone' | 'pause' | 'resume') => void;
+}) {
+  const { colors } = useTheme();
+  const formatDate = useFormatDate();
+  const dueLabel = formatDate(bill.due_at);
+  const income = bill.kind === 'income';
+  const locked = Boolean(busy);
+  const statusLabel = bill.paused
+    ? t(locale, 'expenses.billPaused')
+    : bill.status === 'overdue'
+      ? t(locale, 'expenses.billOverdue')
+      : bill.status === 'expected'
+        ? t(locale, 'expenses.actionExpected')
+        : t(locale, 'expenses.billUpcoming');
+  return (
+    <View
+      style={{
+        paddingVertical: 12,
+        borderBottomWidth: 1,
+        borderBottomColor: colors.border,
+        gap: 8,
+      }}
+    >
+      <Pressable onPress={onOpen} style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 8 }}>
+        <View style={{ flex: 1, gap: 2 }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14, flexShrink: 1 }} numberOfLines={1}>
+              {bill.title || bill.category}
+            </Text>
+            {bill.recurrence ? <IconRepeat size={12} color={colors.muted} /> : null}
+          </View>
+          <Text style={{ color: bill.status === 'overdue' ? colors.warning : colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
+            {statusLabel}
+            {bill.category ? ` · ${bill.category}` : ''}
+            {` · ${dueLabel}`}
+            {bill.recurrence ? ` · ${bill.recurrence}` : ''}
+          </Text>
+        </View>
+        <Text
+          style={{
+            color: income ? colors.success : colors.text,
+            fontFamily: fonts.uiSemi,
+            fontSize: 14,
+          }}
+        >
+          {income ? '+' : '−'}
+          {formatMoney(bill.amount, bill.currency_code, locale ?? undefined)}
+        </Text>
+      </Pressable>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+        {bill.paused ? (
+          <BillChip
+            label={t(locale, 'expenses.billResume')}
+            disabled={locked}
+            onPress={() => onAction('resume')}
+          />
+        ) : (
+          <>
+            <BillChip
+              label={income ? t(locale, 'expenses.actionReceived') : t(locale, 'expenses.billRecord')}
+              disabled={locked}
+              onPress={() => onAction('record')}
+            />
+            <BillChip label={t(locale, 'expenses.billSkip')} disabled={locked} onPress={() => onAction('skip')} />
+            <BillChip
+              label={t(locale, 'expenses.billPostpone')}
+              disabled={locked}
+              onPress={() => onAction('postpone')}
+            />
+            {bill.recurrence || bill.is_template ? (
+              <BillChip label={t(locale, 'expenses.billPause')} disabled={locked} onPress={() => onAction('pause')} />
+            ) : null}
+          </>
+        )}
+      </View>
     </View>
   );
 }

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Repeat } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
-import { api, type Budget, type CashflowEntry, type CashflowSummary, type CategorySpend, type Loan, type WealthSummary } from '../lib/api';
+import { api, type Budget, type CashflowBill, type CashflowEntry, type CashflowSummary, type CategorySpend, type Loan, type WealthSummary } from '../lib/api';
 import { formatMoney, stripAmount } from '../lib/format';
 import { Card } from '../components/Card';
 import { Money } from '../components/Money';
@@ -12,7 +12,7 @@ import { EmptyState } from '../components/EmptyState';
 import { Field, SelectField } from '../components/Field';
 import { useToast } from '../components/Toast';
 
-type Tab = 'dashboard' | 'income' | 'expenses';
+type Tab = 'dashboard' | 'income' | 'expenses' | 'bills';
 
 function monthBounds(d: Date) {
   const from = new Date(Date.UTC(d.getFullYear(), d.getMonth(), 1));
@@ -42,6 +42,8 @@ export function HomePage() {
   const [expenseRows, setExpenseRows] = useState<CashflowEntry[]>([]);
   const [incomeTemplates, setIncomeTemplates] = useState<CashflowEntry[]>([]);
   const [expenseTemplates, setExpenseTemplates] = useState<CashflowEntry[]>([]);
+  const [bills, setBills] = useState<CashflowBill[]>([]);
+  const [billBusy, setBillBusy] = useState<string | null>(null);
   const [breakdown, setBreakdown] = useState<CategorySpend[]>([]);
   const [budgets, setBudgets] = useState<Budget[]>([]);
   const [loans, setLoans] = useState<Loan[]>([]);
@@ -61,7 +63,7 @@ export function HomePage() {
   const reload = useCallback(async () => {
     if (!token) return;
     try {
-      const [sum, inc, exp, incT, expT, wealthRes, breakRes, budgetRes, loanRes] = await Promise.all([
+      const [sum, inc, exp, incT, expT, wealthRes, breakRes, budgetRes, loanRes, billsRes] = await Promise.all([
         api.cashflowSummary(token, { from: period.from, to: period.to }),
         api.listCashflow(token, { kind: 'income', from: period.from, to: period.to }),
         api.listCashflow(token, { kind: 'expense', from: period.from, to: period.to }),
@@ -71,6 +73,7 @@ export function HomePage() {
         api.cashflowBreakdown(token, { kind: 'expense', from: period.from, to: period.to }).catch(() => ({ breakdown: [] })),
         api.listBudgets(token, period.from).catch(() => ({ budgets: [] })),
         api.listLoans(token).catch(() => ({ loans: [] })),
+        api.listCashflowBills(token, 90).catch(() => ({ bills: [] })),
       ]);
       setSummary(sum.summary);
       setIncome(inc.entries ?? []);
@@ -81,6 +84,7 @@ export function HomePage() {
       setBreakdown(breakRes.breakdown ?? []);
       setBudgets(budgetRes.budgets ?? []);
       setLoans(loanRes.loans ?? []);
+      setBills(billsRes.bills ?? []);
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Could not load dashboard');
     }
@@ -105,16 +109,16 @@ export function HomePage() {
     const today = new Date();
     const start = today.toISOString().slice(0, 10);
     const horizon = new Date(today.getTime() + 45 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-    const expected = [...income, ...expenseRows]
-      .filter((e) => e.status === 'expected' && !e.is_template)
-      .map((e) => ({
-        id: e.id,
-        title: e.title || (e.kind === 'income' ? 'Expected income' : 'Expected bill'),
-        amount: e.amount,
-        currency: e.currency_code,
-        at: e.occurred_at.slice(0, 10),
+    const expected = bills
+      .filter((b) => !b.paused)
+      .map((b) => ({
+        id: b.id,
+        title: b.title || (b.kind === 'income' ? 'Expected income' : 'Expected bill'),
+        amount: b.amount,
+        currency: b.currency_code,
+        at: b.due_at.slice(0, 10),
         type: 'cashflow' as const,
-        entryId: e.id as string | null,
+        entryId: b.id as string | null,
         loanId: null as string | null,
       }));
     const dues = loans
@@ -130,7 +134,7 @@ export function HomePage() {
         loanId: l.id,
       }));
     return [...expected, ...dues].filter((b) => b.at >= start && b.at <= horizon).sort((a, b) => a.at.localeCompare(b.at)).slice(0, 8);
-  }, [income, expenseRows, loans, preferred]);
+  }, [bills, loans, preferred]);
 
   const list = tab === 'income' ? income : expenseRows;
   const templates = tab === 'income' ? incomeTemplates : expenseTemplates;
@@ -176,6 +180,23 @@ export function HomePage() {
       showError(e instanceof Error ? e.message : 'Could not save budget');
     } finally {
       setBudgetBusy(false);
+    }
+  }
+
+  async function onBillAction(id: string, action: 'record' | 'skip' | 'postpone' | 'pause' | 'resume') {
+    if (!token) return;
+    setBillBusy(`${id}:${action}`);
+    try {
+      if (action === 'record') await api.receiveCashflow(token, id);
+      else if (action === 'skip') await api.skipCashflow(token, id);
+      else if (action === 'postpone') await api.postponeCashflow(token, id, 7);
+      else if (action === 'pause') await api.pauseCashflow(token, id);
+      else await api.resumeCashflow(token, id);
+      await reload();
+    } catch (e) {
+      showError(e instanceof Error ? e.message : 'Could not update this bill');
+    } finally {
+      setBillBusy(null);
     }
   }
 
@@ -234,6 +255,7 @@ export function HomePage() {
           { id: 'dashboard', label: 'Dashboard' },
           { id: 'income', label: 'Income' },
           { id: 'expenses', label: 'Expenses' },
+          { id: 'bills', label: 'Bills' },
         ]}
       />
 
@@ -410,6 +432,64 @@ export function HomePage() {
             </Card>
           </div>
         </div>
+      ) : tab === 'bills' ? (
+        <Card>
+          <div className="section-label">Bills & subscriptions</div>
+          <div className="muted" style={{ fontSize: 13, marginBottom: 8 }}>
+            Record, skip, or postpone the next cycle. Pause a subscription until you resume it. Reminders go out 3 days and 1 day before due.
+          </div>
+          {bills.length === 0 ? (
+            <EmptyState title="No bills on the calendar" body="Add a repeating income or expense and it will show here." />
+          ) : (
+            bills.map((bill) => {
+              const locked = Boolean(billBusy);
+              const status =
+                bill.paused ? 'Paused' : bill.status === 'overdue' ? 'Overdue' : bill.status === 'expected' ? 'Expected' : 'Upcoming';
+              return (
+                <div key={bill.id} className="flex-col" style={{ gap: 8, padding: '12px 0', borderBottom: '1px solid var(--border)' }}>
+                  <div className="list-row clickable-row" onClick={() => navigate(`/cashflow/${bill.id}`)}>
+                    <div className="main">
+                      <div className="title flex-row" style={{ gap: 6 }}>
+                        {bill.title || bill.category}
+                        {bill.recurrence ? <Repeat size={11} /> : null}
+                      </div>
+                      <div className="sub">
+                        {status}
+                        {bill.category ? ` · ${bill.category}` : ''} · {new Date(bill.due_at).toLocaleDateString(locale, { month: 'short', day: 'numeric' })}
+                        {bill.recurrence ? ` · ${bill.recurrence}` : ''}
+                      </div>
+                    </div>
+                    <Money value={bill.amount} currency={bill.currency_code} size="sm" tone={bill.kind === 'income' ? 'positive' : undefined} locale={locale} />
+                  </div>
+                  <div className="flex-row" style={{ flexWrap: 'wrap', gap: 8 }}>
+                    {bill.paused ? (
+                      <Button size="sm" variant="secondary" busy={locked} onClick={() => void onBillAction(bill.id, 'resume')}>
+                        Resume
+                      </Button>
+                    ) : (
+                      <>
+                        <Button size="sm" busy={locked} onClick={() => void onBillAction(bill.id, 'record')}>
+                          {bill.kind === 'income' ? 'Received' : 'Record'}
+                        </Button>
+                        <Button size="sm" variant="secondary" busy={locked} onClick={() => void onBillAction(bill.id, 'skip')}>
+                          Skip
+                        </Button>
+                        <Button size="sm" variant="secondary" busy={locked} onClick={() => void onBillAction(bill.id, 'postpone')}>
+                          Postpone 7d
+                        </Button>
+                        {bill.recurrence || bill.is_template ? (
+                          <Button size="sm" variant="ghost" busy={locked} onClick={() => void onBillAction(bill.id, 'pause')}>
+                            Pause
+                          </Button>
+                        ) : null}
+                      </>
+                    )}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </Card>
       ) : (
         <Card>
           <div className="card-row">

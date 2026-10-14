@@ -747,6 +747,29 @@ export const api = {
       headers: { 'Idempotency-Key': idemKey('cashflow-receive') },
       body: body ? JSON.stringify(body) : undefined,
     }, token),
+  listCashflowBills: (token: string, days = 90) =>
+    request<{ bills: CashflowBill[] }>(`/cashflow/bills?days=${days}`, { method: 'GET' }, token),
+  skipCashflow: (token: string, id: string) =>
+    request<{ bill: CashflowBill }>(`/cashflow/${id}/skip`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('cashflow-skip') },
+    }, token),
+  postponeCashflow: (token: string, id: string, days = 7) =>
+    request<{ bill: CashflowBill }>(`/cashflow/${id}/postpone`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('cashflow-postpone') },
+      body: JSON.stringify({ days }),
+    }, token),
+  pauseCashflow: (token: string, id: string) =>
+    request<{ bill: CashflowBill }>(`/cashflow/${id}/pause`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('cashflow-pause') },
+    }, token),
+  resumeCashflow: (token: string, id: string) =>
+    request<{ bill: CashflowBill }>(`/cashflow/${id}/resume`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('cashflow-resume') },
+    }, token),
   shareCashflow: (token: string, id: string, body: ShareCashflowBody) =>
     request<{ entry: CashflowEntry; loan: Loan }>(`/cashflow/${id}/share`, {
       method: 'POST',
@@ -1049,9 +1072,26 @@ export type CashflowEntry = {
   template_id?: string | null;
   linked_loan_id?: string | null;
   account_id?: string | null;
-  status?: 'expected' | 'confirmed';
+  status?: 'expected' | 'confirmed' | 'skipped';
+  paused?: boolean;
   created_at: string;
   updated_at: string;
+};
+
+export type CashflowBill = {
+  id: string;
+  kind: 'income' | 'expense' | 'outcome';
+  title: string;
+  amount: string;
+  currency_code: string;
+  category: string;
+  due_at: string;
+  recurrence?: 'weekly' | 'monthly' | 'yearly' | null;
+  paused: boolean;
+  status: 'expected' | 'upcoming' | 'overdue' | 'paused';
+  account_id?: string | null;
+  template_id?: string | null;
+  is_template: boolean;
 };
 
 export type CashflowCategory = {
