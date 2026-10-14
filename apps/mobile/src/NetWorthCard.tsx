@@ -138,7 +138,8 @@ export function NetWorthCard({ token, wealth, currency, locale, formatMoney, onO
       const key = name.toLowerCase();
       const cur = map.get(key) || { name, count: 0, balance: 0, types: new Set<string>() };
       cur.count += 1;
-      cur.balance += Number(a.balance) || 0;
+      const signed = a.account_type === 'credit_card' ? -(Number(a.balance) || 0) : Number(a.balance) || 0;
+      cur.balance += signed;
       cur.types.add(a.account_type);
       map.set(key, cur);
     }

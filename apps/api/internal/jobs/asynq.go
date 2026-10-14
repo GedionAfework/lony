@@ -19,12 +19,17 @@ const (
 	TypeTickReminders  = "lony:tick_reminders"
 	TypeTickReconcile  = "lony:tick_reconcile"
 	TypeTickBalance    = "lony:tick_balance"
-	TypeTickCashflow    = "lony:tick_cashflow"
-	TypeTickGoalPrices  = "lony:tick_goal_prices"
+	TypeTickCashflow   = "lony:tick_cashflow"
+	TypeTickGoalPrices = "lony:tick_goal_prices"
 )
 
 type CashflowTicker interface {
 	MaterializeDue(ctx context.Context) (int, error)
+	CheckBudgetAlerts(ctx context.Context) (int, error)
+}
+
+type CreditCardTicker interface {
+	TickCreditCards(ctx context.Context) (int, error)
 }
 
 type GoalPriceTicker interface {
@@ -37,6 +42,7 @@ type Handlers struct {
 	Balance  *reconcile.Service
 	Cashflow CashflowTicker
 	Goals    GoalPriceTicker
+	Cards    CreditCardTicker
 }
 
 func NewServer(redisURL string) *asynq.Server {
@@ -120,6 +126,18 @@ func (h Handlers) handleCashflow(ctx context.Context, _ *asynq.Task) error {
 	}
 	if n > 0 {
 		log.Printf("asynq: materialized %d periodic income entr(y/ies)", n)
+	}
+	if alerts, err := h.Cashflow.CheckBudgetAlerts(ctx); err != nil {
+		return err
+	} else if alerts > 0 {
+		log.Printf("asynq: sent %d budget alert(s)", alerts)
+	}
+	if h.Cards != nil {
+		if n, err := h.Cards.TickCreditCards(ctx); err != nil {
+			return err
+		} else if n > 0 {
+			log.Printf("asynq: posted %d credit-card installment(s)", n)
+		}
 	}
 	return nil
 }

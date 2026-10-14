@@ -4,7 +4,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import * as WebBrowser from 'expo-web-browser';
-import { api, type AccountReconcile, type BankLinkConnection, type BankLinkStatus, type MoneyAccount, type User } from './api';
+import { api, type AccountReconcile, type BankLinkConnection, type BankLinkStatus, type CardInstallment, type MoneyAccount, type User } from './api';
 import { listSmsForAccount, type ArchivedSms } from './smsArchive';
 import { stripAmount } from './amountFormat';
 import type { CatalogOption } from './catalogs';
@@ -33,6 +33,7 @@ const FALLBACK_ACCOUNT_TYPES: CatalogOption[] = [
   { id: 'cash', label: 'Cash', keywords: 'cash' },
   { id: 'mobile_money', label: 'Mobile money', keywords: 'mobile money momo' },
   { id: 'wallet', label: 'Wallet', keywords: 'wallet fintech' },
+  { id: 'credit_card', label: 'Credit card', keywords: 'credit card visa mastercard' },
   { id: 'other', label: 'Other', keywords: 'other' },
 ];
 
@@ -48,6 +49,7 @@ const ACCOUNT_TYPE_LABEL_KEYS: Record<string, string> = {
   cash: 'accounts.typeCash',
   mobile_money: 'accounts.typeMobileMoney',
   wallet: 'accounts.typeWallet',
+  credit_card: 'accounts.typeCreditCard',
   other: 'accounts.typeOther',
 };
 
@@ -67,6 +69,21 @@ function localizeOptionLabels(
 
 function defaultCurrency(user: User): string {
   return (user.default_currency_code || 'USD').toUpperCase();
+}
+
+function parseMonthDay(raw: string): number | null | 'invalid' {
+  const s = raw.trim();
+  if (!s) return null;
+  const n = Number(s);
+  if (!Number.isInteger(n) || n < 1 || n > 28) return 'invalid';
+  return n;
+}
+
+function formatShortDate(iso: string | null | undefined, locale?: string | null): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso.slice(0, 10);
+  return d.toLocaleDateString(locale || undefined, { month: 'short', day: 'numeric' });
 }
 
 function mergeOptions(primary: CatalogOption[], fallback: CatalogOption[]): CatalogOption[] {
@@ -109,6 +126,15 @@ export function AccountsScreen({
   const [balance, setBalance] = useState('0');
   const [interest, setInterest] = useState('');
   const [compounding, setCompounding] = useState('none');
+  const [creditLimit, setCreditLimit] = useState('');
+  const [statementDay, setStatementDay] = useState('');
+  const [dueDay, setDueDay] = useState('');
+  const [installAccount, setInstallAccount] = useState<MoneyAccount | null>(null);
+  const [installments, setInstallments] = useState<CardInstallment[]>([]);
+  const [instMerchant, setInstMerchant] = useState('');
+  const [instTotal, setInstTotal] = useState('');
+  const [instMonths, setInstMonths] = useState('12');
+  const [instMonthly, setInstMonthly] = useState('');
   const [newBalance, setNewBalance] = useState('');
   const [transferOpen, setTransferOpen] = useState(false);
   const [fromId, setFromId] = useState('');
@@ -264,6 +290,9 @@ export function AccountsScreen({
     setBalance('0');
     setInterest('');
     setCompounding('none');
+    setCreditLimit('');
+    setStatementDay('');
+    setDueDay('');
     setCreating(false);
     setEditId(null);
   }
@@ -290,6 +319,9 @@ export function AccountsScreen({
     setAccountType(a.account_type);
     setInterest(a.interest_rate_percent || '');
     setCompounding(a.compounding || 'none');
+    setCreditLimit(a.credit_limit || '');
+    setStatementDay(a.statement_day ? String(a.statement_day) : '');
+    setDueDay(a.due_day ? String(a.due_day) : '');
     setCurrency(a.currency_code);
     const label = (a.institution_label || '').trim();
     const opts = mergeOptions([], institutionsForAccountType(a.account_type));
@@ -316,6 +348,13 @@ export function AccountsScreen({
     }
     setBusy(true);
     try {
+      const stmt = parseMonthDay(statementDay);
+      const due = parseMonthDay(dueDay);
+      if (accountType === 'credit_card' && (stmt === 'invalid' || due === 'invalid')) {
+        onError(t(user.locale, 'accounts.dayInvalid'));
+        setBusy(false);
+        return;
+      }
       const name = accountDisplayName(accountType, institutionLabel);
       await api.createAccount(token, {
         name,
@@ -325,6 +364,9 @@ export function AccountsScreen({
         interest_rate_percent: stripAmount(interest) || undefined,
         compounding: interest.trim() ? (compounding as 'none' | 'monthly' | 'yearly') : undefined,
         institution_label: institutionLabel.trim() || undefined,
+        credit_limit: accountType === 'credit_card' ? stripAmount(creditLimit) || undefined : undefined,
+        statement_day: accountType === 'credit_card' && stmt && stmt !== 'invalid' ? stmt : undefined,
+        due_day: accountType === 'credit_card' && due && due !== 'invalid' ? due : undefined,
       });
       resetForm();
       await reload();
@@ -345,6 +387,13 @@ export function AccountsScreen({
     }
     setBusy(true);
     try {
+      const stmt = parseMonthDay(statementDay);
+      const due = parseMonthDay(dueDay);
+      if (accountType === 'credit_card' && (stmt === 'invalid' || due === 'invalid')) {
+        onError(t(user.locale, 'accounts.dayInvalid'));
+        setBusy(false);
+        return;
+      }
       const clear = !interest.trim();
       await api.updateAccount(token, editId, {
         name: accountDisplayName(accountType, institutionLabel),
@@ -354,12 +403,75 @@ export function AccountsScreen({
         compounding: clear ? undefined : (compounding as 'none' | 'monthly' | 'yearly'),
         institution_label: institutionLabel.trim() || undefined,
         clear_interest: clear,
+        credit_limit: accountType === 'credit_card' ? stripAmount(creditLimit) || '' : undefined,
+        statement_day: accountType === 'credit_card' ? (stmt && stmt !== 'invalid' ? stmt : 0) : undefined,
+        due_day: accountType === 'credit_card' ? (due && due !== 'invalid' ? due : 0) : undefined,
       });
       resetForm();
       await reload();
       onChanged?.();
     } catch (e) {
       onError(e instanceof Error ? e.message : 'Could not update account');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openInstallments(a: MoneyAccount) {
+    setCreating(false);
+    setEditId(null);
+    setBalanceId(null);
+    setAcceptId(null);
+    setInstallAccount(a);
+    setInstMerchant('');
+    setInstTotal('');
+    setInstMonths('12');
+    setInstMonthly('');
+    try {
+      const res = await api.listInstallments(token, a.id);
+      setInstallments(res.installments ?? []);
+    } catch (e) {
+      setInstallments([]);
+      onError(e instanceof Error ? e.message : t(user.locale, 'accounts.loadError'));
+    }
+  }
+
+  async function onAddInstallment() {
+    if (!installAccount) return;
+    const months = Number(instMonths.trim());
+    if (!instMerchant.trim() || !stripAmount(instTotal) || !Number.isInteger(months) || months < 2) {
+      onError(t(user.locale, 'accounts.installmentHint'));
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.createInstallment(token, installAccount.id, {
+        merchant: instMerchant.trim(),
+        total_amount: stripAmount(instTotal) || '0',
+        monthly_amount: stripAmount(instMonthly) || undefined,
+        months_total: months,
+      });
+      setInstMerchant('');
+      setInstTotal('');
+      setInstMonths('12');
+      setInstMonthly('');
+      const res = await api.listInstallments(token, installAccount.id);
+      setInstallments(res.installments ?? []);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : t(user.locale, 'accounts.loadError'));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onDeleteInstallment(id: string) {
+    if (!installAccount) return;
+    setBusy(true);
+    try {
+      await api.deleteInstallment(token, installAccount.id, id);
+      setInstallments((rows) => rows.filter((r) => r.id !== id));
+    } catch (e) {
+      onError(e instanceof Error ? e.message : t(user.locale, 'accounts.loadError'));
     } finally {
       setBusy(false);
     }
@@ -606,7 +718,13 @@ export function AccountsScreen({
 
   const formOpen = creating || Boolean(editId);
   const panelOpen =
-    formOpen || transferOpen || reconcileOpen || Boolean(importId) || Boolean(balanceId) || Boolean(viewAccount);
+    formOpen ||
+    transferOpen ||
+    reconcileOpen ||
+    Boolean(importId) ||
+    Boolean(balanceId) ||
+    Boolean(viewAccount) ||
+    Boolean(installAccount);
   useEffect(() => {
     onPanelChange?.(Boolean(panelOpen));
   }, [panelOpen, onPanelChange]);
@@ -620,6 +738,8 @@ export function AccountsScreen({
     setNewBalance('');
     setReconcileRows([]);
     setAcceptId(null);
+    setInstallAccount(null);
+    setInstallments([]);
     setViewMessage(null);
     setViewAccount(null);
     setAccountSms([]);
@@ -988,7 +1108,40 @@ export function AccountsScreen({
             ) : null}
             <SearchSelect label={t(user.locale, 'common.currency')} value={currency} onChange={setCurrency} options={CURRENCIES} />
             {!editId ? (
-              <Field label={t(user.locale, 'accounts.currentBalance')} value={balance} onChange={setBalance} money />
+              <Field
+                label={
+                  accountType === 'credit_card'
+                    ? t(user.locale, 'accounts.amountOwed')
+                    : t(user.locale, 'accounts.currentBalance')
+                }
+                value={balance}
+                onChange={setBalance}
+                money
+              />
+            ) : null}
+            {accountType === 'credit_card' ? (
+              <>
+                <Field
+                  label={t(user.locale, 'accounts.creditLimit')}
+                  value={creditLimit}
+                  onChange={setCreditLimit}
+                  money
+                />
+                <Field
+                  label={t(user.locale, 'accounts.statementDay')}
+                  value={statementDay}
+                  onChange={setStatementDay}
+                  keyboardType="number-pad"
+                  placeholder="15"
+                />
+                <Field
+                  label={t(user.locale, 'accounts.dueDay')}
+                  value={dueDay}
+                  onChange={setDueDay}
+                  keyboardType="number-pad"
+                  placeholder="10"
+                />
+              </>
             ) : null}
             <Field
               label={t(user.locale, 'accounts.interestRateOptional')}
@@ -1016,6 +1169,83 @@ export function AccountsScreen({
               onPress={editId ? onSaveEdit : onCreate}
               disabled={busy}
             />
+          </Card>
+        ) : null}
+
+        {installAccount ? (
+          <Card>
+            <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>
+              {t(user.locale, 'accounts.installments')} · {installAccount.name}
+            </Text>
+            <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
+              {t(user.locale, 'accounts.installmentHint')}
+            </Text>
+            {installments.length === 0 ? (
+              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
+                {t(user.locale, 'accounts.noInstallments')}
+              </Text>
+            ) : (
+              installments.map((row) => (
+                <View
+                  key={row.id}
+                  style={{
+                    paddingVertical: 10,
+                    borderBottomWidth: 1,
+                    borderBottomColor: colors.border,
+                    gap: 4,
+                  }}
+                >
+                  <Text style={{ color: colors.text, fontFamily: fonts.uiSemi }}>{row.merchant}</Text>
+                  <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
+                    {formatMoney(row.monthly_amount, row.currency_code, user.locale)} · {row.months_remaining}/
+                    {row.months_total} · {t(user.locale, 'accounts.remaining')}{' '}
+                    {formatMoney(row.remaining_amount, row.currency_code, user.locale)}
+                  </Text>
+                  {row.months_remaining > 0 ? (
+                    <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
+                      {t(user.locale, 'accounts.nextCharge').replace(
+                        '{date}',
+                        formatShortDate(row.next_charge_on, user.locale),
+                      )}
+                    </Text>
+                  ) : null}
+                  {row.months_remaining > 0 ? (
+                    <SecondaryButton
+                      label={t(user.locale, 'common.delete') || 'Delete'}
+                      onPress={() => void onDeleteInstallment(row.id)}
+                      disabled={busy}
+                    />
+                  ) : null}
+                </View>
+              ))
+            )}
+            <Field
+              label={t(user.locale, 'accounts.merchant')}
+              value={instMerchant}
+              onChange={setInstMerchant}
+              placeholder="Store or purchase"
+            />
+            <Field label={t(user.locale, 'cashflow.amount')} value={instTotal} onChange={setInstTotal} money />
+            <Field
+              label={t(user.locale, 'accounts.months')}
+              value={instMonths}
+              onChange={setInstMonths}
+              keyboardType="number-pad"
+              placeholder="12"
+            />
+            <Field
+              label={t(user.locale, 'accounts.monthlyAmount')}
+              value={instMonthly}
+              onChange={setInstMonthly}
+              money
+              placeholder="optional"
+            />
+            <PrimaryButton
+              label={busy ? t(user.locale, 'common.saving') : t(user.locale, 'accounts.addInstallment')}
+              onPress={() => void onAddInstallment()}
+              disabled={busy}
+            />
+            <SecondaryButton label={t(user.locale, 'common.cancel') || 'Cancel'} onPress={() => setInstallAccount(null)} />
           </Card>
         ) : null}
 
@@ -1132,14 +1362,14 @@ export function AccountsScreen({
                         backgroundColor:
                           a.account_type === 'cash'
                             ? colors.surfaceMuted
-                            : a.account_type === 'mobile_money'
+                            : a.account_type === 'mobile_money' || a.account_type === 'credit_card'
                               ? colors.warningSoft
                               : colors.primarySoft,
                         borderWidth: 1,
                         borderColor:
                           a.account_type === 'cash'
                             ? colors.border
-                            : a.account_type === 'mobile_money'
+                            : a.account_type === 'mobile_money' || a.account_type === 'credit_card'
                               ? colors.warning
                               : colors.primary,
                       }}
@@ -1149,7 +1379,7 @@ export function AccountsScreen({
                           color:
                             a.account_type === 'cash'
                               ? colors.muted
-                              : a.account_type === 'mobile_money'
+                              : a.account_type === 'mobile_money' || a.account_type === 'credit_card'
                                 ? colors.warning
                                 : colors.primary,
                           fontFamily: fonts.uiSemi,
@@ -1193,8 +1423,46 @@ export function AccountsScreen({
                     : ''}
                 </Text>
               ) : null}
+              {a.account_type === 'credit_card' ? (
+                <View style={{ gap: 6 }}>
+                  {a.credit_limit ? (
+                    <>
+                      <View
+                        style={{
+                          height: 6,
+                          borderRadius: 99,
+                          backgroundColor: colors.surfaceMuted,
+                          overflow: 'hidden',
+                        }}
+                      >
+                        <View
+                          style={{
+                            height: 6,
+                            width: `${Math.min(Math.max(a.utilization_pct ?? 0, 0), 100)}%`,
+                            backgroundColor: (a.utilization_pct ?? 0) >= 80 ? colors.warning : colors.primary,
+                          }}
+                        />
+                      </View>
+                      <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
+                        {t(user.locale, 'accounts.utilization').replace('{pct}', String(a.utilization_pct ?? 0))}
+                        {a.available_credit
+                          ? ` · ${t(user.locale, 'accounts.availableCredit')} ${formatMoney(a.available_credit, a.currency_code, user.locale)}`
+                          : ''}
+                      </Text>
+                    </>
+                  ) : null}
+                  {a.next_due_at ? (
+                    <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
+                      {t(user.locale, 'accounts.dueOn').replace(
+                        '{date}',
+                        formatShortDate(a.next_due_at, user.locale),
+                      )}
+                    </Text>
+                  ) : null}
+                </View>
+              ) : null}
               <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
-                {!a.bank_profile_id && a.account_type !== 'cash' ? (
+                {!a.bank_profile_id && a.account_type !== 'cash' && a.account_type !== 'credit_card' ? (
                   <Pressable
                     onPress={() => startAccept(a)}
                     style={{
@@ -1208,6 +1476,23 @@ export function AccountsScreen({
                   >
                     <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 12 }}>
                       {t(user.locale, 'accounts.accept') || 'Accept'}
+                    </Text>
+                  </Pressable>
+                ) : null}
+                {a.account_type === 'credit_card' ? (
+                  <Pressable
+                    onPress={() => void openInstallments(a)}
+                    style={{
+                      paddingHorizontal: 12,
+                      paddingVertical: 8,
+                      borderRadius: radii.md,
+                      backgroundColor: colors.primarySoft,
+                      borderWidth: 1,
+                      borderColor: colors.primary,
+                    }}
+                  >
+                    <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 12 }}>
+                      {t(user.locale, 'accounts.installments')}
                     </Text>
                   </Pressable>
                 ) : null}

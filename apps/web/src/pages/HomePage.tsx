@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Repeat } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
-import { api, type Budget, type CashflowBill, type CashflowEntry, type CashflowSummary, type CategorySpend, type Loan, type WealthSummary } from '../lib/api';
+import { api, type Budget, type CashflowBill, type CashflowCalendar, type CashflowEntry, type CashflowSummary, type CategorySpend, type Loan, type PaydayCycle, type WealthSummary } from '../lib/api';
 import { formatMoney, stripAmount } from '../lib/format';
 import { Card } from '../components/Card';
 import { Money } from '../components/Money';
@@ -12,7 +12,20 @@ import { EmptyState } from '../components/EmptyState';
 import { Field, SelectField } from '../components/Field';
 import { useToast } from '../components/Toast';
 
-type Tab = 'dashboard' | 'income' | 'expenses' | 'bills';
+type Tab = 'dashboard' | 'calendar' | 'income' | 'expenses' | 'bills';
+
+function heatOpacity(heat: number): number {
+  return [0, 0.2, 0.4, 0.65, 1][Math.max(0, Math.min(heat, 4))] ?? 0;
+}
+
+function clientHeat(expense: number, max: number): number {
+  if (expense <= 0 || max <= 0) return 0;
+  const r = expense / max;
+  if (r < 0.25) return 1;
+  if (r < 0.5) return 2;
+  if (r < 0.75) return 3;
+  return 4;
+}
 
 function monthBounds(d: Date) {
   const from = new Date(Date.UTC(d.getFullYear(), d.getMonth(), 1));
@@ -46,11 +59,15 @@ export function HomePage() {
   const [billBusy, setBillBusy] = useState<string | null>(null);
   const [breakdown, setBreakdown] = useState<CategorySpend[]>([]);
   const [budgets, setBudgets] = useState<Budget[]>([]);
+  const [payday, setPayday] = useState<PaydayCycle | null>(null);
   const [loans, setLoans] = useState<Loan[]>([]);
   const [budgetCategory, setBudgetCategory] = useState('');
   const [budgetLimit, setBudgetLimit] = useState('');
   const [budgetBusy, setBudgetBusy] = useState(false);
+  const [paydayDay, setPaydayDay] = useState('');
+  const [paydayLimit, setPaydayLimit] = useState('');
   const [selectedDate, setSelectedDate] = useState(() => new Date());
+  const [spendCalendar, setSpendCalendar] = useState<CashflowCalendar | null>(null);
 
   const period = useMemo(() => monthBounds(selectedDate), [selectedDate]);
   const selectedIso = useMemo(() => toIsoLocal(selectedDate), [selectedDate]);
@@ -60,10 +77,39 @@ export function HomePage() {
   const dayIncome = useMemo(() => income.filter((e) => e.occurred_at.slice(0, 10) === selectedIso), [income, selectedIso]);
   const dayExpense = useMemo(() => expenseRows.filter((e) => e.occurred_at.slice(0, 10) === selectedIso), [expenseRows, selectedIso]);
 
+  const heatByDate = useMemo(() => {
+    const map = new Map<string, { heat: number; expense: number; income: number }>();
+    if (spendCalendar?.days?.length) {
+      for (const d of spendCalendar.days) {
+        map.set(d.date, { heat: d.heat, expense: Number(d.expense) || 0, income: Number(d.income) || 0 });
+      }
+      return map;
+    }
+    const sums = new Map<string, { expense: number; income: number }>();
+    for (const e of expenseRows) {
+      if (e.currency_code && e.currency_code.toUpperCase() !== preferred) continue;
+      const key = e.occurred_at.slice(0, 10);
+      const cur = sums.get(key) || { expense: 0, income: 0 };
+      cur.expense += Number(e.amount) || 0;
+      sums.set(key, cur);
+    }
+    for (const e of income) {
+      if (e.currency_code && e.currency_code.toUpperCase() !== preferred) continue;
+      const key = e.occurred_at.slice(0, 10);
+      const cur = sums.get(key) || { expense: 0, income: 0 };
+      cur.income += Number(e.amount) || 0;
+      sums.set(key, cur);
+    }
+    let max = 0;
+    for (const v of sums.values()) if (v.expense > max) max = v.expense;
+    for (const [key, v] of sums) map.set(key, { heat: clientHeat(v.expense, max), expense: v.expense, income: v.income });
+    return map;
+  }, [spendCalendar, expenseRows, income, preferred]);
+
   const reload = useCallback(async () => {
     if (!token) return;
     try {
-      const [sum, inc, exp, incT, expT, wealthRes, breakRes, budgetRes, loanRes, billsRes] = await Promise.all([
+      const [sum, inc, exp, incT, expT, wealthRes, breakRes, budgetRes, loanRes, billsRes, calRes] = await Promise.all([
         api.cashflowSummary(token, { from: period.from, to: period.to }),
         api.listCashflow(token, { kind: 'income', from: period.from, to: period.to }),
         api.listCashflow(token, { kind: 'expense', from: period.from, to: period.to }),
@@ -71,9 +117,17 @@ export function HomePage() {
         api.listCashflow(token, { kind: 'expense', templates: true }),
         api.wealth(token, preferred).catch(() => null),
         api.cashflowBreakdown(token, { kind: 'expense', from: period.from, to: period.to }).catch(() => ({ breakdown: [] })),
-        api.listBudgets(token, period.from).catch(() => ({ budgets: [] })),
+        api.listBudgets(token, period.from).catch(() => ({ budgets: [] as Budget[], payday: undefined as PaydayCycle | undefined })),
         api.listLoans(token).catch(() => ({ loans: [] })),
         api.listCashflowBills(token, 90).catch(() => ({ bills: [] })),
+        api
+          .cashflowCalendar(token, {
+            from: period.from,
+            to: period.to,
+            currency: preferred,
+            tz: user?.timezone || 'UTC',
+          })
+          .catch(() => ({ calendar: null as CashflowCalendar | null })),
       ]);
       setSummary(sum.summary);
       setIncome(inc.entries ?? []);
@@ -83,12 +137,18 @@ export function HomePage() {
       setWealth(wealthRes?.wealth ?? null);
       setBreakdown(breakRes.breakdown ?? []);
       setBudgets(budgetRes.budgets ?? []);
+      setPayday(budgetRes.payday ?? null);
+      if (budgetRes.payday?.source === 'setting' && budgetRes.payday.payday_day) {
+        setPaydayDay(String(budgetRes.payday.payday_day));
+      }
+      if (budgetRes.payday?.limit_amount) setPaydayLimit(budgetRes.payday.limit_amount);
       setLoans(loanRes.loans ?? []);
       setBills(billsRes.bills ?? []);
+      setSpendCalendar(calRes.calendar ?? null);
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Could not load dashboard');
     }
-  }, [token, period.from, period.to, preferred, showError]);
+  }, [token, period.from, period.to, preferred, showError, user?.timezone]);
 
   useEffect(() => {
     void reload();
@@ -176,11 +236,95 @@ export function HomePage() {
       setBudgetLimit('');
       const res = await api.listBudgets(token, period.from);
       setBudgets(res.budgets ?? []);
+      setPayday(res.payday ?? null);
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Could not save budget');
     } finally {
       setBudgetBusy(false);
     }
+  }
+
+  async function onSavePayday() {
+    if (!token) return;
+    const dayRaw = paydayDay.trim();
+    const day = dayRaw ? Number(dayRaw) : 0;
+    if (dayRaw && (!Number.isInteger(day) || day < 1 || day > 28)) {
+      showError('Payday must be a day from 1 to 28');
+      return;
+    }
+    const limit = stripAmount(paydayLimit);
+    setBudgetBusy(true);
+    try {
+      await api.upsertPayday(token, {
+        payday_day: dayRaw ? day : 0,
+        spend_limit: limit || undefined,
+        currency_code: preferred,
+        clear_limit: !limit,
+      });
+      const res = await api.listBudgets(token, period.from);
+      setBudgets(res.budgets ?? []);
+      setPayday(res.payday ?? null);
+    } catch (e) {
+      showError(e instanceof Error ? e.message : 'Could not save payday');
+    } finally {
+      setBudgetBusy(false);
+    }
+  }
+
+  function WebPaceBar({
+    label,
+    spent,
+    limitAmt,
+    currency,
+    spentPct,
+    pacePct,
+    ahead,
+  }: {
+    label: string;
+    spent: string;
+    limitAmt: string;
+    currency: string;
+    spentPct: number;
+    pacePct: number;
+    ahead: boolean;
+  }) {
+    const over = spentPct >= 100;
+    const warn = spentPct >= 80 || ahead;
+    return (
+      <div className="flex-col" style={{ gap: 4 }}>
+        <div className="card-row">
+          <span style={{ fontWeight: 700, fontSize: 13 }}>{label}</span>
+          <span className="muted" style={{ fontSize: 12, color: over ? 'var(--warning)' : undefined }}>
+            {formatMoney(spent, currency, locale)} / {formatMoney(limitAmt, currency, locale)}
+          </span>
+        </div>
+        <div className="bar-track" style={{ position: 'relative', overflow: 'visible' }}>
+          <div
+            className="bar-fill"
+            style={{
+              width: `${Math.min(100, Math.max(4, spentPct))}%`,
+              background: over || warn ? 'var(--warning)' : 'var(--primary)',
+            }}
+          />
+          <div
+            style={{
+              position: 'absolute',
+              left: `${Math.min(98, Math.max(2, pacePct))}%`,
+              top: -2,
+              width: 2,
+              height: 14,
+              marginLeft: -1,
+              background: 'var(--text)',
+              opacity: 0.7,
+              borderRadius: 1,
+            }}
+          />
+        </div>
+        <div className="muted" style={{ fontSize: 11, color: over || ahead ? 'var(--warning)' : undefined }}>
+          {over ? 'Budget reached' : ahead ? 'Ahead of pace' : 'On pace'}
+        </div>
+      </div>
+    );
   }
 
   async function onBillAction(id: string, action: 'record' | 'skip' | 'postpone' | 'pause' | 'resume') {
@@ -253,13 +397,108 @@ export function HomePage() {
         onChange={(v) => setTab(v as Tab)}
         options={[
           { id: 'dashboard', label: 'Dashboard' },
+          { id: 'calendar', label: 'Calendar' },
           { id: 'income', label: 'Income' },
           { id: 'expenses', label: 'Expenses' },
           { id: 'bills', label: 'Bills' },
         ]}
       />
 
-      {tab === 'dashboard' ? (
+      {tab === 'calendar' ? (
+        <div className="flex-col">
+          <Card>
+            <div className="card-row">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setSelectedDate(new Date(selectedDate.getFullYear(), selectedDate.getMonth() - 1, Math.min(selectedDate.getDate(), 28)))}
+              >
+                ‹
+              </Button>
+              <div className="section-label" style={{ margin: 0 }}>
+                {selectedDate.toLocaleDateString(locale, { month: 'long', year: 'numeric' })}
+              </div>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setSelectedDate(new Date(selectedDate.getFullYear(), selectedDate.getMonth() + 1, Math.min(selectedDate.getDate(), 28)))}
+              >
+                ›
+              </Button>
+            </div>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 6, marginTop: 12 }}>
+              {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => (
+                <div key={`${d}-${i}`} className="muted" style={{ textAlign: 'center', fontSize: 11, fontWeight: 600 }}>
+                  {d}
+                </div>
+              ))}
+              {Array.from({ length: new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1).getDay() }).map((_, i) => (
+                <div key={`pad-${i}`} />
+              ))}
+              {Array.from({ length: new Date(selectedDate.getFullYear(), selectedDate.getMonth() + 1, 0).getDate() }, (_, i) => i + 1).map((dayNum) => {
+                const iso = `${selectedDate.getFullYear()}-${String(selectedDate.getMonth() + 1).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
+                const active = selectedIso === iso;
+                const today = toIsoLocal(new Date()) === iso;
+                const heat = heatByDate.get(iso)?.heat ?? 0;
+                return (
+                  <button
+                    key={iso}
+                    type="button"
+                    onClick={() => setSelectedDate(new Date(`${iso}T12:00:00`))}
+                    style={{
+                      height: 40,
+                      borderRadius: 8,
+                      border: active ? '2px solid var(--primary)' : today ? '1px solid var(--primary)' : '1px solid var(--border)',
+                      background: active ? 'var(--primary)' : heat > 0 ? `color-mix(in srgb, var(--primary) ${Math.round(heatOpacity(heat) * 100)}%, transparent)` : 'var(--surface-muted)',
+                      color: active || heat >= 3 ? 'var(--on-primary, #fff)' : 'var(--text)',
+                      fontWeight: 700,
+                      fontSize: 13,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {dayNum}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="flex-row" style={{ gap: 6, marginTop: 12, alignItems: 'center' }}>
+              <span className="muted" style={{ fontSize: 11 }}>Less</span>
+              {[1, 2, 3, 4].map((h) => (
+                <span
+                  key={h}
+                  style={{
+                    width: 12,
+                    height: 12,
+                    borderRadius: 3,
+                    background: `color-mix(in srgb, var(--primary) ${Math.round(heatOpacity(h) * 100)}%, transparent)`,
+                  }}
+                />
+              ))}
+              <span className="muted" style={{ fontSize: 11 }}>More</span>
+            </div>
+          </Card>
+          <Card>
+            <div className="section-label">{selectedIso === toIsoLocal(new Date()) ? 'Today' : selectedIso}</div>
+            {heatByDate.get(selectedIso) ? (
+              <div className="flex-row" style={{ gap: 16, marginBottom: 8 }}>
+                <span className="muted" style={{ fontSize: 13 }}>
+                  In <Money value={heatByDate.get(selectedIso)!.income.toFixed(2)} currency={preferred} size="sm" tone="positive" locale={locale} />
+                </span>
+                <span className="muted" style={{ fontSize: 13 }}>
+                  Spent <Money value={heatByDate.get(selectedIso)!.expense.toFixed(2)} currency={preferred} size="sm" locale={locale} />
+                </span>
+              </div>
+            ) : null}
+            {dayIncome.length === 0 && dayExpense.length === 0 ? (
+              <EmptyState title="Quiet day" body="No income or expenses on this date." />
+            ) : (
+              [...dayIncome, ...dayExpense]
+                .sort((a, b) => b.occurred_at.localeCompare(a.occurred_at))
+                .map((entry) => <EntryRow key={entry.id} entry={entry} />)
+            )}
+          </Card>
+        </div>
+      ) : tab === 'dashboard' ? (
         <div className="grid grid-main-side">
           <div className="flex-col">
             <Card>
@@ -398,34 +637,47 @@ export function HomePage() {
             </Card>
 
             <Card>
-              <div className="section-label">Budgets this month</div>
-              {budgets.length === 0 ? (
-                <div className="muted" style={{ fontSize: 13 }}>
-                  Set a monthly limit per category to track burn.
+              <div className="section-label">This payday</div>
+              {payday ? (
+                <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+                  {payday.cycle_start} – {payday.cycle_end} · {payday.days_left} days left
                 </div>
-              ) : (
-                budgets.map((b) => {
-                  const limit = Number(b.limit_amount) || 1;
-                  const spent = Number(b.spent) || 0;
-                  const pct = Math.min(100, Math.round((spent / limit) * 100));
-                  const over = spent > limit;
-                  return (
-                    <div key={b.id} className="flex-col" style={{ gap: 4 }}>
-                      <div className="card-row">
-                        <span style={{ fontWeight: 700, fontSize: 13 }}>{b.category_name}</span>
-                        <span className="muted" style={{ fontSize: 12 }}>
-                          {formatMoney(b.spent, b.currency_code, locale)} / {formatMoney(b.limit_amount, b.currency_code, locale)}
-                        </span>
-                      </div>
-                      <div className="bar-track">
-                        <div className="bar-fill" style={{ width: `${Math.max(4, pct)}%`, background: over ? 'var(--warning)' : 'var(--primary)' }} />
-                      </div>
-                    </div>
-                  );
-                })
-              )}
+              ) : null}
+              {payday?.limit_amount ? (
+                <WebPaceBar
+                  label="Spend until payday"
+                  spent={payday.spent}
+                  limitAmt={payday.limit_amount}
+                  currency={payday.currency_code || preferred}
+                  spentPct={payday.spent_pct ?? 0}
+                  pacePct={payday.pace_pct}
+                  ahead={payday.ahead}
+                />
+              ) : null}
+              {budgets.map((b) => (
+                <WebPaceBar
+                  key={b.id}
+                  label={b.category_name}
+                  spent={b.spent}
+                  limitAmt={b.limit_amount}
+                  currency={b.currency_code}
+                  spentPct={b.spent_pct ?? 0}
+                  pacePct={b.pace_pct ?? payday?.pace_pct ?? 0}
+                  ahead={Boolean(b.ahead)}
+                />
+              ))}
+              {budgets.length === 0 && !payday?.limit_amount ? (
+                <div className="muted" style={{ fontSize: 13 }}>
+                  Set a spend-until-payday limit, or a category budget. The tick mark is today’s pace.
+                </div>
+              ) : null}
+              <Field label="Payday (day of month)" value={paydayDay} onChange={setPaydayDay} inputMode="numeric" placeholder="1–28" />
+              <Field label="Spend until payday" value={paydayLimit} onChange={setPaydayLimit} money placeholder="0.00" />
+              <Button onClick={() => void onSavePayday()} busy={budgetBusy} block variant="secondary">
+                {budgetBusy ? 'Saving…' : 'Save payday'}
+              </Button>
               <SelectField label="Category" value={budgetCategory} onChange={setBudgetCategory} options={expenseCatOptions} placeholder="Category to budget" />
-              <Field label="Monthly limit" value={budgetLimit} onChange={setBudgetLimit} money placeholder="0.00" />
+              <Field label="Category limit" value={budgetLimit} onChange={setBudgetLimit} money placeholder="0.00" />
               <Button onClick={onSaveBudget} busy={budgetBusy} block variant="secondary">
                 {budgetBusy ? 'Saving…' : 'Save budget'}
               </Button>
@@ -435,9 +687,6 @@ export function HomePage() {
       ) : tab === 'bills' ? (
         <Card>
           <div className="section-label">Bills & subscriptions</div>
-          <div className="muted" style={{ fontSize: 13, marginBottom: 8 }}>
-            Record, skip, or postpone the next cycle. Pause a subscription until you resume it. Reminders go out 3 days and 1 day before due.
-          </div>
           {bills.length === 0 ? (
             <EmptyState title="No bills on the calendar" body="Add a repeating income or expense and it will show here." />
           ) : (

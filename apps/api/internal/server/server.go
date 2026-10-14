@@ -10,7 +10,10 @@ import (
 
 	"equilend/api/internal/accounts"
 	"equilend/api/internal/admin"
+	"equilend/api/internal/ai"
+	"equilend/api/internal/ai/llm"
 	"equilend/api/internal/auth"
+	"equilend/api/internal/banklink"
 	"equilend/api/internal/banks"
 	"equilend/api/internal/chat"
 	"equilend/api/internal/config"
@@ -23,18 +26,15 @@ import (
 	"equilend/api/internal/idempotency"
 	"equilend/api/internal/imports"
 	"equilend/api/internal/insights"
-	"equilend/api/internal/ai"
-	"equilend/api/internal/ai/llm"
-	"equilend/api/internal/banklink"
-	"equilend/api/internal/score"
 	"equilend/api/internal/legal"
-	"equilend/api/internal/localization"
 	"equilend/api/internal/loans"
+	"equilend/api/internal/localization"
 	"equilend/api/internal/notifications"
 	"equilend/api/internal/privacy"
 	"equilend/api/internal/rails"
 	"equilend/api/internal/ratelimit"
 	"equilend/api/internal/repayments"
+	"equilend/api/internal/score"
 	"equilend/api/internal/store"
 
 	"github.com/go-chi/chi/v5"
@@ -148,6 +148,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 	repaySvc.SetNotifier(notifications.RepayHooks{Svc: notifySvc})
 	repaySvc.SetBond(friendsSvc)
 	expensesSvc.SetNotifier(notifications.CashflowHooks{Svc: notifySvc})
+	accountsSvc.SetCardNotifier(notifications.CardHooks{Svc: notifySvc})
 	expensesSvc.SetReceipts(aiSvc)
 	goalsSvc.SetPlanExtractor(aiSvc)
 	aiSvc.SetGoalPrices(goalsSvc)
@@ -277,12 +278,17 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 			r.With(idem.Handler("accounts.import")).Post("/accounts/{id}/import", importsH.Import)
 			r.With(idem.Handler("accounts.archive")).Post("/accounts/{id}/archive", accountsH.Archive)
 			r.With(idem.Handler("accounts.accept_loans")).Post("/accounts/{id}/accept-for-loans", accountsH.AcceptForLoans)
+			r.Get("/accounts/{id}/installments", accountsH.ListInstallments)
+			r.With(idem.Handler("accounts.installment")).Post("/accounts/{id}/installments", accountsH.CreateInstallment)
+			r.Delete("/accounts/{id}/installments/{installmentId}", accountsH.DeleteInstallment)
 			r.Get("/cashflow/summary", expensesH.Summary)
+			r.Get("/cashflow/calendar", expensesH.Calendar)
 			r.Get("/cashflow/breakdown", expensesH.CategoryBreakdown)
 			r.Get("/cashflow/categories", expensesH.ListCategories)
 			r.With(idem.Handler("cashflow.category")).Post("/cashflow/categories", expensesH.CreateCategory)
 			r.Get("/budgets", expensesH.ListBudgets)
 			r.With(idem.Handler("budgets.upsert")).Put("/budgets", expensesH.UpsertBudget)
+			r.With(idem.Handler("budgets.payday")).Put("/budgets/payday", expensesH.UpsertPayday)
 			r.With(idem.Handler("budgets.delete")).Delete("/budgets/{id}", expensesH.DeleteBudget)
 			r.Get("/cashflow/bills", expensesH.ListBills)
 			r.Get("/cashflow", expensesH.List)

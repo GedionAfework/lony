@@ -112,6 +112,33 @@ type ListQuery struct {
 	Limit     int
 }
 
+type CalendarBucket struct {
+	Day          time.Time
+	Income       decimal.Decimal
+	Expense      decimal.Decimal
+	IncomeCount  int
+	ExpenseCount int
+}
+
+type CalendarDayDTO struct {
+	Date         string `json:"date"`
+	Income       string `json:"income"`
+	Expense      string `json:"expense"`
+	Net          string `json:"net"`
+	IncomeCount  int    `json:"income_count"`
+	ExpenseCount int    `json:"expense_count"`
+	Heat         int    `json:"heat"`
+}
+
+type CalendarDTO struct {
+	From         string           `json:"from"`
+	To           string           `json:"to"`
+	CurrencyCode string           `json:"currency_code"`
+	Timezone     string           `json:"timezone"`
+	MaxExpense   string           `json:"max_expense"`
+	Days         []CalendarDayDTO `json:"days"`
+}
+
 type CreateInput struct {
 	Kind             string
 	Title            string
@@ -175,8 +202,48 @@ type BudgetDTO struct {
 	PeriodMonth  string     `json:"period_month"`
 	Spent        string     `json:"spent"`
 	Remaining    string     `json:"remaining"`
+	CycleStart   string     `json:"cycle_start,omitempty"`
+	CycleEnd     string     `json:"cycle_end,omitempty"`
+	PacePct      int        `json:"pace_pct"`
+	PaceAmount   string     `json:"pace_amount,omitempty"`
+	SpentPct     int        `json:"spent_pct"`
+	Ahead        bool       `json:"ahead"`
 	CreatedAt    time.Time  `json:"created_at"`
 	UpdatedAt    time.Time  `json:"updated_at"`
+}
+
+type PaydaySettings struct {
+	UserID       uuid.UUID
+	PaydayDay    *int
+	SpendLimit   *decimal.Decimal
+	CurrencyCode *string
+	UpdatedAt    time.Time
+}
+
+type PaydayDTO struct {
+	PaydayDay    *int    `json:"payday_day,omitempty"`
+	Source       string  `json:"source"`
+	CycleStart   string  `json:"cycle_start"`
+	CycleEnd     string  `json:"cycle_end"`
+	DaysTotal    int     `json:"days_total"`
+	DaysElapsed  int     `json:"days_elapsed"`
+	DaysLeft     int     `json:"days_left"`
+	PacePct      int     `json:"pace_pct"`
+	CurrencyCode string  `json:"currency_code"`
+	LimitAmount  *string `json:"limit_amount,omitempty"`
+	Spent        string  `json:"spent"`
+	Remaining    *string `json:"remaining,omitempty"`
+	PaceAmount   *string `json:"pace_amount,omitempty"`
+	SpentPct     *int    `json:"spent_pct,omitempty"`
+	Ahead        bool    `json:"ahead"`
+	Alert        string  `json:"alert,omitempty"`
+}
+
+type PaydayInput struct {
+	PaydayDay    *int
+	SpendLimit   *string
+	CurrencyCode *string
+	ClearLimit   bool
 }
 
 type BudgetInput struct {
@@ -202,6 +269,11 @@ type Store interface {
 	UpsertBudget(ctx context.Context, rec Budget) (Budget, error)
 	ListBudgets(ctx context.Context, userID uuid.UUID, period time.Time) ([]Budget, error)
 	DeleteBudget(ctx context.Context, userID, id uuid.UUID) error
+	GetPayday(ctx context.Context, userID uuid.UUID) (PaydaySettings, error)
+	UpsertPayday(ctx context.Context, rec PaydaySettings) (PaydaySettings, error)
+	ListPaydayUserIDs(ctx context.Context) ([]uuid.UUID, error)
+	ClaimBudgetAlert(ctx context.Context, userID uuid.UUID, scope string, cycleStart time.Time, threshold int) (bool, error)
+	CalendarDays(ctx context.Context, userID uuid.UUID, from, to time.Time, currency, tz string) ([]CalendarBucket, error)
 }
 
 func toDTO(rec Entry) EntryDTO {

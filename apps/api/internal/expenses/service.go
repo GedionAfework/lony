@@ -48,6 +48,7 @@ type Service struct {
 type BillNotifier interface {
 	NotifyBillDue(ctx context.Context, userID uuid.UUID, entryID uuid.UUID, title, amount, currency, kind string) error
 	NotifyBillUpcoming(ctx context.Context, userID uuid.UUID, entryID uuid.UUID, title, amount, currency string, days int) error
+	NotifyBudgetAlert(ctx context.Context, userID uuid.UUID, category string, threshold int, spent, limit, currency string) error
 }
 
 type ReceiptExtract struct {
@@ -897,33 +898,12 @@ func (s *Service) UpsertBudget(ctx context.Context, userID uuid.UUID, in BudgetI
 	if err != nil {
 		return BudgetDTO{}, err
 	}
-	return s.budgetDTO(ctx, userID, saved)
-}
-
-func (s *Service) ListBudgets(ctx context.Context, userID uuid.UUID, periodRaw string) ([]BudgetDTO, error) {
-	month := s.now().UTC()
-	if strings.TrimSpace(periodRaw) != "" {
-		m, err := parsePeriodMonth(periodRaw)
-		if err != nil {
-			return nil, err
-		}
-		month = m
-	} else {
-		month = time.Date(month.Year(), month.Month(), 1, 0, 0, 0, 0, time.UTC)
-	}
-	rows, err := s.store.ListBudgets(ctx, userID, month)
+	_, from, to, _, err := s.resolvePayday(ctx, userID)
 	if err != nil {
-		return nil, err
+		return BudgetDTO{}, err
 	}
-	out := make([]BudgetDTO, 0, len(rows))
-	for _, row := range rows {
-		dto, err := s.budgetDTO(ctx, userID, row)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, dto)
-	}
-	return out, nil
+	_, _, _, pacePct := cyclePace(s.now().UTC(), from, to)
+	return s.budgetDTO(ctx, userID, saved, from, to, pacePct)
 }
 
 func (s *Service) DeleteBudget(ctx context.Context, userID, id uuid.UUID) error {
@@ -936,9 +916,7 @@ func (s *Service) DeleteBudget(ctx context.Context, userID, id uuid.UUID) error 
 	return nil
 }
 
-func (s *Service) budgetDTO(ctx context.Context, userID uuid.UUID, b Budget) (BudgetDTO, error) {
-	from := b.PeriodMonth
-	to := from.AddDate(0, 1, 0)
+func (s *Service) budgetDTO(ctx context.Context, userID uuid.UUID, b Budget, from, to time.Time, pacePct int) (BudgetDTO, error) {
 	spent := decimal.Zero
 	rows, err := s.store.CategoryBreakdown(ctx, userID, KindExpense, &from, &to)
 	if err != nil {
@@ -958,6 +936,8 @@ func (s *Service) budgetDTO(ctx context.Context, userID uuid.UUID, b Budget) (Bu
 		break
 	}
 	remaining := b.LimitAmount.Sub(spent)
+	paceAmt := b.LimitAmount.Mul(decimal.NewFromInt(int64(pacePct))).Div(decimal.NewFromInt(100))
+	pct := spentPctOf(spent, b.LimitAmount)
 	return BudgetDTO{
 		ID:           b.ID,
 		CategoryID:   b.CategoryID,
@@ -967,6 +947,12 @@ func (s *Service) budgetDTO(ctx context.Context, userID uuid.UUID, b Budget) (Bu
 		PeriodMonth:  b.PeriodMonth.Format("2006-01-02"),
 		Spent:        spent.StringFixed(Scale),
 		Remaining:    remaining.StringFixed(Scale),
+		CycleStart:   from.Format("2006-01-02"),
+		CycleEnd:     to.Format("2006-01-02"),
+		PacePct:      pacePct,
+		PaceAmount:   paceAmt.StringFixed(Scale),
+		SpentPct:     pct,
+		Ahead:        spent.GreaterThan(paceAmt),
 		CreatedAt:    b.CreatedAt,
 		UpdatedAt:    b.UpdatedAt,
 	}, nil

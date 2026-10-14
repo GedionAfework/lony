@@ -29,6 +29,9 @@ type createBody struct {
 	Compounding         *string    `json:"compounding"`
 	InstitutionLabel    *string    `json:"institution_label"`
 	BankProfileID       *uuid.UUID `json:"bank_profile_id"`
+	CreditLimit         *string    `json:"credit_limit"`
+	StatementDay        *int       `json:"statement_day"`
+	DueDay              *int       `json:"due_day"`
 }
 
 type updateBody struct {
@@ -40,6 +43,9 @@ type updateBody struct {
 	InstitutionLabel    *string    `json:"institution_label"`
 	BankProfileID       *uuid.UUID `json:"bank_profile_id"`
 	ClearInterest       bool       `json:"clear_interest"`
+	CreditLimit         *string    `json:"credit_limit"`
+	StatementDay        *int       `json:"statement_day"`
+	DueDay              *int       `json:"due_day"`
 }
 
 type balanceBody struct {
@@ -228,6 +234,71 @@ func (h *Handler) AcceptForLoans(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, out)
+}
+
+type installmentBody struct {
+	Merchant      string     `json:"merchant"`
+	TotalAmount   string     `json:"total_amount"`
+	MonthlyAmount string     `json:"monthly_amount"`
+	MonthsTotal   int        `json:"months_total"`
+	NextChargeOn  *time.Time `json:"next_charge_on"`
+}
+
+func (h *Handler) ListInstallments(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	out, err := h.svc.ListInstallments(r.Context(), auth.UserIDFrom(r.Context()), id)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"installments": out})
+}
+
+func (h *Handler) CreateInstallment(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	var body installmentBody
+	if err := httpx.Decode(r, &body); err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	out, err := h.svc.CreateInstallment(r.Context(), auth.UserIDFrom(r.Context()), id, InstallmentInput{
+		Merchant:      body.Merchant,
+		TotalAmount:   body.TotalAmount,
+		MonthlyAmount: body.MonthlyAmount,
+		MonthsTotal:   body.MonthsTotal,
+		NextChargeOn:  body.NextChargeOn,
+	})
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusCreated, map[string]any{"installment": out})
+}
+
+func (h *Handler) DeleteInstallment(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	instID, err := uuid.Parse(chi.URLParam(r, "installmentId"))
+	if err != nil {
+		httpx.Error(w, httpx.E(http.StatusBadRequest, "MALFORMED_ID", "invalid installment id"))
+		return
+	}
+	if err := h.svc.DeleteInstallment(r.Context(), auth.UserIDFrom(r.Context()), id, instID); err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func parseID(r *http.Request) (uuid.UUID, error) {

@@ -31,6 +31,7 @@ type Service struct {
 	prefs         PrefsReader
 	banks         BankProfiles
 	accountNotify AccountNumberNotifier
+	cards         CardNotifier
 	now           func() time.Time
 }
 
@@ -114,6 +115,9 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, in CreateInput) 
 		CreatedAt:           now,
 		UpdatedAt:           now,
 	}
+	if err := applyCreditFields(&rec, in.CreditLimit, in.StatementDay, in.DueDay); err != nil {
+		return AccountDTO{}, err
+	}
 	if existing, err := s.findExistingDuplicate(ctx, userID, rec); err != nil {
 		return AccountDTO{}, err
 	} else if existing != nil {
@@ -194,6 +198,13 @@ func (s *Service) Update(ctx context.Context, userID, id uuid.UUID, in UpdateInp
 	}
 	if in.BankProfileID != nil {
 		rec.BankProfileID = in.BankProfileID
+	}
+	if rec.AccountType != TypeCreditCard {
+		rec.CreditLimit = nil
+		rec.StatementDay = nil
+		rec.DueDay = nil
+	} else if err := applyCreditFields(&rec, in.CreditLimit, in.StatementDay, in.DueDay); err != nil {
+		return AccountDTO{}, err
 	}
 	rec.UpdatedAt = s.now().UTC()
 	saved, err := s.store.Update(ctx, rec)
@@ -292,6 +303,13 @@ func (s *Service) reconcileOne(ctx context.Context, userID uuid.UUID, rec Accoun
 		Sub(slice.Expense).
 		Add(slice.TransfersIn).
 		Sub(slice.TransfersOut)
+	if rec.AccountType == TypeCreditCard {
+		expected = slice.BaselineBalance.
+			Add(slice.Expense).
+			Sub(slice.Income).
+			Sub(slice.TransfersIn).
+			Add(slice.TransfersOut)
+	}
 	diff := rec.Balance.Sub(expected)
 	return ReconcileDTO{
 		AccountID:           rec.ID,
@@ -325,10 +343,8 @@ func (s *Service) ApplyCashflowDelta(ctx context.Context, userID, accountID uuid
 			"account_id": "account currency must match entry currency",
 		})
 	}
-	delta := amount
-	if kind == "expense" || kind == "outcome" {
-		delta = amount.Neg()
-	} else if kind != "income" {
+	delta := cashflowDelta(rec.AccountType, kind, amount)
+	if delta.IsZero() && kind != "income" && kind != "expense" && kind != "outcome" {
 		return nil
 	}
 	_, err = s.store.AdjustBalance(ctx, userID, accountID, delta, note, s.now().UTC())
@@ -548,8 +564,13 @@ func (s *Service) Wealth(ctx context.Context, userID uuid.UUID, preferred string
 	dtos := make([]AccountDTO, 0, len(accounts))
 	for _, a := range accounts {
 		dtos = append(dtos, toDTO(a))
-		ensure(a.CurrencyCode).cash = ensure(a.CurrencyCode).cash.Add(a.Balance)
-		ensure(a.CurrencyCode).count++
+		bucket := ensure(a.CurrencyCode)
+		if a.AccountType == TypeCreditCard {
+			bucket.pay = bucket.pay.Add(a.Balance)
+		} else {
+			bucket.cash = bucket.cash.Add(a.Balance)
+		}
+		bucket.count++
 	}
 
 	if s.loans != nil {
@@ -686,13 +707,13 @@ func isOpenLoan(row loans.Record, viewer uuid.UUID, requireApproval bool) bool {
 func normalizeType(raw string) (string, error) {
 	v := strings.ToLower(strings.TrimSpace(raw))
 	switch v {
-	case TypeCash, TypeBank, TypeMobileMoney, TypeWallet, TypeOther:
+	case TypeCash, TypeBank, TypeMobileMoney, TypeWallet, TypeCreditCard, TypeOther:
 		return v, nil
 	case "":
 		return TypeBank, nil
 	default:
 		return "", httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
-			"account_type": "must be cash, bank, mobile_money, wallet, or other",
+			"account_type": "must be cash, bank, mobile_money, wallet, credit_card, or other",
 		})
 	}
 }

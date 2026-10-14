@@ -953,6 +953,11 @@ export function institutionsForAccountType(accountType: string): CatalogOption[]
       return institutionsForType('mobile_money');
     case 'wallet':
       return institutionsForType('wallet');
+    case 'credit_card':
+      return [
+        ...opts(['Visa', 'Mastercard', 'American Express', 'Discover']),
+        ...institutionsForType('bank'),
+      ];
     case 'cash':
       return opts(['Cash on hand', 'Safe', 'Petty cash']);
     case 'other':

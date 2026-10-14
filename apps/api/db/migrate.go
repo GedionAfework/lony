@@ -180,7 +180,13 @@ func applyLaterMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	if err := applyMigration(ctx, pool, "00042", "migrations/00042_all_accounts_premium.sql"); err != nil {
 		return err
 	}
-	return applyMigration(ctx, pool, "00043", "migrations/00043_cashflow_bills.sql")
+	if err := applyMigration(ctx, pool, "00043", "migrations/00043_cashflow_bills.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00044", "migrations/00044_payday.sql"); err != nil {
+		return err
+	}
+	return applyMigration(ctx, pool, "00045", "migrations/00045_credit_cards.sql")
 }
 
 func applyMigration(ctx context.Context, pool *pgxpool.Pool, version, path string) error {

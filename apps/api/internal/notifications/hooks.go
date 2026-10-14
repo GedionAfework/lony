@@ -177,3 +177,48 @@ func (h CashflowHooks) NotifyBillUpcoming(ctx context.Context, userID uuid.UUID,
 		},
 	)
 }
+
+func (h CashflowHooks) NotifyBudgetAlert(ctx context.Context, userID uuid.UUID, category string, threshold int, spent, limit, currency string) error {
+	if h.Svc == nil {
+		return nil
+	}
+	label := "Budget 80%"
+	body := fmt.Sprintf("%s is at %d%% (%s / %s %s).", category, threshold, spent, limit, currency)
+	if threshold >= 100 {
+		label = "Budget reached"
+		body = fmt.Sprintf("%s has reached its limit (%s / %s %s).", category, spent, limit, currency)
+	}
+	return h.Svc.Notify(ctx, userID, TypeBudgetAlert, nil, label, body, map[string]any{
+		"category":  category,
+		"threshold": threshold,
+		"spent":     spent,
+		"limit":     limit,
+		"currency":  currency,
+	})
+}
+
+type CardHooks struct {
+	Svc *Service
+}
+
+func (h CardHooks) NotifyCardDue(ctx context.Context, userID, accountID uuid.UUID, name, amount, currency string, days int) error {
+	if h.Svc == nil {
+		return nil
+	}
+	label := "Card payment due"
+	body := fmt.Sprintf("%s — %s %s is due today.", name, amount, currency)
+	if days == 1 {
+		label = "Card payment tomorrow"
+		body = fmt.Sprintf("%s — %s %s due tomorrow.", name, amount, currency)
+	} else if days >= 3 {
+		label = "Card payment soon"
+		body = fmt.Sprintf("%s — %s %s due in %d days.", name, amount, currency, days)
+	}
+	return h.Svc.Notify(ctx, userID, TypeCardDue, nil, label, body, map[string]any{
+		"account_id": accountID.String(),
+		"name":       name,
+		"amount":     amount,
+		"currency":   currency,
+		"days":       days,
+	})
+}

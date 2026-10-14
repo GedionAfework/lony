@@ -15,6 +15,7 @@ import (
 const moneyAccountSelect = `
 	id, user_id, name, account_type, currency_code, balance::text, balance_as_of,
 	interest_rate_percent::text, compounding, institution_label, bank_profile_id,
+	credit_limit::text, statement_day, due_day,
 	archived_at, created_at, updated_at
 `
 
@@ -33,11 +34,12 @@ func (s *SQLStore) InsertMoneyAccount(ctx context.Context, rec accounts.Account,
 		INSERT INTO money_accounts (
 			user_id, name, account_type, currency_code, balance, balance_as_of,
 			interest_rate_percent, compounding, institution_label, bank_profile_id,
+			credit_limit, statement_day, due_day,
 			created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 		RETURNING `+moneyAccountSelect+`
 	`, rec.UserID, rec.Name, rec.AccountType, rec.CurrencyCode, rec.Balance.StringFixed(accounts.Scale), rec.BalanceAsOf,
-		rate, rec.Compounding, rec.InstitutionLabel, rec.BankProfileID, rec.CreatedAt, rec.UpdatedAt)
+		rate, rec.Compounding, rec.InstitutionLabel, rec.BankProfileID, creditLimitArg(rec), rec.StatementDay, rec.DueDay, rec.CreatedAt, rec.UpdatedAt)
 	saved, err := scanMoneyAccount(row)
 	if err != nil {
 		return accounts.Account{}, err
@@ -92,11 +94,12 @@ func (s *SQLStore) UpdateMoneyAccount(ctx context.Context, rec accounts.Account)
 		UPDATE money_accounts SET
 			name = $3, account_type = $4, currency_code = $5,
 			interest_rate_percent = $6, compounding = $7, institution_label = $8,
-			bank_profile_id = $9, updated_at = $10
+			bank_profile_id = $9, credit_limit = $10, statement_day = $11, due_day = $12,
+			updated_at = $13
 		WHERE id = $1 AND user_id = $2 AND archived_at IS NULL
 		RETURNING `+moneyAccountSelect+`
 	`, rec.ID, rec.UserID, rec.Name, rec.AccountType, rec.CurrencyCode,
-		rate, rec.Compounding, rec.InstitutionLabel, rec.BankProfileID, rec.UpdatedAt)
+		rate, rec.Compounding, rec.InstitutionLabel, rec.BankProfileID, creditLimitArg(rec), rec.StatementDay, rec.DueDay, rec.UpdatedAt)
 	return scanMoneyAccount(row)
 }
 
@@ -265,7 +268,9 @@ func (s *SQLStore) InsertMoneyTransfer(ctx context.Context, userID, fromID, toID
 	defer tx.Rollback(ctx)
 
 	tag, err := tx.Exec(ctx, `
-		UPDATE money_accounts SET balance = balance - $3, balance_as_of = $4, updated_at = $4
+		UPDATE money_accounts SET
+			balance = CASE WHEN account_type = 'credit_card' THEN balance + $3 ELSE balance - $3 END,
+			balance_as_of = $4, updated_at = $4
 		WHERE id = $1 AND user_id = $2 AND archived_at IS NULL AND currency_code = $5
 	`, fromID, userID, amount.StringFixed(accounts.Scale), now, currency)
 	if err != nil {
@@ -280,7 +285,9 @@ func (s *SQLStore) InsertMoneyTransfer(ctx context.Context, userID, fromID, toID
 	}
 
 	tag, err = tx.Exec(ctx, `
-		UPDATE money_accounts SET balance = balance + $3, balance_as_of = $4, updated_at = $4
+		UPDATE money_accounts SET
+			balance = CASE WHEN account_type = 'credit_card' THEN balance - $3 ELSE balance + $3 END,
+			balance_as_of = $4, updated_at = $4
 		WHERE id = $1 AND user_id = $2 AND archived_at IS NULL AND currency_code = $5
 	`, toID, userID, amount.StringFixed(accounts.Scale), now, currency)
 	if err != nil {
@@ -352,6 +359,33 @@ func (a moneyAccountStoreAdapter) LedgerSince(ctx context.Context, userID, accou
 func (a moneyAccountStoreAdapter) ReassignCashflows(ctx context.Context, fromAccountID, toAccountID uuid.UUID) error {
 	return a.Inner.ReassignCashflowAccounts(ctx, fromAccountID, toAccountID)
 }
+func (a moneyAccountStoreAdapter) InsertInstallment(ctx context.Context, rec accounts.Installment) (accounts.Installment, error) {
+	return a.Inner.InsertCardInstallment(ctx, rec)
+}
+func (a moneyAccountStoreAdapter) ListInstallments(ctx context.Context, userID, accountID uuid.UUID) ([]accounts.Installment, error) {
+	return a.Inner.ListCardInstallments(ctx, userID, accountID)
+}
+func (a moneyAccountStoreAdapter) GetInstallment(ctx context.Context, userID, accountID, id uuid.UUID) (accounts.Installment, error) {
+	return a.Inner.GetCardInstallment(ctx, userID, accountID, id)
+}
+func (a moneyAccountStoreAdapter) UpdateInstallment(ctx context.Context, rec accounts.Installment) (accounts.Installment, error) {
+	return a.Inner.UpdateCardInstallment(ctx, rec)
+}
+func (a moneyAccountStoreAdapter) DeleteInstallment(ctx context.Context, userID, accountID, id uuid.UUID) error {
+	return a.Inner.DeleteCardInstallment(ctx, userID, accountID, id)
+}
+func (a moneyAccountStoreAdapter) ListDueInstallments(ctx context.Context, asOf time.Time, limit int) ([]accounts.Installment, error) {
+	return a.Inner.ListDueCardInstallments(ctx, asOf, limit)
+}
+func (a moneyAccountStoreAdapter) ListCreditCards(ctx context.Context) ([]accounts.Account, error) {
+	return a.Inner.ListCreditCardAccounts(ctx)
+}
+func (a moneyAccountStoreAdapter) ClaimCardDueAlert(ctx context.Context, accountID uuid.UUID, dueOn time.Time, daysBefore int) (bool, error) {
+	return a.Inner.ClaimCardDueAlert(ctx, accountID, dueOn, daysBefore)
+}
+func (a moneyAccountStoreAdapter) PostCharge(ctx context.Context, rec accounts.Charge) error {
+	return a.Inner.PostCardCharge(ctx, rec)
+}
 
 // MoneyAccountsAdapter exposes SQLStore as accounts.Store.
 func MoneyAccountsAdapter(s *SQLStore) accounts.Store {
@@ -362,13 +396,22 @@ type moneyScannable interface {
 	Scan(dest ...any) error
 }
 
+func creditLimitArg(rec accounts.Account) any {
+	if rec.CreditLimit == nil {
+		return nil
+	}
+	return rec.CreditLimit.StringFixed(accounts.Scale)
+}
+
 func scanMoneyAccount(row moneyScannable) (accounts.Account, error) {
 	var rec accounts.Account
 	var bal string
 	var rate *string
+	var limit *string
 	if err := row.Scan(
 		&rec.ID, &rec.UserID, &rec.Name, &rec.AccountType, &rec.CurrencyCode, &bal, &rec.BalanceAsOf,
 		&rate, &rec.Compounding, &rec.InstitutionLabel, &rec.BankProfileID,
+		&limit, &rec.StatementDay, &rec.DueDay,
 		&rec.ArchivedAt, &rec.CreatedAt, &rec.UpdatedAt,
 	); err != nil {
 		return accounts.Account{}, err
@@ -377,6 +420,10 @@ func scanMoneyAccount(row moneyScannable) (accounts.Account, error) {
 	if rate != nil && *rate != "" {
 		d := mustDec(*rate)
 		rec.InterestRatePercent = &d
+	}
+	if limit != nil && *limit != "" {
+		d := mustDec(*limit)
+		rec.CreditLimit = &d
 	}
 	return rec, nil
 }

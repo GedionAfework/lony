@@ -445,6 +445,16 @@ export const api = {
       headers: { 'Idempotency-Key': idemKey('account-create') },
       body: JSON.stringify(body),
     }, token),
+  listInstallments: (token: string, accountId: string) =>
+    request<{ installments: CardInstallment[] }>(`/accounts/${accountId}/installments`, { method: 'GET' }, token),
+  createInstallment: (token: string, accountId: string, body: CreateInstallmentBody) =>
+    request<{ installment: CardInstallment }>(`/accounts/${accountId}/installments`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('account-installment') },
+      body: JSON.stringify(body),
+    }, token),
+  deleteInstallment: (token: string, accountId: string, installmentId: string) =>
+    request<{ ok: boolean }>(`/accounts/${accountId}/installments/${installmentId}`, { method: 'DELETE' }, token),
   updateAccount: (token: string, id: string, body: UpdateAccountBody) =>
     request<{ account: MoneyAccount }>(`/accounts/${id}`, {
       method: 'PATCH',
@@ -798,8 +808,17 @@ export const api = {
   },
   listBudgets: (token: string, period?: string) => {
     const suffix = period ? `?period=${encodeURIComponent(period)}` : '';
-    return request<{ budgets: Budget[] }>(`/budgets${suffix}`, { method: 'GET' }, token);
+    return request<{ budgets: Budget[]; payday?: PaydayCycle }>(`/budgets${suffix}`, { method: 'GET' }, token);
   },
+  upsertPayday: (
+    token: string,
+    body: { payday_day?: number; spend_limit?: string; currency_code?: string; clear_limit?: boolean },
+  ) =>
+    request<{ payday: PaydayCycle }>('/budgets/payday', {
+      method: 'PUT',
+      headers: { 'Idempotency-Key': idemKey('budget-payday') },
+      body: JSON.stringify(body),
+    }, token),
   upsertBudget: (
     token: string,
     body: {
@@ -850,6 +869,18 @@ export const api = {
     if (query.limit) params.set('limit', String(query.limit));
     const suffix = params.toString() ? `?${params.toString()}` : '';
     return request<{ entries: CashflowEntry[] }>(`/cashflow${suffix}`, { method: 'GET' }, token);
+  },
+  cashflowCalendar: (
+    token: string,
+    query: { from?: string; to?: string; currency?: string; tz?: string } = {},
+  ) => {
+    const params = new URLSearchParams();
+    if (query.from) params.set('from', query.from);
+    if (query.to) params.set('to', query.to);
+    if (query.currency) params.set('currency', query.currency);
+    if (query.tz) params.set('tz', query.tz);
+    const suffix = params.toString() ? `?${params.toString()}` : '';
+    return request<{ calendar: CashflowCalendar }>(`/cashflow/calendar${suffix}`, { method: 'GET' }, token);
   },
   createCashflow: (token: string, body: CreateCashflowBody) =>
     request<{ entry: CashflowEntry }>('/cashflow', {
@@ -1306,8 +1337,33 @@ export type Budget = {
   period_month: string;
   spent: string;
   remaining: string;
+  cycle_start?: string;
+  cycle_end?: string;
+  pace_pct?: number;
+  pace_amount?: string;
+  spent_pct?: number;
+  ahead?: boolean;
   created_at: string;
   updated_at: string;
+};
+
+export type PaydayCycle = {
+  payday_day?: number | null;
+  source: string;
+  cycle_start: string;
+  cycle_end: string;
+  days_total: number;
+  days_elapsed: number;
+  days_left: number;
+  pace_pct: number;
+  currency_code: string;
+  limit_amount?: string | null;
+  spent: string;
+  remaining?: string | null;
+  pace_amount?: string | null;
+  spent_pct?: number | null;
+  ahead: boolean;
+  alert?: string;
 };
 
 export type AccountTransfer = {
@@ -1697,6 +1753,25 @@ export type CashflowSummary = {
   by_currency: CashflowSummarySlice[];
 };
 
+export type CashflowCalendarDay = {
+  date: string;
+  income: string;
+  expense: string;
+  net: string;
+  income_count: number;
+  expense_count: number;
+  heat: number;
+};
+
+export type CashflowCalendar = {
+  from: string;
+  to: string;
+  currency_code: string;
+  timezone: string;
+  max_expense: string;
+  days: CashflowCalendarDay[];
+};
+
 export type CreateCashflowBody = {
   kind: 'income' | 'expense';
   title: string;
@@ -1758,7 +1833,7 @@ export type Dashboard = {
 export type MoneyAccount = {
   id: string;
   name: string;
-  account_type: 'cash' | 'bank' | 'mobile_money' | 'wallet' | 'other';
+  account_type: 'cash' | 'bank' | 'mobile_money' | 'wallet' | 'credit_card' | 'other';
   currency_code: string;
   balance: string;
   balance_as_of: string;
@@ -1766,9 +1841,39 @@ export type MoneyAccount = {
   compounding?: 'none' | 'monthly' | 'yearly' | null;
   institution_label?: string | null;
   bank_profile_id?: string | null;
+  credit_limit?: string | null;
+  statement_day?: number | null;
+  due_day?: number | null;
+  available_credit?: string | null;
+  utilization_pct?: number | null;
+  next_statement_at?: string | null;
+  next_due_at?: string | null;
   projected_balance_12m?: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type CardInstallment = {
+  id: string;
+  account_id: string;
+  merchant: string;
+  total_amount: string;
+  remaining_amount: string;
+  monthly_amount: string;
+  months_total: number;
+  months_remaining: number;
+  currency_code: string;
+  next_charge_on: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type CreateInstallmentBody = {
+  merchant: string;
+  total_amount: string;
+  monthly_amount?: string;
+  months_total: number;
+  next_charge_on?: string;
 };
 
 export type AccountReconcile = {
@@ -1797,6 +1902,9 @@ export type CreateAccountBody = {
   compounding?: 'none' | 'monthly' | 'yearly';
   institution_label?: string;
   bank_profile_id?: string;
+  credit_limit?: string;
+  statement_day?: number;
+  due_day?: number;
 };
 
 export type UpdateAccountBody = {
@@ -1808,6 +1916,9 @@ export type UpdateAccountBody = {
   institution_label?: string;
   bank_profile_id?: string;
   clear_interest?: boolean;
+  credit_limit?: string;
+  statement_day?: number;
+  due_day?: number;
 };
 
 export type WealthCurrencySlice = {

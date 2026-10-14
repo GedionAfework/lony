@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
@@ -163,6 +164,43 @@ func (s *SQLStore) CashflowSummary(ctx context.Context, userID uuid.UUID, from, 
 		slice.OutcomeCount = slice.ExpenseCount
 		slice.Net = inc.Sub(exp).StringFixed(expenses.Scale)
 		out = append(out, slice)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLStore) CashflowCalendarDays(ctx context.Context, userID uuid.UUID, from, to time.Time, currency, tz string) ([]expenses.CalendarBucket, error) {
+	if tz == "" {
+		tz = "UTC"
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT (occurred_at AT TIME ZONE $4)::date,
+			COALESCE(SUM(CASE WHEN kind = 'income' THEN amount ELSE 0 END), 0)::text,
+			COALESCE(SUM(CASE WHEN kind IN ('expense','outcome') THEN amount ELSE 0 END), 0)::text,
+			COALESCE(SUM(CASE WHEN kind = 'income' THEN 1 ELSE 0 END), 0)::int,
+			COALESCE(SUM(CASE WHEN kind IN ('expense','outcome') THEN 1 ELSE 0 END), 0)::int
+		FROM cashflow_entries
+		WHERE user_id = $1
+		  AND COALESCE(is_template, false) = false
+		  AND COALESCE(status, 'confirmed') = 'confirmed'
+		  AND occurred_at >= $2 AND occurred_at < $3
+		  AND ($5 = '' OR upper(currency_code) = upper($5))
+		GROUP BY 1
+		ORDER BY 1
+	`, userID, from, to, tz, currency)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []expenses.CalendarBucket
+	for rows.Next() {
+		var b expenses.CalendarBucket
+		var inc, exp string
+		if err := rows.Scan(&b.Day, &inc, &exp, &b.IncomeCount, &b.ExpenseCount); err != nil {
+			return nil, err
+		}
+		b.Income = mustDec(inc)
+		b.Expense = mustDec(exp)
+		out = append(out, b)
 	}
 	return out, rows.Err()
 }
@@ -418,4 +456,81 @@ func mustJSON(v any) []byte {
 		return []byte("{}")
 	}
 	return b
+}
+
+func (s *SQLStore) GetPayday(ctx context.Context, userID uuid.UUID) (expenses.PaydaySettings, error) {
+	row := s.pool.QueryRow(ctx, `
+		SELECT user_id, payday_day, spend_limit::text, currency_code, updated_at
+		FROM payday_settings WHERE user_id = $1
+	`, userID)
+	return scanPayday(row)
+}
+
+func (s *SQLStore) UpsertPayday(ctx context.Context, rec expenses.PaydaySettings) (expenses.PaydaySettings, error) {
+	var lim any
+	if rec.SpendLimit != nil {
+		lim = rec.SpendLimit.StringFixed(expenses.Scale)
+	}
+	row := s.pool.QueryRow(ctx, `
+		INSERT INTO payday_settings (user_id, payday_day, spend_limit, currency_code, updated_at)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (user_id) DO UPDATE SET
+			payday_day = EXCLUDED.payday_day,
+			spend_limit = EXCLUDED.spend_limit,
+			currency_code = EXCLUDED.currency_code,
+			updated_at = EXCLUDED.updated_at
+		RETURNING user_id, payday_day, spend_limit::text, currency_code, updated_at
+	`, rec.UserID, rec.PaydayDay, lim, rec.CurrencyCode, rec.UpdatedAt)
+	return scanPayday(row)
+}
+
+func (s *SQLStore) ListPaydayUserIDs(ctx context.Context) ([]uuid.UUID, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT user_id FROM payday_settings
+		UNION
+		SELECT DISTINCT user_id FROM budgets WHERE period_month = date_trunc('month', now())::date
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+func (s *SQLStore) ClaimBudgetAlert(ctx context.Context, userID uuid.UUID, scope string, cycleStart time.Time, threshold int) (bool, error) {
+	var got string
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO budget_alert_log (user_id, scope, cycle_start, threshold)
+		VALUES ($1, $2, $3::date, $4)
+		ON CONFLICT DO NOTHING
+		RETURNING scope
+	`, userID, scope, cycleStart, threshold).Scan(&got)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func scanPayday(row budgetScannable) (expenses.PaydaySettings, error) {
+	var rec expenses.PaydaySettings
+	var lim *string
+	if err := row.Scan(&rec.UserID, &rec.PaydayDay, &lim, &rec.CurrencyCode, &rec.UpdatedAt); err != nil {
+		return expenses.PaydaySettings{}, err
+	}
+	if lim != nil && strings.TrimSpace(*lim) != "" {
+		d := mustDec(*lim)
+		rec.SpendLimit = &d
+	}
+	return rec, nil
 }

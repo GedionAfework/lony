@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowLeftRight, Landmark, Pencil, RefreshCw, Scale, Trash2, Upload, Wallet } from 'lucide-react';
+import { ArrowLeftRight, CreditCard, Landmark, Pencil, RefreshCw, Scale, Trash2, Upload, Wallet } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import {
   api,
   type AccountReconcile,
   type BankLinkConnection,
   type BankLinkStatus,
+  type CardInstallment,
   type MoneyAccount,
 } from '../lib/api';
 import { formatMoney, stripAmount } from '../lib/format';
@@ -25,6 +26,7 @@ const FALLBACK_ACCOUNT_TYPES: CatalogOption[] = [
   { id: 'cash', label: 'Cash' },
   { id: 'mobile_money', label: 'Mobile money' },
   { id: 'wallet', label: 'Wallet' },
+  { id: 'credit_card', label: 'Credit card' },
   { id: 'other', label: 'Other' },
 ];
 
@@ -34,7 +36,7 @@ const COMPOUNDING = [
   { id: 'yearly', label: 'Yearly compound' },
 ];
 
-type Panel = null | 'create' | 'edit' | 'balance' | 'transfer' | 'reconcile' | 'import';
+type Panel = null | 'create' | 'edit' | 'balance' | 'transfer' | 'reconcile' | 'import' | 'installments';
 
 function mergeOptions(primary: CatalogOption[], fallback: CatalogOption[]): CatalogOption[] {
   const seen = new Set<string>();
@@ -67,7 +69,15 @@ export function AccountsPage() {
   const [balance, setBalance] = useState('0');
   const [interest, setInterest] = useState('');
   const [compounding, setCompounding] = useState('none');
+  const [creditLimit, setCreditLimit] = useState('');
+  const [statementDay, setStatementDay] = useState('');
+  const [dueDay, setDueDay] = useState('');
   const [newBalance, setNewBalance] = useState('');
+  const [installments, setInstallments] = useState<CardInstallment[]>([]);
+  const [instMerchant, setInstMerchant] = useState('');
+  const [instTotal, setInstTotal] = useState('');
+  const [instMonths, setInstMonths] = useState('12');
+  const [instMonthly, setInstMonthly] = useState('');
 
   const [fromId, setFromId] = useState('');
   const [toId, setToId] = useState('');
@@ -133,6 +143,9 @@ export function AccountsPage() {
     setBalance('0');
     setInterest('');
     setCompounding('none');
+    setCreditLimit('');
+    setStatementDay('');
+    setDueDay('');
   }
 
   function resolveInstitution(): string {
@@ -157,6 +170,9 @@ export function AccountsPage() {
     setAccountType(a.account_type);
     setInterest(a.interest_rate_percent || '');
     setCompounding(a.compounding || 'none');
+    setCreditLimit(a.credit_limit || '');
+    setStatementDay(a.statement_day ? String(a.statement_day) : '');
+    setDueDay(a.due_day ? String(a.due_day) : '');
     setCurrency(a.currency_code);
     const label = (a.institution_label || '').trim();
     const hit = institutionOptions.find((o) => o.label.toLowerCase() === label.toLowerCase());
@@ -182,6 +198,16 @@ export function AccountsPage() {
     }
     setBusy(true);
     try {
+      const stmt = Number(statementDay.trim());
+      const due = Number(dueDay.trim());
+      if (accountType === 'credit_card') {
+        if ((statementDay.trim() && (!Number.isInteger(stmt) || stmt < 1 || stmt > 28)) ||
+            (dueDay.trim() && (!Number.isInteger(due) || due < 1 || due > 28))) {
+          showError('Statement and due days must be from 1 to 28');
+          setBusy(false);
+          return;
+        }
+      }
       await api.createAccount(token, {
         name: accountDisplayName(label),
         account_type: accountType as MoneyAccount['account_type'],
@@ -190,6 +216,9 @@ export function AccountsPage() {
         interest_rate_percent: stripAmount(interest) || undefined,
         compounding: interest.trim() ? (compounding as 'none' | 'monthly' | 'yearly') : undefined,
         institution_label: label.trim() || undefined,
+        credit_limit: accountType === 'credit_card' ? stripAmount(creditLimit) || undefined : undefined,
+        statement_day: accountType === 'credit_card' && statementDay.trim() ? stmt : undefined,
+        due_day: accountType === 'credit_card' && dueDay.trim() ? due : undefined,
       });
       setPanel(null);
       await reload();
@@ -209,6 +238,16 @@ export function AccountsPage() {
     }
     setBusy(true);
     try {
+      const stmt = Number(statementDay.trim());
+      const due = Number(dueDay.trim());
+      if (accountType === 'credit_card') {
+        if ((statementDay.trim() && (!Number.isInteger(stmt) || stmt < 1 || stmt > 28)) ||
+            (dueDay.trim() && (!Number.isInteger(due) || due < 1 || due > 28))) {
+          showError('Statement and due days must be from 1 to 28');
+          setBusy(false);
+          return;
+        }
+      }
       const clear = !interest.trim();
       await api.updateAccount(token, activeId, {
         name: accountDisplayName(label),
@@ -218,6 +257,9 @@ export function AccountsPage() {
         compounding: clear ? undefined : (compounding as 'none' | 'monthly' | 'yearly'),
         institution_label: label.trim() || undefined,
         clear_interest: clear,
+        credit_limit: accountType === 'credit_card' ? stripAmount(creditLimit) || '' : undefined,
+        statement_day: accountType === 'credit_card' ? (statementDay.trim() ? stmt : 0) : undefined,
+        due_day: accountType === 'credit_card' ? (dueDay.trim() ? due : 0) : undefined,
       });
       setPanel(null);
       await reload();
@@ -237,6 +279,64 @@ export function AccountsPage() {
       await reload();
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Could not update balance');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openInstallments(a: MoneyAccount) {
+    if (!token) return;
+    setActiveId(a.id);
+    setInstMerchant('');
+    setInstTotal('');
+    setInstMonths('12');
+    setInstMonthly('');
+    setPanel('installments');
+    try {
+      const res = await api.listInstallments(token, a.id);
+      setInstallments(res.installments ?? []);
+    } catch (e) {
+      setInstallments([]);
+      showError(e instanceof Error ? e.message : 'Could not load installments');
+    }
+  }
+
+  async function onAddInstallment() {
+    if (!token || !activeId) return;
+    const months = Number(instMonths.trim());
+    if (!instMerchant.trim() || !stripAmount(instTotal) || !Number.isInteger(months) || months < 2) {
+      showError('Enter merchant, total, and months (2–60)');
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.createInstallment(token, activeId, {
+        merchant: instMerchant.trim(),
+        total_amount: stripAmount(instTotal) || '0',
+        monthly_amount: stripAmount(instMonthly) || undefined,
+        months_total: months,
+      });
+      setInstMerchant('');
+      setInstTotal('');
+      setInstMonths('12');
+      setInstMonthly('');
+      const res = await api.listInstallments(token, activeId);
+      setInstallments(res.installments ?? []);
+    } catch (e) {
+      showError(e instanceof Error ? e.message : 'Could not add installment');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onDeleteInstallment(id: string) {
+    if (!token || !activeId) return;
+    setBusy(true);
+    try {
+      await api.deleteInstallment(token, activeId, id);
+      setInstallments((rows) => rows.filter((r) => r.id !== id));
+    } catch (e) {
+      showError(e instanceof Error ? e.message : 'Could not delete installment');
     } finally {
       setBusy(false);
     }
@@ -449,7 +549,7 @@ export function AccountsPage() {
       <Card>
         <div className="section-label">Your accounts</div>
         {accounts.length === 0 ? (
-          <EmptyState icon={<Wallet size={22} />} title="No accounts yet" body="Add cash, bank, mobile money, or wallet balances for net worth tracking." />
+          <EmptyState icon={<Wallet size={22} />} title="No accounts yet" body="Add cash, bank, cards, or wallets for net worth tracking." />
         ) : (
           <div className="table-wrap">
             <table className="data-table">
@@ -474,6 +574,12 @@ export function AccountsPage() {
                     </td>
                     <td style={{ textAlign: 'right' }}>
                       <Money value={a.balance} currency={a.currency_code} locale={locale} />
+                      {a.account_type === 'credit_card' && a.credit_limit ? (
+                        <div className="muted" style={{ fontSize: 12 }}>
+                          {a.utilization_pct ?? 0}% of {formatMoney(a.credit_limit, a.currency_code, locale)}
+                          {a.next_due_at ? ` · due ${new Date(a.next_due_at).toLocaleDateString(locale, { month: 'short', day: 'numeric' })}` : ''}
+                        </div>
+                      ) : null}
                     </td>
                     <td className="muted" style={{ fontSize: 12 }}>
                       {a.interest_rate_percent
@@ -507,6 +613,11 @@ export function AccountsPage() {
                         >
                           <Upload size={15} />
                         </Button>
+                        {a.account_type === 'credit_card' ? (
+                          <Button variant="icon" aria-label="Installments" onClick={() => void openInstallments(a)}>
+                            <CreditCard size={15} />
+                          </Button>
+                        ) : null}
                         <Button variant="icon" aria-label="Edit" onClick={() => openEdit(a)}>
                           <Pencil size={15} />
                         </Button>
@@ -541,7 +652,21 @@ export function AccountsPage() {
           </>
         ) : null}
         <SelectField label="Currency" value={currency} onChange={setCurrency} options={CURRENCIES} />
-        {panel === 'create' ? <Field label="Current balance" value={balance} onChange={setBalance} money /> : null}
+        {panel === 'create' ? (
+          <Field
+            label={accountType === 'credit_card' ? 'Amount owed' : 'Current balance'}
+            value={balance}
+            onChange={setBalance}
+            money
+          />
+        ) : null}
+        {accountType === 'credit_card' ? (
+          <>
+            <Field label="Credit limit" value={creditLimit} onChange={setCreditLimit} money />
+            <Field label="Statement day (1–28)" value={statementDay} onChange={setStatementDay} placeholder="15" />
+            <Field label="Payment due day (1–28)" value={dueDay} onChange={setDueDay} placeholder="10" />
+          </>
+        ) : null}
         <Field label="Interest rate % (optional)" value={interest} onChange={setInterest} placeholder="e.g. 8" />
         {interest.trim() ? <SelectField label="Compounding" value={compounding} onChange={setCompounding} options={COMPOUNDING} /> : null}
         <Button onClick={panel === 'edit' ? onSaveEdit : onCreate} busy={busy} block>
@@ -618,6 +743,36 @@ export function AccountsPage() {
         {importResult ? <div style={{ color: 'var(--primary)', fontWeight: 700, fontSize: 13 }}>{importResult}</div> : null}
         <Button onClick={onImportStatement} busy={busy} block>
           {busy ? 'Importing…' : 'Import'}
+        </Button>
+      </Modal>
+
+      <Modal open={panel === 'installments'} title={`Installments${activeAccount ? ` — ${activeAccount.name}` : ''}`} onClose={() => setPanel(null)}>
+        <div className="muted" style={{ fontSize: 13 }}>
+          Each month we add the charge to this card until the plan is done.
+        </div>
+        {installments.length === 0 ? (
+          <EmptyState title="No installment plans" body="Add a purchase split across months." />
+        ) : (
+          installments.map((row) => (
+            <div key={row.id} className="card" style={{ marginTop: 8 }}>
+              <div style={{ fontWeight: 700 }}>{row.merchant}</div>
+              <div className="muted" style={{ fontSize: 12 }}>
+                {formatMoney(row.monthly_amount, row.currency_code, locale)} · {row.months_remaining}/{row.months_total} remaining {formatMoney(row.remaining_amount, row.currency_code, locale)}
+              </div>
+              {row.months_remaining > 0 ? (
+                <Button variant="secondary" size="sm" onClick={() => void onDeleteInstallment(row.id)} busy={busy}>
+                  Delete
+                </Button>
+              ) : null}
+            </div>
+          ))
+        )}
+        <Field label="Merchant" value={instMerchant} onChange={setInstMerchant} placeholder="Store or purchase" />
+        <Field label="Total amount" value={instTotal} onChange={setInstTotal} money />
+        <Field label="Months" value={instMonths} onChange={setInstMonths} placeholder="12" />
+        <Field label="Monthly amount (optional)" value={instMonthly} onChange={setInstMonthly} money />
+        <Button onClick={() => void onAddInstallment()} busy={busy} block>
+          {busy ? 'Saving…' : 'Add installment'}
         </Button>
       </Modal>
     </div>

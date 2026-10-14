@@ -23,6 +23,11 @@ type SQLStoreAdapter struct {
 		UpsertBudget(ctx context.Context, rec Budget) (Budget, error)
 		ListBudgets(ctx context.Context, userID uuid.UUID, period time.Time) ([]Budget, error)
 		DeleteBudget(ctx context.Context, userID, id uuid.UUID) error
+		GetPayday(ctx context.Context, userID uuid.UUID) (PaydaySettings, error)
+		UpsertPayday(ctx context.Context, rec PaydaySettings) (PaydaySettings, error)
+		ListPaydayUserIDs(ctx context.Context) ([]uuid.UUID, error)
+		ClaimBudgetAlert(ctx context.Context, userID uuid.UUID, scope string, cycleStart time.Time, threshold int) (bool, error)
+		CashflowCalendarDays(ctx context.Context, userID uuid.UUID, from, to time.Time, currency, tz string) ([]CalendarBucket, error)
 		GetSMSIngest(ctx context.Context, userID uuid.UUID, fingerprint string) (*SMSIngestRow, error)
 		InsertSMSIngest(ctx context.Context, userID uuid.UUID, fingerprint, excerpt string, parsed ParsedSMS, cashflowID *uuid.UUID) error
 	}
@@ -69,6 +74,21 @@ func (a SQLStoreAdapter) ListBudgets(ctx context.Context, userID uuid.UUID, peri
 }
 func (a SQLStoreAdapter) DeleteBudget(ctx context.Context, userID, id uuid.UUID) error {
 	return a.Inner.DeleteBudget(ctx, userID, id)
+}
+func (a SQLStoreAdapter) GetPayday(ctx context.Context, userID uuid.UUID) (PaydaySettings, error) {
+	return a.Inner.GetPayday(ctx, userID)
+}
+func (a SQLStoreAdapter) UpsertPayday(ctx context.Context, rec PaydaySettings) (PaydaySettings, error) {
+	return a.Inner.UpsertPayday(ctx, rec)
+}
+func (a SQLStoreAdapter) ListPaydayUserIDs(ctx context.Context) ([]uuid.UUID, error) {
+	return a.Inner.ListPaydayUserIDs(ctx)
+}
+func (a SQLStoreAdapter) ClaimBudgetAlert(ctx context.Context, userID uuid.UUID, scope string, cycleStart time.Time, threshold int) (bool, error) {
+	return a.Inner.ClaimBudgetAlert(ctx, userID, scope, cycleStart, threshold)
+}
+func (a SQLStoreAdapter) CalendarDays(ctx context.Context, userID uuid.UUID, from, to time.Time, currency, tz string) ([]CalendarBucket, error) {
+	return a.Inner.CashflowCalendarDays(ctx, userID, from, to, currency, tz)
 }
 func (a SQLStoreAdapter) GetSMSIngest(ctx context.Context, userID uuid.UUID, fingerprint string) (*SMSIngestRow, error) {
 	return a.Inner.GetSMSIngest(ctx, userID, fingerprint)

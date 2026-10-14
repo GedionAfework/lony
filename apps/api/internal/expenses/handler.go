@@ -126,6 +126,22 @@ func (h *Handler) Summary(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"summary": out})
 }
 
+func (h *Handler) Calendar(w http.ResponseWriter, r *http.Request) {
+	out, err := h.svc.Calendar(
+		r.Context(),
+		auth.UserIDFrom(r.Context()),
+		r.URL.Query().Get("from"),
+		r.URL.Query().Get("to"),
+		r.URL.Query().Get("currency"),
+		r.URL.Query().Get("tz"),
+	)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"calendar": out})
+}
+
 func (h *Handler) CategoryBreakdown(w http.ResponseWriter, r *http.Request) {
 	from, err := parseTime(r.URL.Query().Get("from"))
 	if err != nil {
@@ -352,12 +368,38 @@ func (h *Handler) CreateCategory(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) ListBudgets(w http.ResponseWriter, r *http.Request) {
-	out, err := h.svc.ListBudgets(r.Context(), auth.UserIDFrom(r.Context()), r.URL.Query().Get("period"))
+	out, payday, err := h.svc.ListBudgets(r.Context(), auth.UserIDFrom(r.Context()), r.URL.Query().Get("period"))
 	if err != nil {
 		httpx.Error(w, err)
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"budgets": out})
+	httpx.JSON(w, http.StatusOK, map[string]any{"budgets": out, "payday": payday})
+}
+
+type paydayBody struct {
+	PaydayDay    *int    `json:"payday_day"`
+	SpendLimit   *string `json:"spend_limit"`
+	CurrencyCode *string `json:"currency_code"`
+	ClearLimit   bool    `json:"clear_limit"`
+}
+
+func (h *Handler) UpsertPayday(w http.ResponseWriter, r *http.Request) {
+	var body paydayBody
+	if err := httpx.Decode(r, &body); err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	out, err := h.svc.UpsertPayday(r.Context(), auth.UserIDFrom(r.Context()), PaydayInput{
+		PaydayDay:    body.PaydayDay,
+		SpendLimit:   body.SpendLimit,
+		CurrencyCode: body.CurrencyCode,
+		ClearLimit:   body.ClearLimit,
+	})
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"payday": out})
 }
 
 func (h *Handler) UpsertBudget(w http.ResponseWriter, r *http.Request) {
