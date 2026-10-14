@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
+import { Pressable, Text, useWindowDimensions, View } from 'react-native';
 import {
   api,
   type AIInsight,
@@ -346,6 +346,7 @@ export function AnalyticsScreen({
   onOpenSeasonRecap,
 }: Props) {
   const { colors } = useTheme();
+  const { width: windowWidth } = useWindowDimensions();
   const preferred = (user.default_currency_code || '').toUpperCase();
   const [tab, setTab] = useState<Tab>('overview');
   const [overview, setOverview] = useState<InsightsOverview | null>(null);
@@ -366,8 +367,7 @@ export function AnalyticsScreen({
   );
   const [gradeModalOpen, setGradeModalOpen] = useState(false);
 
-  const isPremium =
-    user.role === 'admin' || (user.plan_tier || 'free').toLowerCase() === 'premium';
+  const isPremium = true;
 
   const reload = useCallback(async () => {
     if (!preferred || !token) return;
@@ -454,6 +454,9 @@ export function AnalyticsScreen({
 
   const tabs: { id: Tab; label: string }[] = [
     { id: 'overview', label: t(user.locale, 'insights.tabOverview') },
+    // Chat sits next to Overview so it stays on screen. A wrapping row inside the page
+    // scroll used to push Coach off the right edge.
+    ...(isPremium ? ([{ id: 'coach', label: t(user.locale, 'insights.tabCoach') }] as { id: Tab; label: string }[]) : []),
     { id: 'cashflow', label: t(user.locale, 'insights.tabCashflow') },
     { id: 'debts', label: t(user.locale, 'insights.tabDebts') },
     { id: 'goals', label: t(user.locale, 'insights.tabGoals') },
@@ -461,7 +464,6 @@ export function AnalyticsScreen({
       ? ([
           { id: 'analysis', label: t(user.locale, 'insights.tabAnalysis') },
           { id: 'reports', label: t(user.locale, 'insights.tabReports') },
-          { id: 'coach', label: t(user.locale, 'insights.tabCoach') },
         ] as { id: Tab; label: string }[])
       : []),
   ];
@@ -579,7 +581,7 @@ export function AnalyticsScreen({
         </Card>
       ) : (
         <>
-          <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
+          <View style={{ width: Math.max(280, windowWidth - 40), flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
             {tabs.map((t) => {
               const active = tab === t.id;
               return (

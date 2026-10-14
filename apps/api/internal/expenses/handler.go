@@ -334,6 +334,7 @@ type smsIngestBody struct {
 	Title         string     `json:"title"`
 	Note          string     `json:"note"`
 	StatedBalance string     `json:"stated_balance"`
+	OccurredAt    *time.Time `json:"occurred_at"`
 }
 
 func (h *Handler) IngestSMS(w http.ResponseWriter, r *http.Request) {
@@ -354,6 +355,7 @@ func (h *Handler) IngestSMS(w http.ResponseWriter, r *http.Request) {
 		Title:         body.Title,
 		Note:          body.Note,
 		StatedBalance: body.StatedBalance,
+		OccurredAt:    body.OccurredAt,
 	})
 	if err != nil {
 		httpx.Error(w, err)

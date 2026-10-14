@@ -983,10 +983,35 @@ func parsePeriodMonth(raw string) (time.Time, error) {
 	})
 }
 
+func smsOccurredAt(explicit *time.Time, text string, now time.Time) time.Time {
+	if explicit != nil && !explicit.IsZero() && explicit.Year() >= 2000 && explicit.Before(now.Add(48*time.Hour)) {
+		return explicit.UTC()
+	}
+	if t, ok := extractSMSWhen(text); ok {
+		return t
+	}
+	return now.UTC()
+}
+
+func (s *Service) realignCashflowDate(ctx context.Context, ent Entry, occurred time.Time) (Entry, bool) {
+	if occurred.IsZero() || ent.OccurredAt.Sub(occurred).Abs() < 2*time.Hour {
+		return ent, false
+	}
+	ent.OccurredAt = occurred
+	ent.UpdatedAt = s.now().UTC()
+	updated, err := s.store.Update(ctx, ent)
+	if err != nil {
+		return ent, false
+	}
+	return updated, true
+}
+
 func calendarDayUTC(t time.Time) time.Time {
 	y, m, d := t.UTC().Date()
 	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
 }
+
+const smsCategory = "Transfers"
 
 type SMSIngestInput struct {
 	Text      string
@@ -1002,6 +1027,7 @@ type SMSIngestInput struct {
 	Title         string
 	Note          string
 	StatedBalance string
+	OccurredAt    *time.Time
 }
 
 type SMSIngestResult struct {
@@ -1055,11 +1081,15 @@ func (s *Service) IngestSMS(ctx context.Context, userID uuid.UUID, in SMSIngestI
 	if bal := normalizeSMSAmount(in.StatedBalance); bal != "" {
 		parsed.StatedBalance = bal
 	}
+	occurred := smsOccurredAt(in.OccurredAt, text, s.now().UTC())
 	if logger, ok := s.store.(SMSLogStore); ok {
 		if existing, err := logger.GetSMSIngest(ctx, userID, fp); err == nil && existing != nil {
 			out := SMSIngestResult{Parsed: parsed, Duplicate: true}
 			if existing.CashflowID != nil {
 				if ent, err := s.store.Get(ctx, userID, *existing.CashflowID); err == nil {
+					if updated, ok := s.realignCashflowDate(ctx, ent, occurred); ok {
+						ent = updated
+					}
 					dto := toDTO(ent)
 					out.Entry = &dto
 				}
@@ -1089,7 +1119,7 @@ func (s *Service) IngestSMS(ctx context.Context, userID uuid.UUID, in SMSIngestI
 	}
 
 	// Skip if the same payment was already recorded (e.g. receipt scan for the same lunch).
-	if dup := s.findRecentPayment(ctx, userID, parsed.Kind, parsed.Amount, currency, s.now().UTC()); dup != nil {
+	if dup := s.findRecentPayment(ctx, userID, parsed.Kind, parsed.Amount, currency, occurred); dup != nil {
 		dto := toDTO(*dup)
 		id := dup.ID.String()
 		out.Duplicate = true
@@ -1167,10 +1197,10 @@ func (s *Service) IngestSMS(ctx context.Context, userID uuid.UUID, in SMSIngestI
 		Title:            title,
 		Amount:           parsed.Amount,
 		CurrencyCode:     currency,
-		Category:         "Transfers",
+		Category:         smsCategory,
 		AccountID:        accountID,
 		Note:             &note,
-		OccurredAt:       s.now().UTC(),
+		OccurredAt:       occurred,
 		SkipAccountDelta: skipDelta,
 	})
 	if err != nil {
@@ -1208,6 +1238,10 @@ func (s *Service) findRecentPayment(ctx context.Context, userID uuid.UUID, kind,
 	for i := range rows {
 		row := &rows[i]
 		if row.IsTemplate || row.Status != StatusConfirmed {
+			continue
+		}
+		// Rows from other SMS are separate transfers; their own fingerprint already dedupes them.
+		if row.Category == smsCategory {
 			continue
 		}
 		if !strings.EqualFold(row.CurrencyCode, currency) {

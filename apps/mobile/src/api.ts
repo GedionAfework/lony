@@ -524,16 +524,26 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ url }),
     }, token, { timeoutMs: 15_000 }),
+  planAssistant: (
+    token: string,
+    currency_code: string,
+    messages: { role: 'user' | 'assistant'; content: string }[],
+  ) =>
+    request<PlanAssistantReply>('/ai/plan-chat', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('ai-plan-chat') },
+      body: JSON.stringify({ currency_code, messages }),
+    }, token, { timeoutMs: 60_000 }),
   extractGoalDraft: (token: string, text: string) =>
     request<{ draft: GoalDraft }>('/goals/extract', {
       method: 'POST',
       body: JSON.stringify({ text }),
-    }, token),
-  searchGoalMarket: (token: string, query: string, currency_code: string) =>
+    }, token, { timeoutMs: 18_000 }),
+  searchGoalMarket: (token: string, query: string, currency_code: string, timeoutMs = 10_000) =>
     request<{ market: GoalMarketSearch }>('/goals/market-search', {
       method: 'POST',
       body: JSON.stringify({ query, currency_code }),
-    }, token, { timeoutMs: 12_000 }),
+    }, token, { timeoutMs }),
   refreshGoalPrices: (token: string) =>
     request<{ updated: Goal[]; changes: GoalPriceChange[] }>('/goals/refresh-prices', {
       method: 'POST',
@@ -864,6 +874,7 @@ export const api = {
       title?: string;
       note?: string;
       stated_balance?: string;
+      occurred_at?: string;
     },
   ) =>
     request<{
@@ -1331,7 +1342,35 @@ export type GoalDraft = {
   note?: string;
   source_url?: string;
   image_url?: string;
+  /** Search-engine thumbnail, used when image_url refuses to download. */
+  image_thumb_url?: string;
   type_label?: string;
+};
+
+export type PlanAssistantImage = {
+  image_url: string;
+  thumb_url?: string;
+  page_url?: string;
+  site?: string;
+  title?: string;
+};
+
+export type PlanAssistantSource = {
+  title: string;
+  url: string;
+  site: string;
+  image_url?: string;
+  price?: string;
+  currency_code?: string;
+  price_local?: string;
+};
+
+export type PlanAssistantReply = {
+  reply: string;
+  draft?: GoalDraft | null;
+  image_url?: string;
+  images?: PlanAssistantImage[];
+  sources?: PlanAssistantSource[];
 };
 
 export type GoalPriceChange = {

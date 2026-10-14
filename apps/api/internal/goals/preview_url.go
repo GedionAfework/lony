@@ -3,6 +3,7 @@ package goals
 import (
 	"context"
 	"encoding/json"
+	stdhtml "html"
 	"io"
 	"net/http"
 	"net/url"
@@ -20,29 +21,29 @@ type PreviewURLInput struct {
 }
 
 type PreviewURLResult struct {
-	URL         string  `json:"url"`
-	Title       string  `json:"title,omitempty"`
-	Description string  `json:"description,omitempty"`
-	ImageURL    string  `json:"image_url,omitempty"`
-	Price       string  `json:"price,omitempty"`
-	Currency    string  `json:"currency,omitempty"`
-	SiteName    string  `json:"site_name,omitempty"`
+	URL         string `json:"url"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+	ImageURL    string `json:"image_url,omitempty"`
+	Price       string `json:"price,omitempty"`
+	Currency    string `json:"currency,omitempty"`
+	SiteName    string `json:"site_name,omitempty"`
 }
 
 var (
-	metaPropertyRe = regexp.MustCompile(`(?is)<meta[^>]+(?:property|name)\s*=\s*["']([^"']+)["'][^>]+content\s*=\s*["']([^"']*)["'][^>]*>`)
-	metaContentRe  = regexp.MustCompile(`(?is)<meta[^>]+content\s*=\s*["']([^"']*)["'][^>]+(?:property|name)\s*=\s*["']([^"']+)["'][^>]*>`)
-	titleTagRe     = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
-	jsonLDRe       = regexp.MustCompile(`(?is)<script[^>]+type=["']application/ld\+json["'][^>]*>(.*?)</script>`)
+	metaPropertyRe  = regexp.MustCompile(`(?is)<meta[^>]+(?:property|name)\s*=\s*["']([^"']+)["'][^>]+content\s*=\s*["']([^"']*)["'][^>]*>`)
+	metaContentRe   = regexp.MustCompile(`(?is)<meta[^>]+content\s*=\s*["']([^"']*)["'][^>]+(?:property|name)\s*=\s*["']([^"']+)["'][^>]*>`)
+	titleTagRe      = regexp.MustCompile(`(?is)<title[^>]*>(.*?)</title>`)
+	jsonLDRe        = regexp.MustCompile(`(?is)<script[^>]+type=["']application/ld\+json["'][^>]*>(.*?)</script>`)
 	itemPropPriceRe = regexp.MustCompile(`(?is)itemprop\s*=\s*["']price["'][^>]*content\s*=\s*["']([^"']+)["']|content\s*=\s*["']([^"']+)["'][^>]*itemprop\s*=\s*["']price["']`)
-	jsonPriceRe    = regexp.MustCompile(`(?i)"(?:price|salePrice|sale_price|currentPrice|current_price|amount)"\s*:\s*"?([0-9]+(?:\.[0-9]{1,2})?)"?`)
-	jsonCurrencyRe = regexp.MustCompile(`(?i)"(?:priceCurrency|currency|currencyCode|currency_code)"\s*:\s*"([A-Z]{3})"`)
+	jsonPriceRe     = regexp.MustCompile(`(?i)"(?:price|salePrice|sale_price|currentPrice|current_price|amount)"\s*:\s*"?([0-9]+(?:\.[0-9]{1,2})?)"?`)
+	jsonCurrencyRe  = regexp.MustCompile(`(?i)"(?:priceCurrency|currency|currencyCode|currency_code)"\s*:\s*"([A-Z]{3})"`)
 	// Comma-grouped alternative must come first *and* require at least one group; otherwise
 	// leftmost-first matching turns "$2000" into "200".
-	priceTokenRe   = regexp.MustCompile(`(?i)(?:USD|EUR|GBP|ETB|CAD|AUD|JPY|CHF|CNY|INR|\$|€|£)\s*([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)`)
-	barePriceRe    = regexp.MustCompile(`(?i)(?:["']?(?:price|salePrice|sale_price|amount|cost)["']?\s*[:=]\s*["']?)([0-9]{2,}(?:\.[0-9]{1,2})?)`)
+	priceTokenRe = regexp.MustCompile(`(?i)(?:USD|EUR|GBP|ETB|CAD|AUD|JPY|CHF|CNY|INR|\$|€|£)\s*([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]{1,2})?|[0-9]+(?:\.[0-9]{1,2})?)`)
+	barePriceRe  = regexp.MustCompile(`(?i)(?:["']?(?:price|salePrice|sale_price|amount|cost)["']?\s*[:=]\s*["']?)([0-9]{2,}(?:\.[0-9]{1,2})?)`)
 	// "$68/mo", "$68 per month", "$68 a month", "68/mo." — financing, not the item price.
-	installmentAfterRe  = regexp.MustCompile(`(?i)^\s*(?:</?[a-z][^>]*>\s*)*(?:/|per|a|each|every)\s*(?:mo\b|month|mth|wk|week|yr|year|bi-?weekly|fortnight)`)
+	installmentAfterRe = regexp.MustCompile(`(?i)^\s*(?:</?[a-z][^>]*>\s*)*(?:/|per|a|each|every)\s*(?:mo\b|month|mth|wk|week|yr|year|bi-?weekly|fortnight)`)
 	// Keyword must sit right before the amount (only tags / short filler in between), so a
 	// "/mo" in a *previous* list item doesn't poison the next full price.
 	installmentBeforeRe = regexp.MustCompile(`(?i)(?:as low as|starting at|starting from|from just|or\s+just|per month|monthly|installment|instalment|financ|affirm|klarna|afterpay|sezzle|zip pay|pay in \d|\bapr\b|est\.?\s*payment|payments? of|x\s*\d+\s*months?)[^0-9$€£<]{0,12}(?:<[^>]*>\s*){0,3}$`)
@@ -487,16 +488,7 @@ func stripTags(s string) string {
 }
 
 func htmlUnescape(s string) string {
-	replacer := strings.NewReplacer(
-		"&amp;", "&",
-		"&lt;", "<",
-		"&gt;", ">",
-		"&quot;", `"`,
-		"&#39;", "'",
-		"&apos;", "'",
-		"&nbsp;", " ",
-	)
-	return replacer.Replace(s)
+	return strings.ReplaceAll(stdhtml.UnescapeString(s), "\u00a0", " ")
 }
 
 func isPrivateHost(host string) bool {

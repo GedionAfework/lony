@@ -17,18 +17,18 @@ import (
 )
 
 type ExportBundle struct {
-	ExportedAt string         `json:"exported_at"`
-	Profile    map[string]any `json:"profile"`
-	Accounts   []map[string]any `json:"accounts"`
-	Cashflow   []map[string]any `json:"cashflow"`
-	Transfers  []map[string]any `json:"transfers"`
-	Budgets    []map[string]any `json:"budgets"`
-	Goals      []map[string]any `json:"goals"`
-	Loans      []map[string]any `json:"loans"`
-	Repayments []map[string]any `json:"repayments"`
-	AIInsights []map[string]any `json:"ai_insights"`
+	ExportedAt      string           `json:"exported_at"`
+	Profile         map[string]any   `json:"profile"`
+	Accounts        []map[string]any `json:"accounts"`
+	Cashflow        []map[string]any `json:"cashflow"`
+	Transfers       []map[string]any `json:"transfers"`
+	Budgets         []map[string]any `json:"budgets"`
+	Goals           []map[string]any `json:"goals"`
+	Loans           []map[string]any `json:"loans"`
+	Repayments      []map[string]any `json:"repayments"`
+	AIInsights      []map[string]any `json:"ai_insights"`
 	AIConversations []map[string]any `json:"ai_conversations,omitempty"`
-	Trust      map[string]any   `json:"trust,omitempty"`
+	Trust           map[string]any   `json:"trust,omitempty"`
 }
 
 type Store interface {
@@ -263,14 +263,11 @@ func (s *Service) AIDisabled(ctx context.Context) (bool, error) {
 }
 
 func (s *Service) UserCanUseAI(ctx context.Context, userID uuid.UUID) (bool, error) {
-	tier, role, err := s.store.GetUserPlanAccess(ctx, userID)
-	if err != nil {
+	if _, _, err := s.store.GetUserPlanAccess(ctx, userID); err != nil {
 		return false, err
 	}
-	if strings.EqualFold(role, "admin") {
-		return true, nil
-	}
-	return strings.EqualFold(strings.TrimSpace(tier), "premium"), nil
+	// Every account is premium until billing is turned on.
+	return true, nil
 }
 
 func (s *Service) SetAIDisabled(ctx context.Context, disabled bool) error {

@@ -973,25 +973,14 @@ export function SettingsScreen(props: Props) {
           {t(props.locale, 'settings.finishProfile')}
         </Text>
       ) : null}
-      {(props.planTier || 'free').toLowerCase() !== 'premium' && !props.isAdmin ? (
-        <Card>
-          <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>
-            {t(props.locale, 'settings.freePlan')}
-          </Text>
-          <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13, marginTop: 4 }}>
-            {t(props.locale, 'settings.freePlanHint')}
-          </Text>
-        </Card>
-      ) : (
-        <Card>
-          <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>
-            {t(props.locale, 'settings.premium')}
-          </Text>
-          <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13, marginTop: 4 }}>
-            {t(props.locale, 'settings.premiumUnlocked')}
-          </Text>
-        </Card>
-      )}
+      <Card>
+        <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>
+          {t(props.locale, 'settings.premium')}
+        </Text>
+        <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13, marginTop: 4 }}>
+          {t(props.locale, 'settings.premiumUnlocked')}
+        </Text>
+      </Card>
       <Card>
         <HubRow
           title={t(props.locale, 'profile')}

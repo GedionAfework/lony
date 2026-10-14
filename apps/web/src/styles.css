@@ -673,7 +673,10 @@ h3 {
 /* --------------------------------------------------------------- segmented */
 
 .segmented {
-  display: inline-flex;
+  display: flex;
+  flex-wrap: wrap;
+  width: fit-content;
+  max-width: 100%;
   padding: 3px;
   background: var(--surface-muted);
   border: 1px solid var(--border);
@@ -1448,7 +1451,6 @@ table.data-table {
 .bubble-body {
   font-size: 14px;
   line-height: 1.4;
-  padding-right: 42px;
   word-break: break-word;
 }
 
@@ -1460,9 +1462,8 @@ table.data-table {
 }
 
 .time-corner {
-  position: absolute;
-  right: 10px;
-  bottom: 6px;
+  margin-top: 8px;
+  text-align: right;
   font-size: 9px;
   opacity: 0.7;
 }

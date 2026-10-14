@@ -174,7 +174,10 @@ func applyLaterMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	if err := applyMigration(ctx, pool, "00040", "migrations/00040_goal_source_url.sql"); err != nil {
 		return err
 	}
-	return applyMigration(ctx, pool, "00041", "migrations/00041_ask_received_networth.sql")
+	if err := applyMigration(ctx, pool, "00041", "migrations/00041_ask_received_networth.sql"); err != nil {
+		return err
+	}
+	return applyMigration(ctx, pool, "00042", "migrations/00042_all_accounts_premium.sql")
 }
 
 func applyMigration(ctx context.Context, pool *pgxpool.Pool, version, path string) error {

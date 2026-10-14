@@ -93,6 +93,23 @@ func (h *Handler) Report(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"report": out})
 }
 
+func (h *Handler) PlanChat(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		CurrencyCode string         `json:"currency_code"`
+		Messages     []PlanChatTurn `json:"messages"`
+	}
+	if err := httpx.Decode(r, &body); err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	out, err := h.svc.PlanChat(r.Context(), auth.UserIDFrom(r.Context()), body.CurrencyCode, body.Messages)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, out)
+}
+
 func (h *Handler) Coach(w http.ResponseWriter, r *http.Request) {
 	var body coachBody
 	if err := httpx.Decode(r, &body); err != nil {

@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ParsedSMS is a best-effort extraction from bank / wallet SMS text.
@@ -22,40 +23,60 @@ type ParsedSMS struct {
 }
 
 var (
-	reOTP         = regexp.MustCompile(`(?i)\b(otp|one[-\s]?time|verification code|pin code)\b`)
-	reIncome      = regexp.MustCompile(`(?i)\b(you have (?:received|been credited)|has been credited|received\s+(?:ETB|USD|Br)|credited|money received|deposit(?:ed)?)\b`)
-	reExpense     = regexp.MustCompile(`(?i)\b(you have (?:transfered|transferred|sent|paid|been debited)|has been debited|transfered|transferred|debited|money sent|paid\s+(?:ETB|USD|Br)|sent\s+(?:ETB|USD|Br)|transaction of)\b`)
-	reBalStrip    = regexp.MustCompile(`(?i)\b(?:your\s+)?(?:current\s+)?(?:e-?money\s+)?(?:account\s+)?balance\s+is\s+[A-Z$€£]*\s*[\d,]+\.?\d*`)
-	reStatedBal   = regexp.MustCompile(`(?i)\b(?:your\s+)?(?:current\s+)?(?:e-?money\s+)?(?:account\s+)?balance\s+is\s+(?:ETB|USD|EUR|GBP|Br|\$)?\s*([\d,]+\.?\d*)`)
-	reAvailBal    = regexp.MustCompile(`(?i)\bAvail(?:able)?\.?\s*Bal(?:ance)?\s*[:.]?\s*(?:ETB|USD|EUR|GBP|Br|\$)?\s*([\d,]+\.?\d*)`)
-	reNewBal      = regexp.MustCompile(`(?i)\b(?:new|remaining|updated|closing)\s+balance\s*[:.]?\s*(?:ETB|USD|EUR|GBP|Br|\$)?\s*([\d,]+\.?\d*)`)
-	reAmt1        = regexp.MustCompile(`(?i)\b(?:transfered|transferred|received|paid|sent|debited|credited)\s+(?:with\s+)?(?:ETB|USD|EUR|GBP|Br)\s*([\d,]+\.?\d*)`)
-	reAmtDebit    = regexp.MustCompile(`(?i)\b(?:has been|was)\s+(?:debited|credited)\s+(?:with\s+)?(?:ETB|USD|EUR|GBP|Br)\s*([\d,]+\.?\d*)`)
-	reAmtTxn      = regexp.MustCompile(`(?i)\btransaction of\s+(?:ETB|USD|EUR|GBP|Br)\s*([\d,]+\.?\d*)`)
-	reAmt2        = regexp.MustCompile(`(?i)\b(?:ETB|USD|EUR|GBP|Br)\s*([\d,]+\.?\d*)\s+(?:to|from|for)\b`)
-	reAmt3        = regexp.MustCompile(`(?i)(?:ETB|USD|EUR|GBP|Br)\s*([\d,]{1,}(?:\.\d{1,2})?)`)
-	reOwnAcct     = regexp.MustCompile(`(?i)\b(?:from your account|your account)\s+([0-9*xX]{4,24})\b`)
-	reOwnDebit    = regexp.MustCompile(`(?i)\byour account\s+([0-9*xX]{4,24})\s+has been\s+(?:debited|credited)\b`)
-	reOwnMasked   = regexp.MustCompile(`(?i)\byour account\s+[0-9]\*{3,}([0-9]{4})\b`)
-	reEndingIn    = regexp.MustCompile(`(?i)\b(?:card|account|acct|a/c)\s+ending(?:\s+in)?\s+(\d{4})\b`)
-	reEndingIn2   = regexp.MustCompile(`(?i)\bending(?:\s+in)?\s+(\d{4})\b`)
-	reDollarAmt   = regexp.MustCompile(`\$\s*([\d,]+\.?\d*)`)
-	reAvailDollar = regexp.MustCompile(`(?i)\b(?:available|current|ledger)\s+balance\s*[:.]?\s*\$?\s*([\d,]+\.?\d*)`)
-	reToParty     = regexp.MustCompile(`(?i)\b(?:transfered|transferred|sent|paid)\s+(?:ETB|USD|Br)?\s*[\d,]+\.?\d*\s+to\s+([+\dA-Za-z*][+\dA-Za-z0-9 *().'-]{1,50}?)(?:\s+on\b|\s+from\b|\s+Ref\b|\.|,|$)`)
-	reFromParty   = regexp.MustCompile(`(?i)\breceived\s+(?:ETB|USD|Br)?\s*[\d,]+\.?\d*\s+from\s+([+\dA-Za-z*][+\dA-Za-z0-9 *().'-]{1,50}?)(?:\s+on\b|\.|,|$)`)
-	reFromPhone   = regexp.MustCompile(`(?i)\bfrom\s+(\+?251[\d*]{6,12}|\+?09[\d*]{6,10})`)
-	rePaidFor     = regexp.MustCompile(`(?i)\bpaid\s+(?:ETB|USD|Br)?\s*[\d,]+\.?\d*\s+for\s+([A-Za-z0-9][A-Za-z0-9 .'-]{1,40}?)(?:\s+on\b|\.|,|$)`)
-	reCurrency    = regexp.MustCompile(`(?i)\b(ETB|USD|EUR|GBP)\b`)
+	reOTP       = regexp.MustCompile(`(?i)\b(otp|one[-\s]?time|verification code|pin code)\b`)
+	reIncome    = regexp.MustCompile(`(?i)\b(you have (?:received|been credited)|has been credited|received|credited|money received|deposit(?:ed)?|payment received)|re[cç]u|cr[eé]dit[eé]|recibid[oa]|recebeu`)
+	reExpense   = regexp.MustCompile(`(?i)\b(you have (?:transfered|transferred|sent|paid|been debited|bought)|has been debited|transfered|transferred|debited|money sent|paid|sent|purchase(?:d)?|transaction of|withdraw(?:n|al)?)|d[eé]bit[eé]|envoy[eé]|pagaste|pagou`)
+	reBalAny    = regexp.MustCompile(`(?i)\b(?:avail(?:able)?\.?\s*bal(?:ance)?|(?:new|current|available|ledger|remaining|closing|updated|account|e-?money)?\s*balance|solde|saldo)\b[^\d]{0,40}?` + anyCurrencyAlt + `?\s*` + smsNumPat)
+	reStatedBal = regexp.MustCompile(`(?i)\b(?:your\s+)?(?:current\s+)?(?:e-?money\s+)?(?:account\s+)?balance\s+is\s+` + anyCurrencyAlt + `?\s*(` + smsNumPat + `)`)
+	reAvailBal  = regexp.MustCompile(`(?i)\bAvail(?:able)?\.?\s*Bal(?:ance)?\s*[:.]?\s*` + anyCurrencyAlt + `?\s*(` + smsNumPat + `)`)
+	reNewBal    = regexp.MustCompile(`(?i)\b(?:new|remaining|updated|closing|available|current|ledger)\s+balance\s*[:.]?\s*` + anyCurrencyAlt + `?\s*(` + smsNumPat + `)`)
+	reVerbAmt   = regexp.MustCompile(`(?i)\b(?:transfered|transferred|received|paid|sent|debited|credited|deposited|withdrawn|withdrew|purchase(?:d)?|bought|spent|charged)\s+(?:with\s+|of\s+|for\s+)?(?:` + anyCurrencyAlt + `\s*)?(` + smsNumPat + `)`)
+	reAmtCur    = regexp.MustCompile(`(?i)(?:` + anyCurrencyAlt + `)\s*(` + smsNumPat + `)`)
+	reCurAfter  = regexp.MustCompile(`(?i)(` + smsNumPat + `)\s*(?:` + anyCurrencyAlt + `)`)
+	reOwnAcct   = regexp.MustCompile(`(?i)\b(?:from your account|your account)\s+([0-9*xX]{4,24})\b`)
+	reOwnDebit  = regexp.MustCompile(`(?i)\byour account\s+([0-9*xX]{4,24})\s+has been\s+(?:debited|credited)\b`)
+	reOwnMasked = regexp.MustCompile(`(?i)\byour account\s+[0-9]\*{3,}([0-9]{4})\b`)
+	reEndingIn  = regexp.MustCompile(`(?i)\b(?:card|account|acct|a/c)\s+ending(?:\s+in)?\s+(\d{4})\b`)
+	reEndingIn2 = regexp.MustCompile(`(?i)\bending(?:\s+in)?\s+(\d{4})\b`)
+	reToParty   = regexp.MustCompile(`(?i)\b(?:transfered|transferred|sent|paid)\s+(?:` + anyCurrencyAlt + `)?\s*` + smsNumPat + `\s+to\s+([+\dA-Za-z*][+\dA-Za-z0-9 *().'-]{1,50}?)(?:\s+on\b|\s+from\b|\s+Ref\b|\.|,|$)`)
+	reFromParty = regexp.MustCompile(`(?i)\breceived\s+(?:` + anyCurrencyAlt + `)?\s*` + smsNumPat + `\s+from\s+([+\dA-Za-z*][+\dA-Za-z0-9 *().'-]{1,50}?)(?:\s+on\b|\.|,|$)`)
+	reFromPhone = regexp.MustCompile(`(?i)\bfrom\s+(\+?\d[\d*]{7,14})`)
+	rePaidFor   = regexp.MustCompile(`(?i)\bpaid\s+(?:` + anyCurrencyAlt + `)?\s*` + smsNumPat + `\s+for\s+([A-Za-z0-9][A-Za-z0-9 .'-]{1,40}?)(?:\s+on\b|\.|,|$)`)
 )
 
-func normalizeSMSAmount(raw string) string {
-	cleaned := strings.ReplaceAll(strings.TrimSpace(raw), ",", "")
-	cleaned = strings.ReplaceAll(cleaned, " ", "")
-	f, err := strconv.ParseFloat(cleaned, 64)
-	if err != nil || f <= 0 {
-		return ""
+var reSMSDate = regexp.MustCompile(`\b(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?`)
+
+// extractSMSWhen reads a bank date out of the SMS. Ethiopian alerts are day/month/year.
+func extractSMSWhen(raw string) (time.Time, bool) {
+	m := reSMSDate.FindStringSubmatch(raw)
+	if len(m) < 4 {
+		return time.Time{}, false
 	}
-	return strconv.FormatFloat(f, 'f', 2, 64)
+	day, _ := strconv.Atoi(m[1])
+	month, _ := strconv.Atoi(m[2])
+	year, _ := strconv.Atoi(m[3])
+	if month > 12 && day <= 12 {
+		day, month = month, day
+	}
+	hour, min, sec := 0, 0, 0
+	if len(m) > 4 && m[4] != "" {
+		hour, _ = strconv.Atoi(m[4])
+	}
+	if len(m) > 5 && m[5] != "" {
+		min, _ = strconv.Atoi(m[5])
+	}
+	if len(m) > 6 && m[6] != "" {
+		sec, _ = strconv.Atoi(m[6])
+	}
+	nowY := time.Now().Year()
+	if year < 2000 || year > nowY+1 || month < 1 || month > 12 || day < 1 || day > 31 {
+		return time.Time{}, false
+	}
+	t := time.Date(year, time.Month(month), day, hour, min, sec, 0, time.Local)
+	if t.Day() != day || t.After(time.Now().Add(48*time.Hour)) {
+		return time.Time{}, false
+	}
+	return t.UTC(), true
 }
 
 func extractStatedBalance(raw string) string {
@@ -70,11 +91,6 @@ func extractStatedBalance(raw string) string {
 		}
 	}
 	if m := reNewBal.FindStringSubmatch(raw); len(m) > 1 {
-		if amt := normalizeSMSAmount(m[1]); amt != "" {
-			return amt
-		}
-	}
-	if m := reAvailDollar.FindStringSubmatch(raw); len(m) > 1 {
 		if amt := normalizeSMSAmount(m[1]); amt != "" {
 			return amt
 		}
@@ -157,9 +173,7 @@ func ParseTransferSMS(text string) ParsedSMS {
 	}
 	out.StatedBalance = extractStatedBalance(raw)
 	fillOwnAccount(&out, raw)
-	if strings.Contains(raw, "$") {
-		out.CurrencyCode = "USD"
-	}
+	out.CurrencyCode = detectSMSCurrency(raw)
 	if !IsTransferSMS(raw) {
 		return out
 	}
@@ -179,35 +193,25 @@ func ParseTransferSMS(text string) ParsedSMS {
 		score += 0.35
 	}
 
-	stripped := reBalStrip.ReplaceAllString(raw, " ")
-	stripped = reAvailBal.ReplaceAllString(stripped, " ")
-	stripped = reAvailDollar.ReplaceAllString(stripped, " ")
+	stripped := reBalAny.ReplaceAllString(raw, " ")
 	var amt string
-	if m := reAmt1.FindStringSubmatch(stripped); len(m) > 1 {
-		amt = normalizeSMSAmount(m[1])
-	} else if m := reAmtDebit.FindStringSubmatch(stripped); len(m) > 1 {
-		amt = normalizeSMSAmount(m[1])
-	} else if m := reAmtTxn.FindStringSubmatch(stripped); len(m) > 1 {
-		amt = normalizeSMSAmount(m[1])
-	} else if m := reAmt2.FindStringSubmatch(stripped); len(m) > 1 {
-		amt = normalizeSMSAmount(m[1])
-	} else if m := reAmt3.FindStringSubmatch(stripped); len(m) > 1 {
-		amt = normalizeSMSAmount(m[1])
-	} else if m := reDollarAmt.FindStringSubmatch(stripped); len(m) > 1 {
-		amt = normalizeSMSAmount(m[1])
+	if out.CurrencyCode != "" {
+		amt = amountBesideCurrency(stripped, out.CurrencyCode)
+	}
+	if amt == "" {
+		if m := reVerbAmt.FindStringSubmatch(stripped); len(m) > 1 {
+			amt = normalizeSMSAmount(m[1])
+		} else if m := reAmtCur.FindStringSubmatch(stripped); len(m) > 1 {
+			amt = normalizeSMSAmount(m[1])
+		} else if m := reCurAfter.FindStringSubmatch(stripped); len(m) > 1 {
+			amt = normalizeSMSAmount(m[1])
+		}
 	}
 	if amt != "" {
 		out.Amount = amt
 		score += 0.4
 	}
-	if m := reCurrency.FindStringSubmatch(raw); len(m) > 1 {
-		out.CurrencyCode = strings.ToUpper(m[1])
-		score += 0.05
-	} else if regexp.MustCompile(`(?i)\bBr\b`).MatchString(raw) {
-		out.CurrencyCode = "ETB"
-		score += 0.05
-	} else if strings.Contains(raw, "$") {
-		out.CurrencyCode = "USD"
+	if out.CurrencyCode != "" {
 		score += 0.05
 	}
 	if out.AccountLast4 != "" {

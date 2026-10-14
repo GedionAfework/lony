@@ -33,12 +33,10 @@ const planExtractSystemPrompt = "" +
 	"type_label (optional short label such as Laptop or Trip to Dubai). " +
 	"Rules: " +
 	"Use purchase for things to buy, travel for trips, savings for generic saving or emergency funds, debt_payoff for paying off debt. " +
-	"If the user or prompt asks to estimate a price, or gives a product/model/year without a stated price, " +
-	"you MUST fill target_amount with a realistic market estimate (no currency symbols, no commas). " +
-	"In note, start with 'Estimated market price' and briefly say what assumptions you used (year, condition, region). " +
 	"CRITICAL: Never put a model year (1900-2099) into target_amount. Years are not prices. " +
-	"If the user already stated an explicit purchase price (with currency or words like about/around/cost), use that exact number. " +
-	"Only leave target_amount empty when there is truly not enough detail to estimate. " +
+	"If the user already stated an explicit purchase price, use that exact number. " +
+	"Leave target_amount empty when you are not sure of a current selling price. Do not invent one. " +
+	"Never combine two different products from the note into one title. " +
 	"Prefer the user's currency_code when mentioned; otherwise leave currency_code empty. " +
 	"If a draft JSON is provided, keep its URL/image; you may update title, goal_type, note, type_label, target_date, and target_amount when estimating. " +
 	"If the draft already has a scraped target_amount from a product page, keep that amount and do not invent a different price."

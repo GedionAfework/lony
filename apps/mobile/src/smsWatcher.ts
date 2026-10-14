@@ -11,6 +11,7 @@ const LIVE_POLL_MS = 8_000;
 
 export type SmsWatchCallbacks = {
   token: string;
+  userId?: string;
   defaultCurrency?: string;
   onImported?: (imported: number, accountsAdded: number) => void;
 };
@@ -110,8 +111,9 @@ async function pollInboxOnce(forceDaily = false): Promise<void> {
   try {
     const res = await syncBankSms(liveOpts.token, undefined, {
       force: forceDaily,
+      userId: liveOpts.userId,
       maxCount: forceDaily ? 200 : 30,
-      defaultCurrency: liveOpts.defaultCurrency || 'ETB',
+      defaultCurrency: liveOpts.defaultCurrency || 'USD',
     });
     if (res.imported > 0 || res.accountsAdded > 0 || (res.balancesUpdated ?? 0) > 0) {
       liveOpts.onImported?.(res.imported, res.accountsAdded);

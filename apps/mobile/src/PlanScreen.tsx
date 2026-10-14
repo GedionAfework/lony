@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Image, Pressable, Text, View } from 'react-native';
+import { ActivityIndicator, Image, Linking, Pressable, ScrollView, Text, View } from 'react-native';
 import {
   EncodingType,
   cacheDirectory,
@@ -10,7 +10,16 @@ import {
   writeAsStringAsync,
 } from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
-import { api, type Goal, type GoalDraft, type GoalPricePoint, type MoneyAccount, type User } from './api';
+import {
+  api,
+  type Goal,
+  type GoalDraft,
+  type GoalPricePoint,
+  type MoneyAccount,
+  type PlanAssistantImage,
+  type PlanAssistantSource,
+  type User,
+} from './api';
 import { stripAmount } from './amountFormat';
 import { CURRENCIES } from './catalogs';
 import { DateField } from './DateField';
@@ -115,6 +124,8 @@ type AiChatMessage = {
   content: string;
   chips?: AiChip[];
   draft?: GoalDraft;
+  images?: PlanAssistantImage[];
+  sources?: PlanAssistantSource[];
 };
 
 type EstimateMemory = {
@@ -207,6 +218,7 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
   const [aiDraft, setAiDraft] = useState<GoalDraft | null>(null);
   const [aiInterview, setAiInterview] = useState<AiInterview>(EMPTY_INTERVIEW);
   const aiChatLoadedRef = useRef(false);
+  const aiChatScrollRef = useRef<ScrollView>(null);
   /** Survives re-renders so “where did you get that?” always has context. */
   const estimateMemoryRef = useRef<EstimateMemory | null>(null);
 
@@ -241,6 +253,12 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
       memory: estimateMemoryRef.current,
     });
   }, [aiMessages, aiInterview, aiDraft]);
+
+  useEffect(() => {
+    if (createTab !== 'ai') return;
+    const id = setTimeout(() => aiChatScrollRef.current?.scrollToEnd({ animated: true }), 60);
+    return () => clearTimeout(id);
+  }, [aiMessages, aiBusy, aiStatus, createTab]);
 
   function clearAiChat() {
     setAiMessages([]);
@@ -409,27 +427,34 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
     setPendingCover(payload);
   }
 
-  async function fetchCoverFromUrl(imageUrl: string): Promise<CoverDraft | null> {
-    try {
-      const base = cacheDirectory || documentDirectory || '';
-      const dest = `${base}goal-cover-${Date.now()}.jpg`;
-      const downloaded = await downloadAsync(imageUrl, dest);
-      const base64 = await readAsStringAsync(downloaded.uri, {
-        encoding: EncodingType.Base64,
-      });
-      if (!base64) return null;
-      const cover: CoverDraft = {
-        filename: 'product.jpg',
-        mime: 'image/jpeg',
-        attachment_base64: base64,
-        preview: downloaded.uri,
-      };
-      setPendingCover(cover);
-      return cover;
-    } catch {
-      // Cover is best-effort; title/price still apply.
-      return null;
+  async function fetchCoverFromUrl(imageUrl: string, fallbackUrl?: string): Promise<CoverDraft | null> {
+    for (const src of [imageUrl, fallbackUrl]) {
+      if (!src) continue;
+      try {
+        const base = cacheDirectory || documentDirectory || '';
+        const dest = `${base}goal-cover-${Date.now()}.jpg`;
+        const downloaded = await Promise.race([
+          downloadAsync(src, dest),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error('cover timeout')), 8_000)),
+        ]);
+        if (downloaded.status >= 400) continue;
+        const base64 = await readAsStringAsync(downloaded.uri, {
+          encoding: EncodingType.Base64,
+        });
+        if (!base64) continue;
+        const cover: CoverDraft = {
+          filename: 'product.jpg',
+          mime: 'image/jpeg',
+          attachment_base64: base64,
+          preview: downloaded.uri,
+        };
+        setPendingCover(cover);
+        return cover;
+      } catch {
+        // Cover is best-effort; title/price still apply.
+      }
     }
+    return null;
   }
 
   /** Applies extracted fields to the Detail form state and returns the fully resolved
@@ -475,7 +500,7 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
 
     let nextCover = pendingCover;
     if (d.image_url) {
-      nextCover = await fetchCoverFromUrl(d.image_url);
+      nextCover = await fetchCoverFromUrl(d.image_url, d.image_thumb_url);
     }
 
     return {
@@ -501,24 +526,32 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
     }
     setUrlBusy(true);
     try {
-      // Prefer AI extract so URL + surrounding text fill the form; falls back to scrape-only.
-      try {
-        const res = await api.extractGoalDraft(token, url);
-        await applyDraft(res.draft ?? {});
-      } catch {
-        const res = await api.previewGoalUrl(token, url);
-        const p = res.preview;
-        await applyDraft({
-          title: p.title,
-          target_amount: p.price,
-          currency_code: p.currency,
-          note: p.description,
-          source_url: p.url || url,
-          image_url: p.image_url,
-          goal_type: 'purchase',
-        });
+      const previewPromise = api.previewGoalUrl(token, url).catch(() => null);
+      const extractPromise = api.extractGoalDraft(token, url).catch(() => null);
+      const preview = await previewPromise;
+      const scraped = preview?.preview;
+      // A scraped full price is enough. Only wait on extract when the page had no price.
+      const extracted = scraped?.price ? null : await extractPromise;
+      const draft = extracted?.draft;
+      const price = scraped?.price || draft?.target_amount || '';
+      const title = scraped?.title || draft?.title || '';
+      if (!title && !price) {
+        onError('That page did not include a product title or a full price. Try the product page itself, not a search or payment-plan link.');
+        return;
       }
-      // Hand off to the Detail tab so the user can review and save.
+      await applyDraft({
+        ...(draft ?? {}),
+        title: title || draft?.title,
+        target_amount: price || undefined,
+        currency_code: scraped?.currency || draft?.currency_code,
+        note: draft?.note || scraped?.description,
+        source_url: scraped?.url || draft?.source_url || url,
+        image_url: scraped?.image_url || draft?.image_url,
+        goal_type: draft?.goal_type || 'purchase',
+      });
+      if (!price) {
+        onError('The page opened, but it did not list a full price. The title is filled in — add the amount on Detail.');
+      }
       setCreateTab('detail');
     } catch (e) {
       onError(e instanceof Error ? e.message : 'Could not read that link');
@@ -917,22 +950,34 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
     if (/honda\s*cr-?v|crv/.test(blob)) {
       return pack(`Honda CR-V${year ? ` ${year}` : ''}`, 28000);
     }
+    if (/hilux/.test(blob)) return pack(`Toyota Hilux${year ? ` ${year}` : ''}`, 22000);
+    if (/yaris|vitz/.test(blob)) return pack(`Toyota Yaris${year ? ` ${year}` : ''}`, 11000);
+    const phone = blob.match(/\biphone\s*(1[1-8])\b/);
+    if (phone) {
+      const gen = Number(phone[1]);
+      const base = 280 + (gen - 11) * 90;
+      const bump = /pro\s*max/.test(blob) ? 280 : /\bpro\b/.test(blob) ? 160 : /\bplus\b/.test(blob) ? 80 : 0;
+      return pack(`iPhone ${gen}${/pro\s*max/.test(blob) ? ' Pro Max' : /\bpro\b/.test(blob) ? ' Pro' : ''}`, base + bump);
+    }
     return null;
   }
 
   function enoughToEstimate(details: string[], text: string): boolean {
-    if (parseStatedPrice(text)) return true;
+    if (parseStatedPrice(text) || parseStatedPrice(details.join(' '))) return true;
     const blob = details.join(' ');
     const fam = productFamily(blob);
-    if (fam === 'phone') return hasPhoneModel(blob);
+    if (/\b(go ahead|that'?s all|how much|estimate|just price)\b/i.test(text)) return true;
+    if (fam === 'phone') return hasPhoneModel(blob) || details.length >= 2;
     if (fam === 'car') {
       const spec = currentCarSpec(details);
-      return Boolean((spec.model || spec.make) && spec.year && !spec.badYear);
+      if (spec.badYear) return false;
+      return Boolean((spec.model || spec.make) && (spec.year || details.length >= 3));
     }
-    if (fam === 'laptop') return hasLaptopModel(blob);
-    if (fam === 'tablet') return /\bipad\b/i.test(blob) && /\b(air|pro|mini|\d)\b/i.test(blob);
-    if (/\b(go ahead|that'?s all|how much)\b/i.test(text) && hasSpecificItem(blob)) return true;
-    return hasSpecificItem(blob) && (hasYear(blob) || /\b(new|used|refurb|gb|pro|air)\b/i.test(blob));
+    if (fam === 'laptop') return hasLaptopModel(blob) || details.length >= 2;
+    if (fam === 'tablet') return (/\bipad\b/i.test(blob) && /\b(air|pro|mini|\d)\b/i.test(blob)) || details.length >= 2;
+    if (fam === 'travel') return details.length >= 2;
+    if (details.length >= 3) return true;
+    return hasSpecificItem(blob);
   }
 
   function askFollowUp(itemHint: string, details: string[]): string {
@@ -1030,22 +1075,25 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
         warning = e instanceof Error ? e.message : 'Could not scrape that link';
         merged.source_url = rawUrl;
       }
-      try {
-        const res = await api.extractGoalDraft(token, `${rawUrl}\n${blob}`);
-        for (const [key, value] of Object.entries(res.draft ?? {})) {
-          if (value === undefined || value === null || value === '') continue;
-          if (key === 'target_amount' && merged.target_amount) continue;
-          (merged as Record<string, unknown>)[key] = value;
+      // Preview already has the live price. A second extract only helps when the page had no price.
+      if (!merged.target_amount) {
+        try {
+          const res = await api.extractGoalDraft(token, `${rawUrl}\n${blob}`);
+          for (const [key, value] of Object.entries(res.draft ?? {})) {
+            if (value === undefined || value === null || value === '') continue;
+            if (key === 'target_amount' && merged.target_amount) continue;
+            (merged as Record<string, unknown>)[key] = value;
+          }
+          if (!merged.source_url && res.draft?.source_url) merged.source_url = res.draft.source_url;
+          if (merged.target_amount && !isYearAmount(Number(merged.target_amount)) && source !== 'product_link') {
+            source = merged.source_url ? 'product_link' : source;
+            explain =
+              explain ||
+              `Pulled ${formatMoney(merged.target_amount, (merged.currency_code || cur).toUpperCase(), user.locale)} from the product page (${merged.source_url || rawUrl}).`;
+          }
+        } catch (e) {
+          if (!warning) warning = e instanceof Error ? e.message : 'Could not read that link';
         }
-        if (!merged.source_url && res.draft?.source_url) merged.source_url = res.draft.source_url;
-        if (merged.target_amount && !isYearAmount(Number(merged.target_amount)) && source !== 'product_link') {
-          source = merged.source_url ? 'product_link' : source;
-          explain =
-            explain ||
-            `Pulled ${formatMoney(merged.target_amount, (merged.currency_code || cur).toUpperCase(), user.locale)} from the product page (${merged.source_url || rawUrl}).`;
-        }
-      } catch (e) {
-        if (!warning) warning = e instanceof Error ? e.message : 'Could not read that link';
       }
     }
 
@@ -1097,9 +1145,43 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
               .join(' ');
             merged.note = explain.slice(0, 240);
           }
-        } catch (e) {
-          warning = e instanceof Error ? e.message : 'Could not scrape live listings';
+        } catch {
+          // A failed scrape is not something to dump into the chat. Fall through to an estimate.
         }
+      }
+    }
+
+    if (!merged.target_amount) {
+      setAiStatus('Estimating a current price…');
+      try {
+        const res = await api.extractGoalDraft(
+          token,
+          `The user's currency is ${cur}. Estimate a current typical selling price in ${cur}. Never use a model year as the price.\n${blob}`,
+        );
+        const d = res.draft;
+        const amount = d?.target_amount ? Number(d.target_amount) : NaN;
+        if (d?.target_amount && Number.isFinite(amount) && amount > 0 && !isYearAmount(amount)) {
+          merged.target_amount = d.target_amount;
+          if (d.currency_code && d.currency_code.length === 3) merged.currency_code = d.currency_code.toUpperCase();
+          if (d.title) merged.title = d.title;
+          if (d.goal_type) merged.goal_type = d.goal_type;
+          if (d.target_date) merged.target_date = d.target_date;
+          if (d.note) merged.note = d.note;
+          source = 'market_estimate';
+          explain = d.note || `Estimated current selling price in ${merged.currency_code || cur}. Not copied from a live listing.`;
+        }
+      } catch (e) {
+        if (!warning) warning = e instanceof Error ? e.message : 'Could not estimate a price';
+      }
+    }
+
+    if (!merged.target_amount) {
+      const off = heuristicPrice(contextLines, cur);
+      if (off) {
+        merged.target_amount = off.amount;
+        if (!merged.title) merged.title = off.title;
+        source = 'offline_heuristic';
+        explain = off.explain;
       }
     }
 
@@ -1111,11 +1193,12 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
       merged.title = carSearchTitle(contextLines) || buildMarketQuery(contextLines) || heuristicPrice(contextLines, cur)?.title;
     }
 
+    const keepEstimate = source === 'market_estimate' && Boolean(merged.target_amount && merged.title);
     const genericTitle = !merged.title || /^(20\d{2}|new purchase|vehicle(?:\s+\d{4})?|used car)$/i.test(merged.title.trim());
-    if (genericTitle && !hasSpecificItem(blob)) {
+    if (!keepEstimate && genericTitle && !hasSpecificItem(blob)) {
       merged.target_amount = undefined;
       merged.title = undefined;
-    } else if (genericTitle) {
+    } else if (!keepEstimate && genericTitle) {
       const named = heuristicPrice(contextLines, cur);
       merged.title = named?.title || merged.title;
     }
@@ -1174,111 +1257,69 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
         return;
       }
 
-      const nextDetails = [...aiInterview.details, text];
-      const itemHint = aiInterview.itemHint || text;
-      const turns = aiInterview.turns + 1;
-      const implausible =
-        implausibleIPhone(interviewBlob(itemHint, nextDetails)) ||
-        (() => {
-          const spec = currentCarSpec(nextDetails);
-          return spec.badYear ? implausibleCarYear(spec.badYear) : null;
-        })();
-      if (implausible) {
-        setAiInterview({
-          phase: 'gather',
-          turns,
-          itemHint,
-          details: nextDetails,
-          estimateSource: aiInterview.estimateSource,
-          estimateExplain: aiInterview.estimateExplain,
-        });
-        setAiMessages((prev) => [
-          ...prev,
-          { id: `a-${Date.now()}`, role: 'assistant', content: implausible },
-        ]);
-        return;
+      setAiStatus('Searching the web for prices, pictures and listings…');
+      const history = [...aiMessages, userMsg]
+        .filter((m) => m.role === 'user' || m.role === 'assistant')
+        .slice(-12)
+        .map((m) => ({ role: m.role, content: m.content }));
+      const res = await api.planAssistant(token, currency, history);
+      const images = res.images ?? [];
+      const sources = res.sources ?? [];
+      let draft = res.draft?.target_amount ? res.draft : null;
+      if (draft) {
+        const match = images.find((im) => im.image_url === draft?.image_url) ?? images[0];
+        draft = {
+          ...draft,
+          image_url: draft.image_url || match?.image_url,
+          image_thumb_url: match?.thumb_url,
+        };
       }
-      const ready = aiInterview.phase !== 'gather' || enoughToEstimate(nextDetails, text);
-
-      if (!ready) {
-        setAiInterview({
-          phase: 'gather',
-          turns,
-          itemHint,
-          details: nextDetails,
-          estimateSource: aiInterview.estimateSource,
-          estimateExplain: aiInterview.estimateExplain,
-        });
-        setAiMessages((prev) => [
-          ...prev,
-          { id: `a-${Date.now()}`, role: 'assistant', content: askFollowUp(itemHint, nextDetails) },
-        ]);
-        return;
+      const explain = draft?.note || (draft ? 'Using the price from this conversation.' : '');
+      if (draft?.title || draft?.target_amount) {
+        setAiDraft({ ...(aiDraft ?? {}), ...draft, currency_code: draft.currency_code || currency });
+        rememberEstimate(draft.target_amount ? 'market_estimate' : 'market_estimate', explain, draft);
       }
-
-      const { draft, financeNote, warning, source, explain } = await runPriceEstimate(nextDetails, text);
-      setAiDraft(draft);
-      rememberEstimate(source, explain, draft);
       setAiInterview({
-        phase: draft.target_amount ? 'estimate' : 'gather',
-        turns,
-        itemHint,
-        details: nextDetails,
-        estimateSource: source,
-        estimateExplain: explain,
+        phase: draft?.target_amount ? 'estimate' : 'gather',
+        turns: aiInterview.turns + 1,
+        itemHint: draft?.title || aiInterview.itemHint,
+        details: [...aiInterview.details, text],
+        estimateSource: draft?.target_amount ? 'market_estimate' : aiInterview.estimateSource,
+        estimateExplain: explain || aiInterview.estimateExplain,
       });
 
-      if (!draft.target_amount) {
-        setAiMessages((prev) => [
-          ...prev,
-          {
-            id: `a-${Date.now()}`,
-            role: 'assistant',
-            content: [
-              implausibleIPhone(interviewBlob(itemHint, nextDetails)) ||
-                "I couldn't find live selling prices for that yet.",
-              warning ? `(${warning})` : null,
-              askFollowUp(itemHint, nextDetails),
-            ]
-              .filter(Boolean)
-              .join('\n'),
-          },
-        ]);
-        return;
+      let financeNote = '';
+      if (draft?.target_amount) {
+        try {
+          const cur = (draft.currency_code || currency).toUpperCase();
+          const ov = await api.insightsOverview(token, cur);
+          const income = Number(ov.overview?.income || 0);
+          const expense = Number(ov.overview?.expense || 0);
+          const net = income - expense;
+          const price = Number(draft.target_amount);
+          if (price > 0 && income > 0) {
+            const months = Math.max(1, Math.ceil(price / Math.max(net > 0 ? net : income * 0.15, 1)));
+            financeNote =
+              net > 0
+                ? `Based on this month’s cashflow (~${formatMoney(String(net), cur, user.locale)} net), you’d need about ${months} month(s) of similar surplus to fund it.`
+                : `This month’s spending is tight vs income — plan a dedicated savings streak for ${formatMoney(String(price), cur, user.locale)}.`;
+          }
+        } catch {
+          /* optional */
+        }
       }
 
-      const priceLabel = formatMoney(
-        draft.target_amount,
-        (draft.currency_code || currency).toUpperCase(),
-        user.locale,
-      );
-      const sourceLine =
-        source === 'market_scrape'
-          ? 'Source: scraped live listings (compared current selling prices).'
-          : source === 'product_link'
-            ? 'Source: product page (paste links in the Link tab).'
-            : source === 'user_stated'
-              ? 'Source: the price you typed.'
-              : source === 'offline_heuristic'
-                ? 'Source: rough offline ballpark (listings unavailable).'
-                : 'Source: market estimate — live scrape didn’t return enough listings.';
-      const content = [
-        `That’s around ${priceLabel} for ${draft.title || 'that item'}.`,
-        sourceLine,
-        explain && (source === 'market_scrape' || source === 'market_estimate') ? explain : null,
-        financeNote,
-        'Does that price work for you? (Ask “where from?” anytime.)',
-      ]
-        .filter(Boolean)
-        .join('\n\n');
+      const reply = [res.reply || 'Tell me the one item you want to save for.', financeNote].filter(Boolean).join('\n\n');
       setAiMessages((prev) => [
         ...prev,
         {
           id: `a-${Date.now()}`,
           role: 'assistant',
-          content,
-          chips: estimateChips(draft),
-          draft,
+          content: reply,
+          chips: draft?.target_amount ? estimateChips(draft) : undefined,
+          draft: draft ?? undefined,
+          images: images.length ? images : undefined,
+          sources: sources.length ? sources : undefined,
         },
       ]);
     } catch (e) {
@@ -1551,7 +1592,13 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
                 body={t(user.locale, 'plan.describePlanBody')}
               />
             ) : (
-              <View style={{ gap: 10 }}>
+              <ScrollView
+                ref={aiChatScrollRef}
+                style={{ maxHeight: 360 }}
+                contentContainerStyle={{ gap: 10 }}
+                nestedScrollEnabled
+                keyboardShouldPersistTaps="handled"
+              >
                 {aiMessages.map((m, idx) => {
                   const isUser = m.role === 'user';
                   const isLast = idx === aiMessages.length - 1;
@@ -1596,6 +1643,91 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
                           {m.content}
                         </Text>
                       </View>
+                      {!isUser && m.images && m.images.length > 0 ? (
+                        <ScrollView
+                          horizontal
+                          nestedScrollEnabled
+                          showsHorizontalScrollIndicator={false}
+                          contentContainerStyle={{ gap: 8 }}
+                        >
+                          {m.images.map((im, i) => (
+                            <Pressable
+                              key={`${m.id}-img-${i}`}
+                              onPress={() => void Linking.openURL(im.page_url || im.image_url).catch(() => {})}
+                              style={{
+                                width: 150,
+                                borderRadius: radii.md,
+                                overflow: 'hidden',
+                                backgroundColor: colors.surfaceMuted,
+                                borderWidth: 1,
+                                borderColor: colors.border,
+                              }}
+                            >
+                              <Image
+                                source={{ uri: im.thumb_url || im.image_url }}
+                                style={{ width: 150, height: 104 }}
+                                resizeMode="cover"
+                              />
+                              {im.site ? (
+                                <Text
+                                  numberOfLines={1}
+                                  style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 11, paddingHorizontal: 8, paddingVertical: 5 }}
+                                >
+                                  {im.site}
+                                </Text>
+                              ) : null}
+                            </Pressable>
+                          ))}
+                        </ScrollView>
+                      ) : null}
+                      {!isUser && m.sources && m.sources.length > 0 ? (
+                        <View style={{ gap: 6, maxWidth: '92%' }}>
+                          {m.sources.map((src, i) => {
+                            const local = src.price_local
+                              ? formatMoney(src.price_local, (m.draft?.currency_code || currency).toUpperCase(), user.locale)
+                              : '';
+                            const original =
+                              src.price && src.currency_code ? formatMoney(src.price, src.currency_code.toUpperCase(), user.locale) : '';
+                            const priceLine =
+                              original && local && src.currency_code?.toUpperCase() !== (m.draft?.currency_code || currency).toUpperCase()
+                                ? `${original} · ≈ ${local}`
+                                : original || local;
+                            return (
+                              <Pressable
+                                key={`${m.id}-src-${i}`}
+                                onPress={() => void Linking.openURL(src.url).catch(() => {})}
+                                style={{
+                                  flexDirection: 'row',
+                                  alignItems: 'center',
+                                  gap: 10,
+                                  padding: 8,
+                                  borderRadius: radii.md,
+                                  backgroundColor: colors.surface,
+                                  borderWidth: 1,
+                                  borderColor: colors.border,
+                                }}
+                              >
+                                {src.image_url ? (
+                                  <Image
+                                    source={{ uri: src.image_url }}
+                                    style={{ width: 44, height: 44, borderRadius: 8, backgroundColor: colors.surfaceMuted }}
+                                    resizeMode="cover"
+                                  />
+                                ) : null}
+                                <View style={{ flex: 1, gap: 2 }}>
+                                  <Text numberOfLines={2} style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 13, lineHeight: 17 }}>
+                                    {src.title || src.site}
+                                  </Text>
+                                  <Text numberOfLines={1} style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 11 }}>
+                                    {priceLine ? `${src.site} · ${priceLine}` : src.site}
+                                  </Text>
+                                </View>
+                                <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 12 }}>Open</Text>
+                              </Pressable>
+                            );
+                          })}
+                        </View>
+                      ) : null}
                       {isLast && m.chips && m.chips.length > 0 && m.draft ? (
                         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
                           {m.chips.map((chip) => (
@@ -1644,7 +1776,7 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
                     </Text>
                   </View>
                 ) : null}
-              </View>
+              </ScrollView>
             )}
             <Field
               label={t(user.locale, 'plan.message')}
@@ -1658,7 +1790,7 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
               onPress={() => void onAiSend()}
               disabled={aiBusy || !aiInput.trim()}
             />
-            {aiDraft?.title && aiDraft?.target_amount && aiInterview.phase === 'confirm' ? (
+            {aiDraft?.title && aiDraft?.target_amount && (aiInterview.phase === 'estimate' || aiInterview.phase === 'confirm') ? (
               <SecondaryButton
                 label={busy ? t(user.locale, 'common.saving') : t(user.locale, 'plan.savePlan')}
                 onPress={() => void onAiSavePlan()}

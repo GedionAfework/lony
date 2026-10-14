@@ -62,7 +62,7 @@ export function SettingsPage() {
   const [calendars, setCalendars] = useState<AppCalendar[]>([]);
 
   const isAdmin = user?.role === 'admin';
-  const isPremium = isAdmin || (user?.plan_tier || 'free').toLowerCase() === 'premium';
+  const isPremium = true;
 
   useEffect(() => {
     let cancelled = false;

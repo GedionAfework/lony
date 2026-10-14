@@ -1,6 +1,9 @@
 package expenses
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestParseTransferSMS_CBEOut(t *testing.T) {
 	raw := "Dear Customer, You have transfered ETB 250.00 to BETELHEM FKADU on 29/01/2024 14:30:00. Your account 1*********9388 balance is ETB 10,000.00. Thank you for banking with CBE!"
@@ -82,6 +85,38 @@ func TestParseTransferSMS_USChaseCard(t *testing.T) {
 	}
 	if p.StatedBalance != "5432.10" {
 		t.Fatalf("stated=%q want 5432.10", p.StatedBalance)
+	}
+}
+
+func TestExtractSMSWhen_EthiopianDayMonth(t *testing.T) {
+	raw := "You have transfered ETB 250.00 to BETELHEM FKADU on 29/01/2024 14:30:00. Your account 1*********9388 balance is ETB 10,000.00."
+	got, ok := extractSMSWhen(raw)
+	if !ok {
+		t.Fatal("expected a date")
+	}
+	local := got.In(time.Local)
+	if local.Year() != 2024 || local.Month() != time.January || local.Day() != 29 || local.Hour() != 14 || local.Minute() != 30 {
+		t.Fatalf("got %s", local)
+	}
+}
+
+func TestParseTransferSMS_InternationalCurrencies(t *testing.T) {
+	cases := []struct {
+		raw, kind, amount, currency string
+	}{
+		{"Chase Alert: You made a $32.10 purchase at AMAZON. Card ending in 1234. Avail Bal: $5,432.10", KindExpense, "32.10", "USD"},
+		{"Barclays: £45.00 paid to TFL. Available balance £210.50", KindExpense, "45.00", "GBP"},
+		{"Votre compte a été débité de 89,90 €. Nouveau solde 1.240,10 €", KindExpense, "89.90", "EUR"},
+		{"Confirmed. Ksh1,200.00 sent to JANE DOE 2547****1234. New M-PESA balance is Ksh3,400.00", KindExpense, "1200.00", "KES"},
+		{"You have received NGN 25,000.00 from ADA. Available balance NGN 80,000.00", KindIncome, "25000.00", "NGN"},
+		{"CAD 150.00 has been deposited to your account ending in 8871. Balance CAD 2,010.00", KindIncome, "150.00", "CAD"},
+		{"You have transfered ETB 250.00 to KEBede. Your account balance is ETB 10,000.00", KindExpense, "250.00", "ETB"},
+	}
+	for _, c := range cases {
+		p := ParseTransferSMS(c.raw)
+		if p.Kind != c.kind || p.Amount != c.amount || p.CurrencyCode != c.currency {
+			t.Fatalf("%q\n  got kind=%q amount=%q cur=%q\n want %q %q %q", c.raw, p.Kind, p.Amount, p.CurrencyCode, c.kind, c.amount, c.currency)
+		}
 	}
 }
 

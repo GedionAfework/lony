@@ -69,16 +69,16 @@ type RegisterInput struct {
 }
 
 type RegisterResult struct {
-	User               users.PublicUser `json:"user"`
-	VerificationCode   string           `json:"verification_code,omitempty"`
-	VerificationHint   string           `json:"verification_hint"`
+	User             users.PublicUser `json:"user"`
+	VerificationCode string           `json:"verification_code,omitempty"`
+	VerificationHint string           `json:"verification_hint"`
 }
 
 type TokenPair struct {
-	AccessToken  string          `json:"access_token"`
-	RefreshToken string          `json:"refresh_token"`
-	ExpiresIn    int64           `json:"expires_in"`
-	TokenType    string          `json:"token_type"`
+	AccessToken  string           `json:"access_token"`
+	RefreshToken string           `json:"refresh_token"`
+	ExpiresIn    int64            `json:"expires_in"`
+	TokenType    string           `json:"token_type"`
 	User         users.PublicUser `json:"user"`
 }
 
@@ -774,7 +774,7 @@ func ToPublic(user UserRecord) users.PublicUser {
 		EmailVerified:         user.EmailVerifiedAt != nil,
 		Status:                user.Status,
 		Role:                  user.Role,
-		PlanTier:              user.PlanTier,
+		PlanTier:              "premium",
 		CreatedAt:             user.CreatedAt,
 	}
 	if out.Role == "" {

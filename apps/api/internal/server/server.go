@@ -117,6 +117,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 		BaseURL: cfg.OpenAIBaseURL,
 		Model:   cfg.OpenAIModel,
 	}), cfg.AIDailyUserCap)
+	aiSvc.SetFX(fxClient)
 	aiH := ai.NewHandler(aiSvc)
 	bankLinkSvc := banklink.NewService(store.BankLinkAdapter(sqlStore), banklink.Config{
 		ClientID:    cfg.PlaidClientID,
@@ -185,7 +186,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 		fast := middleware.Timeout(30 * time.Second)(next)
 		slow := middleware.Timeout(120 * time.Second)(next)
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			if strings.HasSuffix(req.URL.Path, "/ai/coach/messages/stream") || strings.HasSuffix(req.URL.Path, "/cashflow/receipt-scan") || strings.HasSuffix(req.URL.Path, "/bank-profiles/extract") {
+			if strings.HasSuffix(req.URL.Path, "/ai/coach/messages/stream") || strings.HasSuffix(req.URL.Path, "/cashflow/receipt-scan") || strings.HasSuffix(req.URL.Path, "/bank-profiles/extract") || strings.HasSuffix(req.URL.Path, "/ai/plan-chat") {
 				slow.ServeHTTP(w, req)
 				return
 			}
@@ -355,6 +356,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 				r.With(admin.RequirePerm(adminSvc, admin.PermRolesManage)).Patch("/roles/{roleID}", adminH.UpdateRole)
 			})
 
+			r.With(idem.Handler("ai.plan_chat")).Post("/ai/plan-chat", aiH.PlanChat)
 			r.Get("/ai/insights", aiH.ListInsights)
 			r.With(idem.Handler("ai.insights.refresh")).Post("/ai/insights/refresh", aiH.RefreshInsights)
 			r.With(idem.Handler("ai.insights.clear")).Post("/ai/insights/clear", aiH.ClearHistory)

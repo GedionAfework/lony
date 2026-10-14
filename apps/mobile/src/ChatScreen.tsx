@@ -653,7 +653,7 @@ export function ChatScreen({
               </View>
             ) : null}
             <View style={styles.bubbleBody}>
-              <Text style={[styles.bubbleText, item.mine && styles.mineText, item.mine ? styles.bubblePadMine : styles.bubblePadTheirs]}>
+              <Text style={[styles.bubbleText, item.mine && styles.mineText]}>
                 {item.body
                   ? item.body
                   : item.attachment_kind === 'voice'
@@ -1024,16 +1024,13 @@ function makeStyles(colors: ThemeColors) {
       borderBottomRightRadius: 16,
     },
     bubbleText: { color: colors.text, fontSize: 15, lineHeight: 21, fontFamily: fonts.ui },
-    bubblePadMine: { paddingRight: 52 },
-    bubblePadTheirs: { paddingRight: 36 },
     mineText: { color: colors.onPrimary },
-    bubbleBody: { position: 'relative' },
+    bubbleBody: {},
     timeCornerRow: {
-      position: 'absolute',
-      right: 0,
-      bottom: -2,
+      marginTop: 8,
       flexDirection: 'row',
       alignItems: 'center',
+      justifyContent: 'flex-end',
       gap: 2,
     },
     timeCorner: {

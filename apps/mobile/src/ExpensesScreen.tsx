@@ -114,6 +114,12 @@ type Props = {
   wealthReloadToken?: number;
 };
 
+function localDay(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return (iso || '').slice(0, 10);
+  return toIsoLocal(d);
+}
+
 function monthBounds(
   d: Date,
   calendarId?: string | null,
@@ -190,24 +196,26 @@ export function ExpensesScreen({
   const preferred = (user.default_currency_code || 'USD').toUpperCase();
 
   const dayIncome = useMemo(
-    () => income.filter((e) => e.occurred_at.slice(0, 10) === selectedIso),
+    () => income.filter((e) => localDay(e.occurred_at) === selectedIso),
     [income, selectedIso],
   );
   const dayExpense = useMemo(
-    () => expenseRows.filter((e) => e.occurred_at.slice(0, 10) === selectedIso),
+    () => expenseRows.filter((e) => localDay(e.occurred_at) === selectedIso),
     [expenseRows, selectedIso],
   );
 
   const reload = useCallback(async () => {
     try {
       setLoadError(null);
+      const from = new Date(`${period.from}T00:00:00`).toISOString();
+      const to = new Date(`${period.to}T00:00:00`).toISOString();
       const [sum, inc, exp, incT, expT, breakRes, budgetRes] = await Promise.all([
-        api.cashflowSummary(token, { from: period.from, to: period.to }),
-        api.listCashflow(token, { kind: 'income', from: period.from, to: period.to }),
-        api.listCashflow(token, { kind: 'expense', from: period.from, to: period.to }),
+        api.cashflowSummary(token, { from, to }),
+        api.listCashflow(token, { kind: 'income', from, to, limit: 2000 }),
+        api.listCashflow(token, { kind: 'expense', from, to, limit: 2000 }),
         api.listCashflow(token, { kind: 'income', templates: true }),
         api.listCashflow(token, { kind: 'expense', templates: true }),
-        api.cashflowBreakdown(token, { kind: 'expense', from: period.from, to: period.to }).catch(() => ({ breakdown: [] })),
+        api.cashflowBreakdown(token, { kind: 'expense', from, to }).catch(() => ({ breakdown: [] })),
         api.listBudgets(token, period.from).catch(() => ({ budgets: [] })),
       ]);
       setSummary(sum.summary);
@@ -270,7 +278,7 @@ export function ExpensesScreen({
           (e.kind === 'income' ? t(user.locale, 'expenses.expectedIncome') : t(user.locale, 'expenses.expectedBill')),
         amount: e.amount,
         currency: e.currency_code,
-        at: e.occurred_at.slice(0, 10),
+        at: localDay(e.occurred_at),
         type: 'cashflow' as const,
         entry: e,
         loanId: null as string | null,
@@ -524,8 +532,8 @@ export function ExpensesScreen({
                 const active = selectedIso === iso;
                 const has =
                   !!iso &&
-                  (income.some((e) => e.occurred_at.slice(0, 10) === iso) ||
-                    expenseRows.some((e) => e.occurred_at.slice(0, 10) === iso));
+                  (income.some((e) => localDay(e.occurred_at) === iso) ||
+                    expenseRows.some((e) => localDay(e.occurred_at) === iso));
                 return (
                   <Pressable
                     key={iso || `d-${dayNum}`}
@@ -664,7 +672,7 @@ export function ExpensesScreen({
               />
             ) : (
               [...dayIncome, ...dayExpense]
-                .sort((a, b) => a.occurred_at.localeCompare(b.occurred_at))
+                .sort((a, b) => b.occurred_at.localeCompare(a.occurred_at))
                 .map((e) => (
                   <Pressable
                     key={e.id}

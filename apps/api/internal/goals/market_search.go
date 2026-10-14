@@ -44,8 +44,11 @@ type marketSearchBody struct {
 var (
 	ddgHrefRe   = regexp.MustCompile(`uddg=([^&"]+)`)
 	htmlPriceRe = regexp.MustCompile(`(?i)(?:ETB|Br|USD|EUR|GBP|\$|€|£)\s*([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]{1,2})?|[0-9]{2,7}(?:\.[0-9]{1,2})?)`)
-	stopQueryRe   = regexp.MustCompile(`(?i)\b(i|i'm|im|wanna|want|to|buy|get|a|an|the|please|just|for|my|me|some|new plan|saving for)\b`)
-	multiSpaceRe  = regexp.MustCompile(`\s+`)
+	// Ethiopian listings often write the amount first: "2,500,000 ETB" / "45000 birr".
+	priceThenCurRe = regexp.MustCompile(`(?i)\b([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]{1,2})?|[0-9]{3,7}(?:\.[0-9]{1,2})?)\s*(?:ETB|birr|USD|EUR|GBP)\b`)
+	siteHrefRe     = regexp.MustCompile(`(?i)href=["'](https?://[^"'#\s]+|/[^"'#\s]{8,})["']`)
+	stopQueryRe    = regexp.MustCompile(`(?i)\b(i|i'm|im|wanna|want|to|buy|get|a|an|the|please|just|for|my|me|some|new plan|saving for)\b`)
+	multiSpaceRe   = regexp.MustCompile(`\s+`)
 )
 
 func (h *Handler) SearchMarket(w http.ResponseWriter, r *http.Request) {
@@ -73,23 +76,16 @@ func cleanSearchQuery(raw string) string {
 func marketSearchURLs(query, currency string) []string {
 	q := url.QueryEscape(query)
 	webQ := query + " price"
-	if strings.EqualFold(currency, "ETB") {
-		webQ = query + " price Ethiopia ETB"
-	} else if currency != "" {
+	if currency != "" {
 		webQ = query + " price " + currency
 	}
-	out := []string{
+	// Global listings for every currency. A birr balance does not mean the shopper is in Ethiopia.
+	return []string{
 		"https://html.duckduckgo.com/html/?q=" + url.QueryEscape(webQ),
+		"https://html.duckduckgo.com/html/?q=" + url.QueryEscape(query+" for sale"),
+		"https://www.ebay.com/sch/i.html?_nkw=" + q + "&_sop=15",
+		"https://www.amazon.com/s?k=" + q,
 	}
-	if strings.EqualFold(currency, "ETB") {
-		out = append(out,
-			"https://jiji.com.et/search?query="+q,
-			"https://www.jumia.com.et/catalog/?q="+q,
-		)
-	} else {
-		out = append(out, "https://www.ebay.com/sch/i.html?_nkw="+q+"&_sop=15")
-	}
-	return out
 }
 
 func fetchSearchHTML(ctx context.Context, raw string) (string, string, error) {
@@ -153,6 +149,28 @@ func harvestPrices(html, currency string) []decimal.Decimal {
 		}
 		// Whole token (with currency marker) so "ETB 2000" isn't mistaken for a year.
 		raw := normalizePrice(html[loc[0]:loc[1]])
+		if raw == "" {
+			continue
+		}
+		d, err := decimal.NewFromString(raw)
+		if err != nil || !plausibleMarketPrice(d, currency) {
+			continue
+		}
+		key := d.StringFixed(Scale)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, d)
+	}
+	for _, loc := range priceThenCurRe.FindAllStringSubmatchIndex(html, 40) {
+		if len(loc) < 4 || loc[2] < 0 {
+			continue
+		}
+		if isInstallmentContext(html, loc[0], loc[1]) {
+			continue
+		}
+		raw := normalizePrice(html[loc[2]:loc[3]])
 		if raw == "" {
 			continue
 		}
@@ -236,6 +254,119 @@ func medianPrice(ds []decimal.Decimal) decimal.Decimal {
 	return ds[n/2-1].Add(ds[n/2]).Div(decimal.NewFromInt(2))
 }
 
+func shopHost(host string) bool {
+	h := strings.TrimPrefix(strings.ToLower(host), "www.")
+	shops := []string{
+		"amazon.", "ebay.", "walmart.", "bestbuy.", "target.com", "costco.",
+		"samsung.com", "apple.com", "newegg.", "bhphotovideo.", "adorama.",
+		"backmarket.", "swappa.com", "currys.", "johnlewis.", "argos.co",
+		"very.co.uk", "ao.com", "scan.co.uk", "box.co.uk",
+		"mediamarkt.", "saturn.de", "fnac.", "darty.", "boulanger.", "cdiscount.",
+		"bol.com", "coolblue.", "elgiganten.", "komplett.", "power.no", "elkjop.",
+		"webhallen.", "inet.se", "alternate.", "notebooksbilliger.", "otto.de",
+		"jbhifi.", "harveynorman.", "thegoodguys.", "officeworks.",
+		"noon.com", "flipkart.", "shopee.", "lazada.", "tokopedia.",
+		"mercadolibre.", "mercadolivre.", "aliexpress.", "rakuten.",
+		"takealot.", "pccomponentes.", "worten.", "galaxus.", "digitec.",
+		"verkkokauppa.", "gigantti.", "microcenter.", "canadiantire.",
+	}
+	for _, s := range shops {
+		if strings.Contains(h, s) {
+			return true
+		}
+	}
+	return false
+}
+
+func hostOf(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return raw
+	}
+	return u.Hostname()
+}
+
+func usefulListingURL(raw, base string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.HasPrefix(raw, "#") || strings.HasPrefix(strings.ToLower(raw), "javascript:") {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	if u.Host == "" && strings.HasPrefix(raw, "/") {
+		b, err := url.Parse(base)
+		if err != nil || b.Host == "" {
+			return ""
+		}
+		u.Scheme = b.Scheme
+		u.Host = b.Host
+	}
+	if u.Scheme != "http" && u.Scheme != "https" || u.Host == "" {
+		return ""
+	}
+	h := strings.ToLower(u.Hostname())
+	if !shopHost(h) {
+		return ""
+	}
+	path := strings.ToLower(u.Path)
+	if path == "" || path == "/" || strings.Contains(path, "/search") || strings.Contains(path, "/catalog") {
+		return ""
+	}
+	if isPrivateHost(h) {
+		return ""
+	}
+	return u.String()
+}
+
+func harvestSiteLinks(html, pageURL string) []string {
+	var out []string
+	seen := map[string]struct{}{}
+	add := func(raw string) {
+		u := usefulListingURL(raw, pageURL)
+		if u == "" {
+			return
+		}
+		if _, ok := seen[u]; ok {
+			return
+		}
+		seen[u] = struct{}{}
+		out = append(out, u)
+	}
+	for _, m := range ddgHrefRe.FindAllStringSubmatch(html, 12) {
+		raw, err := url.QueryUnescape(m[1])
+		if err != nil {
+			continue
+		}
+		add(raw)
+		if len(out) >= 4 {
+			return out
+		}
+	}
+	for _, m := range siteHrefRe.FindAllStringSubmatch(html, 40) {
+		add(m[1])
+		if len(out) >= 4 {
+			break
+		}
+	}
+	return out
+}
+
+// priceFromListingHTML prefers the product-page price (og / visible) over a pile of related-item prices.
+func priceFromListingHTML(html, currency string) (decimal.Decimal, bool) {
+	if p, cur := guessPrice(html); p != "" && (cur == "" || strings.EqualFold(cur, currency)) {
+		if d, err := decimal.NewFromString(p); err == nil && plausibleMarketPrice(d, currency) {
+			return d, true
+		}
+	}
+	found := harvestPrices(html, currency)
+	if len(found) == 0 {
+		return decimal.Zero, false
+	}
+	return medianPrice(found), true
+}
+
 // SearchMarketPrices scrapes live listings / search pages and returns a typical selling price.
 func SearchMarketPrices(ctx context.Context, rawQuery, currency string) (MarketSearchResult, error) {
 	query := cleanSearchQuery(rawQuery)
@@ -249,13 +380,13 @@ func SearchMarketPrices(ctx context.Context, rawQuery, currency string) (MarketS
 		currency = "USD"
 	}
 
-	// Hard cap so the phone never sits on "Thinking…" — slow sources are simply skipped.
-	ctx, cancel := context.WithTimeout(ctx, 7*time.Second)
+	// Search pages first, then a few real listing pages. Slow sources are skipped.
+	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
 	defer cancel()
 
 	targets := marketSearchURLs(query, currency)
 	var mu sync.Mutex
-	var prices []decimal.Decimal
+	var linkPages []string
 	var listings []MarketListing
 
 	var wg sync.WaitGroup
@@ -267,24 +398,58 @@ func SearchMarketPrices(ctx context.Context, rawQuery, currency string) (MarketS
 			if err != nil || html == "" {
 				return
 			}
-			found := harvestPrices(html, currency)
-			ls := harvestListings(html, finalURL, currency)
+			links := harvestSiteLinks(html, finalURL)
 			mu.Lock()
-			prices = append(prices, found...)
-			listings = append(listings, ls...)
+			for _, l := range links {
+				if len(linkPages) >= 4 {
+					break
+				}
+				linkPages = append(linkPages, l)
+			}
 			mu.Unlock()
 		}(t)
 	}
 	wg.Wait()
+
+	// Listing pages are the actual price. Search-page numbers are only a fallback
+	// (they mix in unrelated snippets).
+	var listingPrices []decimal.Decimal
+	var wg2 sync.WaitGroup
+	for _, l := range linkPages {
+		wg2.Add(1)
+		go func(link string) {
+			defer wg2.Done()
+			html, finalURL, err := fetchSearchHTML(ctx, link)
+			if err != nil || html == "" {
+				return
+			}
+			d, ok := priceFromListingHTML(html, currency)
+			if !ok {
+				return
+			}
+			mu.Lock()
+			listingPrices = append(listingPrices, d)
+			listings = append(listings, MarketListing{
+				Price:        d.StringFixed(Scale),
+				CurrencyCode: currency,
+				URL:          finalURL,
+				Site:         hostOf(finalURL),
+			})
+			mu.Unlock()
+		}(l)
+	}
+	wg2.Wait()
 
 	out := MarketSearchResult{
 		Query:        query,
 		CurrencyCode: currency,
 		Listings:     []MarketListing{},
 	}
-	if len(prices) == 0 {
+	// Snippet numbers from the search page itself are not a shop price.
+	if len(listingPrices) == 0 {
 		return out, nil
 	}
+	prices := listingPrices
 	sorted := append([]decimal.Decimal{}, prices...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].LessThan(sorted[j]) })
 	typ := medianPrice(sorted)

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"equilend/api/internal/ai/llm"
+	"equilend/api/internal/fx"
 	"equilend/api/internal/httpx"
 	"equilend/api/internal/insights"
 	"equilend/api/internal/score"
@@ -119,6 +120,7 @@ type Service struct {
 	gate       Gate
 	llm        *llm.Client
 	prices     GoalPriceRefresher
+	fx         *fx.Client
 	dailyCap   int
 	now        func() time.Time
 }

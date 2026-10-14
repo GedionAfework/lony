@@ -144,7 +144,7 @@ export function InsightsPage() {
   const { showError } = useToast();
   const preferred = (user?.default_currency_code || '').toUpperCase();
   const locale = user?.locale || 'en';
-  const isPremium = user?.role === 'admin' || (user?.plan_tier || 'free').toLowerCase() === 'premium';
+  const isPremium = true;
 
   const [tab, setTab] = useState<Tab>('overview');
   const [overview, setOverview] = useState<InsightsOverview | null>(null);
@@ -241,10 +241,11 @@ export function InsightsPage() {
 
   const tabs: { id: Tab; label: string }[] = [
     { id: 'overview', label: 'Overview' },
+    ...(isPremium ? ([{ id: 'coach', label: 'Chat' }] as { id: Tab; label: string }[]) : []),
     { id: 'cashflow', label: 'Cashflow' },
     { id: 'debts', label: 'Debts' },
     { id: 'goals', label: 'Goals' },
-    ...(isPremium ? ([{ id: 'analysis', label: 'Analysis' }, { id: 'reports', label: 'Reports' }, { id: 'coach', label: 'Coach' }] as { id: Tab; label: string }[]) : []),
+    ...(isPremium ? ([{ id: 'analysis', label: 'Analysis' }, { id: 'reports', label: 'Reports' }] as { id: Tab; label: string }[]) : []),
   ];
 
   async function onRefreshInsights() {

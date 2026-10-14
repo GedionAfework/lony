@@ -1033,7 +1033,8 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
       try {
         if (cancelled) return;
         const res = await syncBankSms(token, undefined, {
-          defaultCurrency: user?.default_currency_code || 'ETB',
+          userId: user?.id,
+          defaultCurrency: user?.default_currency_code || 'USD',
           onBalancesReady: (updated) => {
             // Repaint Total Balance the moment SMS-stated balances land; don't wait for imports.
             if (!cancelled && updated > 0) {
@@ -1055,7 +1056,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     return () => {
       cancelled = true;
     };
-  }, [screen, token, user?.default_currency_code]);
+  }, [screen, token, user?.id, user?.default_currency_code]);
 
   useEffect(() => {
     if (!token) {
@@ -1064,7 +1065,8 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     }
     startLiveSmsWatch({
       token,
-      defaultCurrency: user?.default_currency_code || 'ETB',
+      userId: user?.id,
+      defaultCurrency: user?.default_currency_code || 'USD',
       onImported: () => {
         setCashflowReload((n) => n + 1);
         setWealthReload((n) => n + 1);
@@ -1072,7 +1074,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
       },
     });
     return () => stopLiveSmsWatch();
-  }, [token, user?.default_currency_code]);
+  }, [token, user?.id, user?.default_currency_code]);
 
   useEffect(() => {
     if (!token) return;
@@ -1108,6 +1110,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
       const res = await activateAndSyncSms(
         token,
         (profileCurrency || user.default_currency_code || 'USD').toUpperCase(),
+        user.id,
       );
       if (res.imported > 0 || res.accountsAdded > 0) {
         setCashflowReload((n) => n + 1);
@@ -2025,11 +2028,12 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                 };
                 const res = await syncBankSms(token, undefined, {
                   force: true,
+                  userId: user?.id,
                   maxCount: 200,
-                  defaultCurrency: user?.default_currency_code || 'ETB',
-                  onProgress: (stage) => {
+                  defaultCurrency: user?.default_currency_code || 'USD',
+                  onProgress: (stage, detail) => {
                     if (stage === 'done') return;
-                    setStatusModal({ title: 'Checking messages…', body: stageText[stage], busy: true });
+                    setStatusModal({ title: 'Checking messages…', body: detail || stageText[stage], busy: true });
                   },
                   onBalancesReady: (updated) => {
                     if (updated > 0) {
@@ -2042,26 +2046,72 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                 setWealthReload((n) => n + 1);
                 setAccountsReload((n) => n + 1);
                 const balanceNote = res.balancesUpdated ? ` · ${res.balancesUpdated} balance(s) updated` : '';
-                if (res.permissionDenied) {
+                const money = (n: number, cur: string) => formatMoney(n.toFixed(2), cur, user?.locale);
+                const flowLines = (rows: { currency: string; moneyIn: number; moneyOut: number }[]) =>
+                  rows.map((t) => `In ${money(t.moneyIn, t.currency)} · Out ${money(t.moneyOut, t.currency)}`).join('\n');
+                const insOuts = [
+                  res.totals?.last30Days.length ? `Last 30 days\n${flowLines(res.totals.last30Days)}` : '',
+                  res.totals?.all.length ? `All messages\n${flowLines(res.totals.all)}` : '',
+                ]
+                  .filter(Boolean)
+                  .join('\n\n');
+                const readNote = [
+                  `Read ${res.scanned ?? 0} messages: ${res.moneyMessages ?? 0} from banks or wallets, ${res.transfersFound ?? 0} money in or out.`,
+                  res.alreadySaved ? `${res.alreadySaved} were already saved.` : '',
+                  res.unreadable ? `${res.unreadable} bank message(s) couldn’t be read.` : '',
+                  res.unlinked ? `${res.unlinked} had no account to save to.` : '',
+                ]
+                  .filter(Boolean)
+                  .join(' ');
+                const withSummary = (body: string) => [body, insOuts, readNote].filter(Boolean).join('\n\n');
+                const accountNote = [
+                  res.accountsAdded ? `${res.accountsAdded} of your account(s) added` : '',
+                  res.accountsRemoved ? `${res.accountsRemoved} that aren’t yours removed` : '',
+                ]
+                  .filter(Boolean)
+                  .join(' · ');
+                if (res.paused) {
+                  setStatusModal({
+                    title: 'Still reading',
+                    body: withSummary(
+                      `Saved ${res.imported} transfer(s) so far. The inbox is long, so this pass paused. Tap refresh again and leave this screen open — it continues where it stopped.`,
+                    ),
+                  });
+                } else if (res.permissionDenied) {
                   setStatusModal({
                     title: 'SMS permission needed',
                     body: 'Allow SMS permission in system settings so Lony can recheck transfers.',
                     tone: 'tertiary',
                   });
-                } else if (res.imported > 0) {
+                } else if (res.imported > 0 || accountNote) {
                   setStatusModal({
                     title: 'Messages synced',
-                    body: `${res.imported} new transfer(s) saved${res.accountsAdded ? ` · ${res.accountsAdded} account(s) added` : ''}${res.duplicates ? ` · ${res.duplicates} already saved` : ''}${balanceNote}.`,
+                    body: withSummary(
+                      [
+                        res.imported ? `${res.imported} new transfer(s) saved` : '',
+                        accountNote,
+                        res.duplicates ? `${res.duplicates} already saved` : '',
+                        balanceNote.replace(/^ · /, ''),
+                      ]
+                        .filter(Boolean)
+                        .join(' · ') + '.',
+                    ),
                   });
                 } else if (res.duplicates > 0 || res.balancesUpdated) {
                   setStatusModal({
                     title: 'Up to date',
-                    body: `No new transfers — recent ones were already imported${balanceNote}.`,
+                    body: withSummary(`No new transfers — they were already imported${balanceNote}.`),
+                  });
+                } else if (!res.scanned) {
+                  setStatusModal({
+                    title: 'Inbox not read',
+                    body: 'Lony could not read any messages. Allow SMS permission, then try again.',
+                    tone: 'tertiary',
                   });
                 } else {
                   setStatusModal({
-                    title: 'Nothing new',
-                    body: 'No new money received/sent SMS found. You can also enable SMS auto-import in Settings → Preferences.',
+                    title: 'No transfers found',
+                    body: withSummary('Nothing new to save.'),
                   });
                 }
               } catch (e) {
