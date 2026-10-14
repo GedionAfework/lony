@@ -84,24 +84,44 @@ async function request<T>(
   }
 
   // Never let one slow upstream hang a screen; callers pick a budget per endpoint.
-  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-  const timer =
-    controller && opts?.timeoutMs
-      ? setTimeout(() => controller.abort(), opts.timeoutMs)
-      : null;
-  let res: Response;
-  try {
-    res = await fetch(`${apiBaseUrl}${path}`, {
-      ...init,
-      headers,
-      ...(controller ? { signal: controller.signal } : {}),
-    });
-  } catch (e) {
-    if (timer) clearTimeout(timer);
-    const aborted = (e as Error)?.name === 'AbortError';
-    throw new Error(aborted ? 'Timed out waiting for the server' : (e as Error)?.message || 'Network error');
+  // Retry transient TLS/network drops (Ethio LTE + Fly cold start often RST the first handshake).
+  const maxAttempts = 3;
+  let res: Response | undefined;
+  let lastNetErr: Error | null = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer =
+      controller && opts?.timeoutMs
+        ? setTimeout(() => controller.abort(), opts.timeoutMs)
+        : null;
+    try {
+      res = await fetch(`${apiBaseUrl}${path}`, {
+        ...init,
+        headers,
+        ...(controller ? { signal: controller.signal } : {}),
+      });
+      if (timer) clearTimeout(timer);
+      lastNetErr = null;
+      break;
+    } catch (e) {
+      if (timer) clearTimeout(timer);
+      const aborted = (e as Error)?.name === 'AbortError';
+      lastNetErr = new Error(aborted ? 'Timed out waiting for the server' : (e as Error)?.message || 'Network error');
+      const msg = lastNetErr.message;
+      const transient =
+        !aborted &&
+        /ssl|handshake|reset|failed to connect|econnreset|enotfound|unknownhost|unable to resolve|network request failed/i.test(
+          msg,
+        );
+      if (!transient || attempt === maxAttempts) {
+        throw lastNetErr;
+      }
+      await new Promise((r) => setTimeout(r, 400 * attempt));
+    }
   }
-  if (timer) clearTimeout(timer);
+  if (!res) {
+    throw lastNetErr ?? new Error('Network error');
+  }
   if (res.status === 204) {
     return undefined as T;
   }

@@ -16,9 +16,9 @@ primary_region = "fra"
   internal_port = 8080
   force_https = true
   # Free allowance: allow sleep when idle. Set auto_stop=false + min=1 when testing with friends.
-  auto_stop_machines = "stop"
+  auto_stop_machines = "off"
   auto_start_machines = true
-  min_machines_running = 0
+  min_machines_running = 1
   processes = ["app"]
 
   [[http_service.checks]]
