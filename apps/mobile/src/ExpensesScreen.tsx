@@ -33,6 +33,7 @@ import { fonts, radii, space, useTheme, type ThemeColors } from './theme';
 import { t } from './i18n';
 import { Card, EmptyState, Field, Money, PrimaryButton, SecondaryButton, SectionLabel } from './ui';
 import { storageGet, storageSet } from './secureStorage';
+import { pushWidgetSnapshot } from './widgetSnapshot';
 
 const WEALTH_CACHE_KEY = 'lony.wealth_cache.v1';
 
@@ -569,6 +570,18 @@ export function ExpensesScreen({
     1,
     ...breakdown.filter((b) => b.currency_code === currency).map((b) => Number(b.amount) || 0),
   );
+
+  useEffect(() => {
+    const sliceW =
+      wealth?.by_currency?.find((c) => c.currency_code.toUpperCase() === wealthCurrency) ??
+      wealth?.by_currency?.[0];
+    const netRaw = sliceW?.net_worth ?? wealth?.live_net_worth ?? wealth?.net_worth ?? '';
+    pushWidgetSnapshot({
+      netWorth: netRaw ? formatMoney(String(netRaw), wealthCurrency, user.locale) : '—',
+      spent: formatMoney(String(expenseTotal), currency, user.locale),
+      currency: wealthCurrency || currency,
+    });
+  }, [wealth, wealthCurrency, expenseTotal, currency, user.locale, formatMoney]);
 
   const openLoans = useMemo(() => {
     const requireApproval = user.loan_require_approval !== false;

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutId="quick_expense"
+        android:shortcutLongLabel="@string/shortcut_expense_long"
+        android:shortcutShortLabel="@string/shortcut_expense">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="lony://quick-add?kind=expense"
+            android:targetClass="io.lony.app.MainActivity"
+            android:targetPackage="io.lony.app" />
+    </shortcut>
+    <shortcut
+        android:enabled="true"
+        android:icon="@mipmap/ic_launcher"
+        android:shortcutId="quick_income"
+        android:shortcutLongLabel="@string/shortcut_income_long"
+        android:shortcutShortLabel="@string/shortcut_income">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:data="lony://quick-add?kind=income"
+            android:targetClass="io.lony.app.MainActivity"
+            android:targetPackage="io.lony.app" />
+    </shortcut>
+</shortcuts>

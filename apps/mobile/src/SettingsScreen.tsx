@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Alert, I18nManager, Pressable, Share, Switch, Text, View } from 'react-native';
+import { Alert, I18nManager, Platform, Pressable, Share, Switch, Text, View } from 'react-native';
 import { AdminScreen } from './AdminScreen';
 import { AuthenticatedAvatar } from './AuthenticatedAvatar';
 import { api, type AppCalendar, type AppLocale } from './api';
@@ -425,6 +425,11 @@ export function SettingsScreen(props: Props) {
                 {t(props.locale, 'settings.smsDailyCheckupHint')}
               </Text>
             </>
+          ) : null}
+          {Platform.OS === 'android' ? (
+            <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12, marginTop: 8, marginBottom: 4 }}>
+              {t(props.locale, 'settings.homeWidgetHint')}
+            </Text>
           ) : null}
           <View
             style={{

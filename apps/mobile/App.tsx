@@ -59,6 +59,8 @@ import { DateField } from './src/DateField';
 import { DrawerMenu, type DrawerItem } from './src/DrawerMenu';
 import { AccountsScreen } from './src/AccountsScreen';
 import { CashflowFormScreen, CashflowShowScreen } from './src/CashflowScreens';
+import { QuickAddScreen } from './src/QuickAddScreen';
+import { parseQuickAddUrl } from './src/widgetSnapshot';
 import { DatePrefsProvider } from './src/datePrefs';
 import { ExpensesScreen, type ExpensesTab } from './src/ExpensesScreen';
 import { PlanScreen } from './src/PlanScreen';
@@ -167,6 +169,7 @@ type Screen =
   | 'settings'
   | 'expenses'
   | 'cashflow-new'
+  | 'quick-add'
   | 'cashflow-show'
   | 'analytics'
   | 'plan'
@@ -264,6 +267,8 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   const [expensesTab, setExpensesTab] = useState<ExpensesTab>('dashboard');
   const [selectedCashflow, setSelectedCashflow] = useState<CashflowEntry | null>(null);
   const [cashflowKind, setCashflowKind] = useState<'income' | 'expense'>('expense');
+  const pendingQuickAdd = useRef<'income' | 'expense' | null>(null);
+  const [quickAddTick, setQuickAddTick] = useState(0);
   const [cashflowPrefill, setCashflowPrefill] = useState<import('./src/CashflowScreens').CashflowFormPrefill | null>(
     null,
   );
@@ -657,6 +662,29 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     const sub = Linking.addEventListener('url', ({ url }) => handleUrl(url));
     return () => sub.remove();
   }, [acceptedDisclaimer]);
+
+  useEffect(() => {
+    const handleQuickAdd = (url: string | null) => {
+      if (!url) return;
+      const kind = parseQuickAddUrl(url);
+      if (!kind) return;
+      pendingQuickAdd.current = kind;
+      setQuickAddTick((n) => n + 1);
+    };
+    Linking.getInitialURL().then(handleQuickAdd).catch(() => undefined);
+    const sub = Linking.addEventListener('url', ({ url }) => handleQuickAdd(url));
+    return () => sub.remove();
+  }, []);
+
+  useEffect(() => {
+    const kind = pendingQuickAdd.current;
+    if (!kind || !token || !user?.profile_complete) return;
+    pendingQuickAdd.current = null;
+    setCashflowKind(kind);
+    setSelectedCashflow(null);
+    setCashflowPrefill(null);
+    setScreen('quick-add');
+  }, [token, user?.profile_complete, quickAddTick]);
 
   useEffect(() => {
     if (screen !== 'settings') {
@@ -1933,10 +1961,10 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     authed &&
     user?.profile_complete &&
     !detailChromeHidden &&
-    !['login', 'register', 'verify', 'onboarding', 'tos', 'loan', 'installment', 'new-loan', 'cashflow-new', 'cashflow-show', 'peer-profile', 'banks'].includes(screen);
+    !['login', 'register', 'verify', 'onboarding', 'tos', 'loan', 'installment', 'new-loan', 'cashflow-new', 'quick-add', 'cashflow-show', 'peer-profile', 'banks'].includes(screen);
 
   function drawerActive(): DrawerItem | null {
-    if (screen === 'expenses' || screen === 'home' || screen === 'cashflow-new' || screen === 'cashflow-show') {
+    if (screen === 'expenses' || screen === 'home' || screen === 'cashflow-new' || screen === 'quick-add' || screen === 'cashflow-show') {
       return 'expenses';
     }
     if (screen === 'accounts') return 'accounts';
@@ -2409,6 +2437,23 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                 setAccountsReload((n) => n + 1);
                 setWealthReload((n) => n + 1);
               }}
+            />
+          ) : null}
+
+          {screen === 'quick-add' && user && token ? (
+            <QuickAddScreen
+              user={user}
+              token={token}
+              kind={cashflowKind}
+              onKind={setCashflowKind}
+              onBack={() => setScreen('home')}
+              onSaved={() => {
+                setCashflowReload((n) => n + 1);
+                setWealthReload((n) => n + 1);
+                setExpensesTab(cashflowKind === 'income' ? 'income' : 'expenses');
+                setScreen('home');
+              }}
+              onError={(message) => setError(message)}
             />
           ) : null}
 
