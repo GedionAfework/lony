@@ -8,12 +8,20 @@ Money still moves **outside** Lony (not a bank, wallet, or payment processor).
 - Tracker vision & phase status: [FINANCIAL_TRACKER_ROADMAP.md](FINANCIAL_TRACKER_ROADMAP.md)
 - Ops: [RUNBOOK.md](RUNBOOK.md)
 
+This repo is split into three folders (ready to become three repos):
+
+| Folder | What it is |
+|---|---|
+| [`backend/`](backend/) | API, worker, admin console, OpenAPI spec, Postgres/Redis compose |
+| [`web/`](web/) | User website |
+| [`mobile/`](mobile/) | User mobile app |
+
 ## Stack
 
-- Mobile: Expo / React Native (EAS-ready)
-- User website: Vite React app (`apps/web`)
-- API: Go, Chi, sqlc
-- Admin: Vite React app (`apps/admin`)
+- Mobile: Expo / React Native (EAS-ready) — `mobile/`
+- User website: Vite React app — `web/`
+- API: Go, Chi, sqlc — `backend/api`
+- Admin: Vite React app — `backend/admin`
 - Postgres 16 (system of record + reminder job rows)
 - Redis 7 + Asynq (worker scheduling)
 - Push: Expo Push API (FCM/APNs under the hood via Expo)
@@ -34,13 +42,14 @@ Money still moves **outside** Lony (not a bank, wallet, or payment processor).
 ### 1. Database + Redis
 
 ```powershell
+cd backend
 docker compose up -d
 ```
 
 ### 2. API
 
 ```powershell
-cd apps/api
+cd backend/api
 copy .env.example .env
 go run ./cmd/api
 ```
@@ -48,7 +57,7 @@ go run ./cmd/api
 ### 3. Worker (Asynq)
 
 ```powershell
-cd apps/api
+cd backend/api
 go run ./cmd/worker
 ```
 
@@ -57,7 +66,7 @@ Requires Redis. Delivers due reminders, overdue scans, reconcile, balance report
 ### 4. Mobile
 
 ```powershell
-cd apps/mobile
+cd mobile
 npm start
 ```
 
@@ -66,7 +75,7 @@ Set `EXPO_PUBLIC_API_URL` to your LAN IP for Expo Go.
 ### 5. User website
 
 ```powershell
-cd apps/web
+cd web
 npm install
 npm run dev
 ```
@@ -76,7 +85,7 @@ Open http://localhost:8082 (proxies `/api` to the local API). This is the produc
 ### 6. Admin console
 
 ```powershell
-cd apps/admin
+cd backend/admin
 npm install
 npm run dev
 ```
@@ -95,10 +104,10 @@ Optional env:
 Product code is ready for device builds; Apple/Google distribution still needs your accounts:
 
 ```powershell
-cd apps/mobile
+cd mobile
 npx eas-cli login
 npx eas init
-# set EXPO_PUBLIC_EAS_PROJECT_ID in apps/mobile/.env and app.json extra.eas.projectId
+# set EXPO_PUBLIC_EAS_PROJECT_ID in mobile/.env and app.json extra.eas.projectId
 npx eas build --profile preview --platform android
 ```
 
@@ -106,7 +115,7 @@ Also run the API worker (`go run ./cmd/worker`) with Redis for reminders/overdue
 
 ### 7. Live test on Fly.io (free allowance)
 
-See [apps/api/DEPLOY-FLY.md](apps/api/DEPLOY-FLY.md): deploy API to Fly, Postgres on Neon free, point Expo at `https://YOUR-APP.fly.dev/api/v1`. Later move the same image to a VPS.
+See [backend/api/DEPLOY-FLY.md](backend/api/DEPLOY-FLY.md): deploy API to Fly, Postgres on Neon free, point Expo at `https://YOUR-APP.fly.dev/api/v1`. Later move the same image to a VPS.
 
 ## Privacy (Phase 7)
 
@@ -118,5 +127,5 @@ See [apps/api/DEPLOY-FLY.md](apps/api/DEPLOY-FLY.md): deploy API to Fly, Postgre
 ## OpenAPI
 
 ```powershell
-# Spec lives in packages/shared/openapi.yaml
+# Spec lives in backend/shared/openapi.yaml
 ```

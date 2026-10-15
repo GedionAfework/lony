@@ -1,0 +1,39 @@
+{
+  "cli": {
+    "version": ">= 16.0.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://lony-api.fly.dev/api/v1",
+        "EXPO_PUBLIC_ADMIN_URL": "https://lony-admin.fly.dev"
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "android": {
+        "buildType": "apk"
+      },
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://lony-api.fly.dev/api/v1",
+        "EXPO_PUBLIC_ADMIN_URL": "https://lony-admin.fly.dev"
+      }
+    },
+    "production": {
+      "autoIncrement": true,
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://lony-api.fly.dev/api/v1",
+        "EXPO_PUBLIC_ADMIN_URL": "https://lony-admin.fly.dev"
+      }
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}

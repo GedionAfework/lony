@@ -6,16 +6,16 @@ Operational notes for local and staging. Phase 8 ships report-only balance recon
 
 | Process | Command | Role |
 |---|---|---|
-| API | `cd apps/api && go run ./cmd/api` | HTTP `/api/v1`, migrations on boot |
-| Worker | `cd apps/api && go run ./cmd/worker` | Overdue scan, reminder delivery, reminder rebuild, **balance mismatch logs** |
-| Postgres | `docker compose up -d` | System of record |
-| Mobile | `cd apps/mobile && npx expo start` | Expo client |
+| API | `cd backend/api && go run ./cmd/api` | HTTP `/api/v1`, migrations on boot |
+| Worker | `cd backend/api && go run ./cmd/worker` | Overdue scan, reminder delivery, reminder rebuild, **balance mismatch logs** |
+| Postgres | `cd backend && docker compose up -d` | System of record |
+| Mobile | `cd mobile && npx expo start` | Expo client |
 
 ## Database
 
 - Backup (local): `pg_dump -Fc "$DATABASE_URL" > backup.dump`
 - Restore: `pg_restore -d "$DATABASE_URL" --clean --if-exists backup.dump`
-- Migrations apply automatically from `apps/api/db` on API/worker start.
+- Migrations apply automatically from `backend/api/db` on API/worker start.
 - Never silent-fix money columns. Balance mismatches are **logged only** by the worker.
 
 ## Secrets rotation

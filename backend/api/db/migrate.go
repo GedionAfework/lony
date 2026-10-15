@@ -1,0 +1,230 @@
+package db
+
+import (
+	"context"
+	"embed"
+	"fmt"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+//go:embed schema.sql migrations/*.sql
+var files embed.FS
+
+func Migrate(ctx context.Context, databaseURL string) error {
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
+		return fmt.Errorf("open db: %w", err)
+	}
+	defer pool.Close()
+
+	if _, err := pool.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			version text PRIMARY KEY,
+			applied_at timestamptz NOT NULL DEFAULT now()
+		)
+	`); err != nil {
+		return fmt.Errorf("schema_migrations: %w", err)
+	}
+
+	has00001, err := applied(ctx, pool, "00001")
+	if err != nil {
+		return err
+	}
+	if !has00001 {
+		schemaSQL, err := files.ReadFile("schema.sql")
+		if err != nil {
+			return fmt.Errorf("embed schema: %w", err)
+		}
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			return err
+		}
+		defer tx.Rollback(ctx)
+		if _, err := tx.Exec(ctx, string(schemaSQL)); err != nil {
+			return fmt.Errorf("apply baseline schema: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO schema_migrations (version) VALUES ('00001'), ('00002'), ('00003'), ('00004'), ('00005'), ('00006'), ('00007'), ('00008'), ('00009'), ('00010'), ('00011')`); err != nil {
+			return fmt.Errorf("record baseline: %w", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return err
+		}
+		return applyLaterMigrations(ctx, pool)
+	}
+
+	if err := applyMigration(ctx, pool, "00002", "migrations/00002_friendships.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00003", "migrations/00003_loans.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00004", "migrations/00004_bank_profiles.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00005", "migrations/00005_repayments.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00006", "migrations/00006_notifications.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00007", "migrations/00007_chat.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00008", "migrations/00008_media_oauth.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00009", "migrations/00009_loan_chat.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00010", "migrations/00010_account_profile.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00011", "migrations/00011_notes_chat.sql"); err != nil {
+		return err
+	}
+	return applyLaterMigrations(ctx, pool)
+}
+
+func applyLaterMigrations(ctx context.Context, pool *pgxpool.Pool) error {
+	if err := applyMigration(ctx, pool, "00012", "migrations/00012_phone_invites.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00013", "migrations/00013_long_term_loans.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00014", "migrations/00014_institution_co_lenders.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00015", "migrations/00015_alone_loans_and_currencies.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00016", "migrations/00016_cashflow.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00017", "migrations/00017_cashflow_categories_titles.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00018", "migrations/00018_cashflow_status.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00019", "migrations/00019_money_accounts.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00020", "migrations/00020_ledger_phase2.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00021", "migrations/00021_goals.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00022", "migrations/00022_score_ai.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00023", "migrations/00023_trust_grade.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00024", "migrations/00024_admin.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00025", "migrations/00025_privacy.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00026", "migrations/00026_catalogs.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00027", "migrations/00027_friendship_bonds.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00028", "migrations/00028_goal_cover.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00029", "migrations/00029_goal_type_label.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00030", "migrations/00030_ai_llm.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00031", "migrations/00031_bank_links.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00032", "migrations/00032_plan_tier.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00033", "migrations/00033_category_active_goal_catalog.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00034", "migrations/00034_bank_link_sync_goals.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00035", "migrations/00035_admin_rbac_themes.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00036", "migrations/00036_localization.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00037", "migrations/00037_calendars_sms_receipts.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00038", "migrations/00038_loan_require_approval.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00039", "migrations/00039_calendar_hourcycle_fix.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00040", "migrations/00040_goal_source_url.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00041", "migrations/00041_ask_received_networth.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00042", "migrations/00042_all_accounts_premium.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00043", "migrations/00043_cashflow_bills.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00044", "migrations/00044_payday.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00045", "migrations/00045_credit_cards.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00046", "migrations/00046_cashflow_split.sql"); err != nil {
+		return err
+	}
+	return applyMigration(ctx, pool, "00047", "migrations/00047_trips.sql")
+}
+
+func applyMigration(ctx context.Context, pool *pgxpool.Pool, version, path string) error {
+	ok, err := applied(ctx, pool, version)
+	if err != nil {
+		return err
+	}
+	if ok {
+		return nil
+	}
+	sqlb, err := files.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("embed %s: %w", version, err)
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, string(sqlb)); err != nil {
+		return fmt.Errorf("apply %s: %w", version, err)
+	}
+	if _, err := tx.Exec(ctx, `INSERT INTO schema_migrations (version) VALUES ($1)`, version); err != nil {
+		return fmt.Errorf("record %s: %w", version, err)
+	}
+	return tx.Commit(ctx)
+}
+
+func applied(ctx context.Context, pool *pgxpool.Pool, version string) (bool, error) {
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version = $1`, version).Scan(&n); err != nil {
+		return false, fmt.Errorf("check migration %s: %w", version, err)
+	}
+	return n > 0, nil
+}

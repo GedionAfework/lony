@@ -1,0 +1,30 @@
+# flyctl deploy from backend/admin
+# Docs: https://fly.io/docs/
+
+app = "lony-admin"
+primary_region = "fra"
+
+[build]
+  dockerfile = "Dockerfile"
+  [build.args]
+    # Origin only — admin requests already prefix /api/v1
+    VITE_API_BASE = "https://lony-api.fly.dev"
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 0
+  processes = ["app"]
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "5s"
+    grace_period = "10s"
+    method = "GET"
+    path = "/"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "256mb"

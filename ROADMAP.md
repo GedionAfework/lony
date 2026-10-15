@@ -36,7 +36,7 @@ Confirm these before writing application code. Product rules match the SDS. The 
 | 4 | Jobs | Asynq + Redis |
 | 5 | API contract | OpenAPI 3; generate the TypeScript client for mobile |
 | 6 | Money | `shopspring/decimal` in Go; `NUMERIC(20,4)` in Postgres |
-| 7 | Repo layout | Monorepo: `apps/mobile`, `apps/api`, `packages/shared` |
+| 7 | Repo layout | Three folders: `backend/` (API + admin + shared), `web/`, `mobile/` |
 | 8 | Auth for MVP | Email + password + Google + Telegram OAuth (WhatsApp unsupported by Meta) |
 | 9 | Interest | Flat per-loan % only (not APR) |
 | 10 | Repayment UI | Full repayment only; schema already supports partials |

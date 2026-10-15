@@ -1,0 +1,1532 @@
+package expenses
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"regexp"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"equilend/api/internal/httpx"
+	"equilend/api/internal/loans"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/shopspring/decimal"
+)
+
+type LoanCreator interface {
+	Create(ctx context.Context, actor uuid.UUID, in loans.CreateInput) (loans.LoanDTO, error)
+}
+
+type AccountLinker interface {
+	ApplyCashflowDelta(ctx context.Context, userID, accountID uuid.UUID, kind string, amount decimal.Decimal, currency, note string) error
+	SetStatedBalance(ctx context.Context, userID, accountID uuid.UUID, balance, note string) error
+	// PickAccount returns preferred if set, else the first account matching currency.
+	PickAccount(ctx context.Context, userID uuid.UUID, currency string, preferred *uuid.UUID) (*uuid.UUID, error)
+	// FindAccountByLast4 matches an account whose name/label contains …last4.
+	FindAccountByLast4(ctx context.Context, userID uuid.UUID, currency, last4 string) (*uuid.UUID, error)
+}
+
+type RecurringPrefs interface {
+	AskRecurringReceived(ctx context.Context, userID uuid.UUID) (bool, error)
+}
+
+type Service struct {
+	store    Store
+	loans    LoanCreator
+	accounts AccountLinker
+	notify   BillNotifier
+	receipts ReceiptExtractor
+	prefs    RecurringPrefs
+	now      func() time.Time
+}
+
+type BillNotifier interface {
+	NotifyBillDue(ctx context.Context, userID uuid.UUID, entryID uuid.UUID, title, amount, currency, kind string) error
+	NotifyBillUpcoming(ctx context.Context, userID uuid.UUID, entryID uuid.UUID, title, amount, currency string, days int) error
+	NotifyBudgetAlert(ctx context.Context, userID uuid.UUID, category string, threshold int, spent, limit, currency string) error
+}
+
+type ReceiptExtract struct {
+	Kind         string     `json:"kind"`
+	Title        string     `json:"title"`
+	Amount       string     `json:"amount"`
+	CurrencyCode string     `json:"currency_code"`
+	Merchant     string     `json:"merchant,omitempty"`
+	OccurredAt   string     `json:"occurred_at,omitempty"`
+	Note         string     `json:"note,omitempty"`
+	AccountHint  string     `json:"account_hint,omitempty"`
+	Confidence   float64    `json:"confidence"`
+	MatchedID    *uuid.UUID `json:"matched_entry_id,omitempty"`
+}
+
+type ReceiptExtractor interface {
+	ExtractReceipt(ctx context.Context, userID uuid.UUID, mime, b64 string) (ReceiptExtract, error)
+}
+
+func NewService(store Store) *Service {
+	return &Service{store: store, now: time.Now}
+}
+
+func (s *Service) SetLoans(lc LoanCreator) {
+	s.loans = lc
+}
+
+func (s *Service) SetAccounts(a AccountLinker) {
+	s.accounts = a
+}
+
+func (s *Service) SetNotifier(n BillNotifier) {
+	s.notify = n
+}
+
+func (s *Service) SetReceipts(r ReceiptExtractor) {
+	s.receipts = r
+}
+
+func (s *Service) SetPrefs(p RecurringPrefs) {
+	s.prefs = p
+}
+
+func (s *Service) askBeforeConfirm(ctx context.Context, userID uuid.UUID) bool {
+	if s.prefs == nil {
+		return true
+	}
+	on, err := s.prefs.AskRecurringReceived(ctx, userID)
+	if err != nil {
+		return true
+	}
+	return on
+}
+
+func (s *Service) Create(ctx context.Context, userID uuid.UUID, in CreateInput) (EntryDTO, error) {
+	if len(in.Legs) == 1 {
+		return EntryDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"legs": "need at least two lines",
+		})
+	}
+	if len(in.Legs) >= 2 {
+		rows, err := s.createSplit(ctx, userID, in)
+		if err != nil {
+			return EntryDTO{}, err
+		}
+		return rows[0], nil
+	}
+	kind, err := normalizeKind(in.Kind)
+	if err != nil {
+		return EntryDTO{}, err
+	}
+	title := strings.TrimSpace(in.Title)
+	if title == "" {
+		return EntryDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"title": "required",
+		})
+	}
+	if utf8.RuneCountInString(title) > 120 {
+		return EntryDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"title": "max 120 characters",
+		})
+	}
+	amount, err := parsePositive(in.Amount)
+	if err != nil {
+		return EntryDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"amount": "must be a positive decimal",
+		})
+	}
+	currency := strings.ToUpper(strings.TrimSpace(in.CurrencyCode))
+	if len(currency) != 3 {
+		return EntryDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"currency_code": "must be a 3-letter currency code",
+		})
+	}
+	category, categoryID, err := s.resolveCategory(ctx, userID, kind, in.Category, in.CategoryID)
+	if err != nil {
+		return EntryDTO{}, err
+	}
+	note, err := cleanNote(in.Note)
+	if err != nil {
+		return EntryDTO{}, err
+	}
+	occurred := in.OccurredAt.UTC()
+	if occurred.IsZero() {
+		occurred = s.now().UTC()
+	}
+	recurrence, err := normalizeRecurrence(in.Recurrence)
+	if err != nil {
+		return EntryDTO{}, err
+	}
+	isTemplate := in.IsTemplate || recurrence != nil
+	if isTemplate && recurrence == nil {
+		return EntryDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"recurrence": "required for periodic entries",
+		})
+	}
+	if in.AccountID == nil {
+		return EntryDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"account_id": "choose which account this belongs to",
+		})
+	}
+	tripID, err := s.resolveTripID(ctx, userID, kind, currency, occurred, in.TripID)
+	if err != nil {
+		return EntryDTO{}, err
+	}
+	now := s.now().UTC()
+	rec := Entry{
+		UserID:       userID,
+		Kind:         kind,
+		Title:        title,
+		Amount:       amount,
+		CurrencyCode: currency,
+		Category:     category,
+		CategoryID:   categoryID,
+		AccountID:    in.AccountID,
+		TripID:       tripID,
+		Note:         note,
+		OccurredAt:   occurred,
+		IsTemplate:   isTemplate,
+		Recurrence:   recurrence,
+		Status:       StatusConfirmed,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	if isTemplate {
+		next := nextOccurrence(*recurrence, occurred, now)
+		rec.NextOccurrenceAt = &next
+	}
+	saved, err := s.store.Insert(ctx, rec)
+	if err != nil {
+		return EntryDTO{}, err
+	}
+	// Periodic: create an occurrence for the start date.
+	// If "ask received" is on (default), status is expected until the user confirms.
+	// If off, auto-confirm and apply to the account.
+	if isTemplate {
+		status := StatusExpected
+		if !s.askBeforeConfirm(ctx, userID) {
+			status = StatusConfirmed
+		}
+		child := Entry{
+			UserID:       userID,
+			Kind:         kind,
+			Title:        title,
+			Amount:       amount,
+			CurrencyCode: currency,
+			Category:     category,
+			CategoryID:   categoryID,
+			AccountID:    in.AccountID,
+			Note:         note,
+			OccurredAt:   occurred,
+			IsTemplate:   false,
+			TemplateID:   &saved.ID,
+			Status:       status,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		}
+		pending, err := s.store.Insert(ctx, child)
+		if err != nil {
+			return EntryDTO{}, err
+		}
+		if status == StatusConfirmed {
+			if err := s.applyAccount(ctx, userID, pending); err != nil {
+				return EntryDTO{}, err
+			}
+		} else if s.notify != nil && kind == KindIncome {
+			_ = s.notify.NotifyBillDue(ctx, userID, pending.ID, title, amount.StringFixed(Scale), currency, kind)
+		}
+		return toDTO(pending), nil
+	}
+	if !in.SkipAccountDelta {
+		if err := s.applyAccount(ctx, userID, saved); err != nil {
+			return EntryDTO{}, err
+		}
+	}
+	return toDTO(saved), nil
+}
+
+func (s *Service) createSplit(ctx context.Context, userID uuid.UUID, in CreateInput) ([]EntryDTO, error) {
+	kind, err := normalizeKind(in.Kind)
+	if err != nil {
+		return nil, err
+	}
+	title := strings.TrimSpace(in.Title)
+	if title == "" {
+		return nil, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"title": "required",
+		})
+	}
+	if in.IsTemplate || (in.Recurrence != nil && strings.TrimSpace(*in.Recurrence) != "" && strings.TrimSpace(*in.Recurrence) != "none") {
+		return nil, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"legs": "split payments cannot be recurring",
+		})
+	}
+	currency := strings.ToUpper(strings.TrimSpace(in.CurrencyCode))
+	if len(currency) != 3 {
+		return nil, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"currency_code": "must be a 3-letter currency code",
+		})
+	}
+	note, err := cleanNote(in.Note)
+	if err != nil {
+		return nil, err
+	}
+	occurred := in.OccurredAt.UTC()
+	if occurred.IsZero() {
+		occurred = s.now().UTC()
+	}
+	if len(in.Legs) > 12 {
+		return nil, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"legs": "at most 12 lines",
+		})
+	}
+	sum, err := sumSplitLegs(in.Legs)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(in.Amount) != "" {
+		total, err := parsePositive(in.Amount)
+		if err != nil {
+			return nil, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+				"amount": "must be a positive decimal",
+			})
+		}
+		if !sum.Equal(total) {
+			return nil, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+				"legs": "line amounts must add up to the total",
+			})
+		}
+	}
+	tripID, err := s.resolveTripID(ctx, userID, kind, currency, occurred, in.TripID)
+	if err != nil {
+		return nil, err
+	}
+	now := s.now().UTC()
+	groupID := uuid.New()
+	out := make([]EntryDTO, 0, len(in.Legs))
+	for i, leg := range in.Legs {
+		amount, err := parsePositive(leg.Amount)
+		if err != nil {
+			return nil, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+				"legs": fmt.Sprintf("line %d needs a positive amount", i+1),
+			})
+		}
+		accountID := firstAccountID(leg.AccountID, in.AccountID)
+		if accountID == nil {
+			return nil, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+				"account_id": "each line needs an account",
+			})
+		}
+		catName := leg.Category
+		catID := leg.CategoryID
+		if catID == nil && strings.TrimSpace(catName) == "" {
+			catName = in.Category
+			catID = in.CategoryID
+		}
+		category, categoryID, err := s.resolveCategory(ctx, userID, kind, catName, catID)
+		if err != nil {
+			return nil, err
+		}
+		lineTitle := strings.TrimSpace(leg.Title)
+		if lineTitle == "" {
+			lineTitle = title
+		}
+		saved, err := s.store.Insert(ctx, Entry{
+			UserID:       userID,
+			Kind:         kind,
+			Title:        lineTitle,
+			Amount:       amount,
+			CurrencyCode: currency,
+			Category:     category,
+			CategoryID:   categoryID,
+			AccountID:    accountID,
+			SplitGroupID: &groupID,
+			TripID:       tripID,
+			Note:         note,
+			OccurredAt:   occurred,
+			Status:       StatusConfirmed,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if !in.SkipAccountDelta {
+			if err := s.applyAccount(ctx, userID, saved); err != nil {
+				return nil, err
+			}
+		}
+		out = append(out, toDTO(saved))
+	}
+	return out, nil
+}
+
+func sumSplitLegs(legs []SplitLegInput) (decimal.Decimal, error) {
+	sum := decimal.Zero
+	if len(legs) < 2 {
+		return decimal.Zero, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"legs": "need at least two lines",
+		})
+	}
+	for i, leg := range legs {
+		amount, err := parsePositive(leg.Amount)
+		if err != nil {
+			return decimal.Zero, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+				"legs": fmt.Sprintf("line %d needs a positive amount", i+1),
+			})
+		}
+		sum = sum.Add(amount)
+	}
+	return sum.Round(Scale), nil
+}
+
+func (s *Service) List(ctx context.Context, userID uuid.UUID, q ListQuery) ([]EntryDTO, error) {
+	if q.Kind != "" {
+		kind, err := normalizeKind(q.Kind)
+		if err != nil {
+			return nil, err
+		}
+		q.Kind = kind
+	}
+	q.Currency = strings.ToUpper(strings.TrimSpace(q.Currency))
+	if q.Limit <= 0 || q.Limit > 500 {
+		q.Limit = 200
+	}
+	rows, err := s.store.List(ctx, userID, q)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]EntryDTO, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, toDTO(row))
+	}
+	return out, nil
+}
+
+func (s *Service) Summary(ctx context.Context, userID uuid.UUID, from, to *time.Time) (Summary, error) {
+	slices, err := s.store.Summary(ctx, userID, from, to)
+	if err != nil {
+		return Summary{}, err
+	}
+	if slices == nil {
+		slices = []SummarySlice{}
+	}
+	return Summary{From: from, To: to, ByCurrency: slices}, nil
+}
+
+func (s *Service) CategoryBreakdown(ctx context.Context, userID uuid.UUID, kind string, from, to *time.Time) ([]CategorySpend, error) {
+	if kind != "" {
+		k, err := normalizeKind(kind)
+		if err != nil {
+			return nil, err
+		}
+		kind = k
+	}
+	rows, err := s.store.CategoryBreakdown(ctx, userID, kind, from, to)
+	if err != nil {
+		return nil, err
+	}
+	if rows == nil {
+		rows = []CategorySpend{}
+	}
+	return rows, nil
+}
+
+func (s *Service) Update(ctx context.Context, userID, id uuid.UUID, in UpdateInput) (EntryDTO, error) {
+	rec, err := s.store.Get(ctx, userID, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return EntryDTO{}, httpx.E(http.StatusNotFound, "NOT_FOUND", "entry not found")
+		}
+		return EntryDTO{}, err
+	}
+	if in.Title != nil {
+		title := strings.TrimSpace(*in.Title)
+		if title == "" || utf8.RuneCountInString(title) > 120 {
+			return EntryDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+				"title": "required, max 120 characters",
+			})
+		}
+		rec.Title = title
+	}
+	if in.Amount != nil {
+		amount, err := parsePositive(*in.Amount)
+		if err != nil {
+			return EntryDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+				"amount": "must be a positive decimal",
+			})
+		}
+		rec.Amount = amount
+	}
+	if in.CurrencyCode != nil {
+		currency := strings.ToUpper(strings.TrimSpace(*in.CurrencyCode))
+		if len(currency) != 3 {
+			return EntryDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+				"currency_code": "must be a 3-letter currency code",
+			})
+		}
+		rec.CurrencyCode = currency
+	}
+	if in.Category != nil || in.CategoryID != nil {
+		catName := ""
+		if in.Category != nil {
+			catName = *in.Category
+		}
+		category, categoryID, err := s.resolveCategory(ctx, userID, rec.Kind, catName, in.CategoryID)
+		if err != nil {
+			return EntryDTO{}, err
+		}
+		rec.Category = category
+		rec.CategoryID = categoryID
+	}
+	if in.AccountID != nil {
+		rec.AccountID = in.AccountID
+	}
+	if in.Note != nil {
+		note, err := cleanNote(in.Note)
+		if err != nil {
+			return EntryDTO{}, err
+		}
+		rec.Note = note
+	}
+	if in.OccurredAt != nil {
+		rec.OccurredAt = in.OccurredAt.UTC()
+	}
+	if in.ClearTrip {
+		rec.TripID = nil
+	} else if in.TripID != nil {
+		tripID, err := s.resolveTripID(ctx, userID, rec.Kind, rec.CurrencyCode, rec.OccurredAt, in.TripID)
+		if err != nil {
+			return EntryDTO{}, err
+		}
+		rec.TripID = tripID
+	}
+	if in.Recurrence != nil {
+		recurrence, err := normalizeRecurrence(in.Recurrence)
+		if err != nil {
+			return EntryDTO{}, err
+		}
+		rec.Recurrence = recurrence
+		if recurrence != nil {
+			rec.IsTemplate = true
+			next := nextOccurrence(*recurrence, rec.OccurredAt, s.now().UTC())
+			rec.NextOccurrenceAt = &next
+		} else {
+			rec.IsTemplate = false
+			rec.NextOccurrenceAt = nil
+		}
+	}
+	if rec.AccountID == nil {
+		return EntryDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"account_id": "choose which account this belongs to",
+		})
+	}
+	rec.UpdatedAt = s.now().UTC()
+	saved, err := s.store.Update(ctx, rec)
+	if err != nil {
+		return EntryDTO{}, err
+	}
+	return toDTO(saved), nil
+}
+
+func (s *Service) Delete(ctx context.Context, userID, id uuid.UUID) error {
+	if err := s.store.Delete(ctx, userID, id); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return httpx.E(http.StatusNotFound, "NOT_FOUND", "entry not found")
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Service) ListCategories(ctx context.Context, userID uuid.UUID, kind string) ([]CategoryDTO, error) {
+	if kind != "" {
+		k, err := normalizeKind(kind)
+		if err != nil {
+			return nil, err
+		}
+		kind = k
+	}
+	rows, err := s.store.ListCategories(ctx, userID, kind)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]CategoryDTO, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, toCategoryDTO(row))
+	}
+	return out, nil
+}
+
+func (s *Service) CreateCategory(ctx context.Context, userID uuid.UUID, kind, name string) (CategoryDTO, error) {
+	k, err := normalizeKind(kind)
+	if err != nil {
+		return CategoryDTO{}, err
+	}
+	name = strings.TrimSpace(name)
+	if name == "" || utf8.RuneCountInString(name) > 64 {
+		return CategoryDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"name": "required, max 64 characters",
+		})
+	}
+	slug := slugify(name)
+	saved, err := s.store.InsertCategory(ctx, Category{
+		UserID:   &userID,
+		Kind:     k,
+		Name:     name,
+		Slug:     slug,
+		IsSystem: false,
+	})
+	if err != nil {
+		return CategoryDTO{}, httpx.E(http.StatusConflict, "CONFLICT", "category already exists")
+	}
+	return toCategoryDTO(saved), nil
+}
+
+func (s *Service) Share(ctx context.Context, userID, entryID uuid.UUID, in ShareInput) (EntryDTO, loans.LoanDTO, error) {
+	if s.loans == nil {
+		return EntryDTO{}, loans.LoanDTO{}, httpx.E(http.StatusInternalServerError, "INTERNAL", "loan service unavailable")
+	}
+	rec, err := s.store.Get(ctx, userID, entryID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return EntryDTO{}, loans.LoanDTO{}, httpx.E(http.StatusNotFound, "NOT_FOUND", "entry not found")
+		}
+		return EntryDTO{}, loans.LoanDTO{}, err
+	}
+	if rec.Kind != KindExpense {
+		return EntryDTO{}, loans.LoanDTO{}, httpx.E(http.StatusConflict, "INVALID_STATE", "only expenses can be shared")
+	}
+	if in.FriendID == uuid.Nil || in.FriendID == userID {
+		return EntryDTO{}, loans.LoanDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"friend_id": "choose someone to split with",
+		})
+	}
+
+	shareAmt := rec.Amount.Div(decimal.NewFromInt(2)).Round(Scale)
+	if in.ShareAmount != nil && strings.TrimSpace(*in.ShareAmount) != "" {
+		parsed, err := parsePositive(*in.ShareAmount)
+		if err != nil {
+			return EntryDTO{}, loans.LoanDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+				"share_amount": "must be a positive decimal",
+			})
+		}
+		if parsed.GreaterThan(rec.Amount) {
+			return EntryDTO{}, loans.LoanDTO{}, httpx.E(http.StatusConflict, "EXCEEDS_AMOUNT", "share exceeds the expense amount")
+		}
+		shareAmt = parsed
+	} else if in.SharePercent != nil {
+		p := *in.SharePercent
+		if p <= 0 || p > 100 {
+			return EntryDTO{}, loans.LoanDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+				"share_percent": "must be between 0 and 100",
+			})
+		}
+		shareAmt = rec.Amount.Mul(decimal.NewFromFloat(p)).Div(decimal.NewFromInt(100)).Round(Scale)
+	}
+	if !shareAmt.GreaterThan(decimal.Zero) {
+		return EntryDTO{}, loans.LoanDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"share_amount": "must be positive",
+		})
+	}
+
+	due := s.now().UTC().Add(14 * 24 * time.Hour)
+	if in.DueAt != nil {
+		due = in.DueAt.UTC()
+		today := calendarDayUTC(s.now())
+		if calendarDayUTC(due).Before(today) {
+			return EntryDTO{}, loans.LoanDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+				"due_at": "must be today or a future date",
+			})
+		}
+	}
+	title := rec.Title
+	if title == "" {
+		title = "Shared expense"
+	}
+	note := fmt.Sprintf("Split from expense · your share of %s %s", shareAmt.StringFixed(Scale), rec.CurrencyCode)
+	principal := shareAmt.StringFixed(Scale)
+	zero := "0"
+	loan, err := s.loans.Create(ctx, userID, loans.CreateInput{
+		CounterpartyID:      in.FriendID,
+		Role:                loans.RoleLender,
+		Principal:           &principal,
+		CurrencyCode:        &rec.CurrencyCode,
+		InterestRatePercent: &zero,
+		DueAt:               &due,
+		Note:                &note,
+		Title:               &title,
+		AutoAccept:          false, // counterparty accepts → bond forms
+	})
+	if err != nil {
+		return EntryDTO{}, loans.LoanDTO{}, err
+	}
+	if err := s.store.LinkLoan(ctx, userID, entryID, loan.ID); err != nil {
+		return EntryDTO{}, loans.LoanDTO{}, err
+	}
+	rec.LinkedLoanID = &loan.ID
+	return toDTO(rec), loan, nil
+}
+
+func (s *Service) Receive(ctx context.Context, userID, id uuid.UUID, accountID *uuid.UUID, amountOverride *decimal.Decimal) (EntryDTO, error) {
+	rec, err := s.store.Get(ctx, userID, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return EntryDTO{}, httpx.E(http.StatusNotFound, "NOT_FOUND", "entry not found")
+		}
+		return EntryDTO{}, err
+	}
+	now := s.now().UTC()
+	if rec.Paused {
+		return EntryDTO{}, httpx.E(http.StatusUnprocessableEntity, "PAUSED", "this bill is paused")
+	}
+	if rec.Status == StatusSkipped {
+		return EntryDTO{}, httpx.E(http.StatusUnprocessableEntity, "SKIPPED", "this cycle was skipped")
+	}
+	if rec.IsTemplate {
+		amt := rec.Amount
+		if amountOverride != nil {
+			amt = *amountOverride
+		}
+		acct, err := s.resolveAccountID(ctx, userID, rec.CurrencyCode, firstAccountID(accountID, rec.AccountID))
+		if err != nil {
+			return EntryDTO{}, err
+		}
+		if acct == nil {
+			return EntryDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+				"account_id": "choose which account received this money",
+			})
+		}
+		child := Entry{
+			UserID:       rec.UserID,
+			Kind:         rec.Kind,
+			Title:        rec.Title,
+			Amount:       amt,
+			CurrencyCode: rec.CurrencyCode,
+			Category:     rec.Category,
+			CategoryID:   rec.CategoryID,
+			AccountID:    acct,
+			Note:         rec.Note,
+			OccurredAt:   now,
+			IsTemplate:   false,
+			TemplateID:   &rec.ID,
+			Status:       StatusConfirmed,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		}
+		saved, err := s.store.Insert(ctx, child)
+		if err != nil {
+			return EntryDTO{}, err
+		}
+		if rec.Recurrence != nil {
+			next := nextOccurrence(*rec.Recurrence, now, now)
+			rec.NextOccurrenceAt = &next
+			rec.UpdatedAt = now
+			_, _ = s.store.Update(ctx, rec)
+		}
+		if err := s.applyAccount(ctx, userID, saved); err != nil {
+			return EntryDTO{}, err
+		}
+		return toDTO(saved), nil
+	}
+	if rec.Status == StatusConfirmed {
+		return toDTO(rec), nil
+	}
+	acct, err := s.resolveAccountID(ctx, userID, rec.CurrencyCode, firstAccountID(accountID, rec.AccountID))
+	if err != nil {
+		return EntryDTO{}, err
+	}
+	if acct == nil {
+		return EntryDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"account_id": "choose which account received this money",
+		})
+	}
+	rec.AccountID = acct
+	if amountOverride != nil {
+		rec.Amount = *amountOverride
+	}
+	rec.Status = StatusConfirmed
+	rec.UpdatedAt = now
+	saved, err := s.store.Update(ctx, rec)
+	if err != nil {
+		return EntryDTO{}, err
+	}
+	if err := s.applyAccount(ctx, userID, saved); err != nil {
+		return EntryDTO{}, err
+	}
+	return toDTO(saved), nil
+}
+
+func (s *Service) MaterializeDue(ctx context.Context) (int, error) {
+	now := s.now().UTC()
+	templates, err := s.store.ListDueTemplates(ctx, now, 100)
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for _, tmpl := range templates {
+		kind := tmpl.Kind
+		if kind == "" {
+			kind = KindIncome
+		}
+		child := Entry{
+			UserID:       tmpl.UserID,
+			Kind:         kind,
+			Title:        tmpl.Title,
+			Amount:       tmpl.Amount,
+			CurrencyCode: tmpl.CurrencyCode,
+			Category:     tmpl.Category,
+			CategoryID:   tmpl.CategoryID,
+			AccountID:    tmpl.AccountID,
+			Note:         tmpl.Note,
+			OccurredAt:   now,
+			IsTemplate:   false,
+			TemplateID:   &tmpl.ID,
+			Status:       StatusExpected,
+			CreatedAt:    now,
+			UpdatedAt:    now,
+		}
+		ask := s.askBeforeConfirm(ctx, tmpl.UserID)
+		if !ask {
+			child.Status = StatusConfirmed
+			if child.AccountID == nil {
+				if picked, err := s.resolveAccountID(ctx, tmpl.UserID, tmpl.CurrencyCode, nil); err == nil && picked != nil {
+					child.AccountID = picked
+				}
+			}
+		}
+		saved, err := s.store.Insert(ctx, child)
+		if err != nil {
+			return n, err
+		}
+		if child.Status == StatusConfirmed {
+			_ = s.applyAccount(ctx, tmpl.UserID, saved)
+		} else if s.notify != nil {
+			_ = s.notify.NotifyBillDue(ctx, tmpl.UserID, saved.ID, tmpl.Title, tmpl.Amount.StringFixed(Scale), tmpl.CurrencyCode, kind)
+		}
+		if tmpl.Recurrence == nil {
+			continue
+		}
+		next := nextOccurrence(*tmpl.Recurrence, now, now)
+		tmpl.NextOccurrenceAt = &next
+		tmpl.UpdatedAt = now
+		if _, err := s.store.Update(ctx, tmpl); err != nil {
+			return n, err
+		}
+		n++
+	}
+	// Upcoming reminders: templates due within 3 days.
+	if s.notify != nil {
+		ahead := now.Add(3 * 24 * time.Hour)
+		upcoming, err := s.store.ListDueTemplates(ctx, ahead, 100)
+		if err == nil {
+			for _, tmpl := range upcoming {
+				if tmpl.NextOccurrenceAt == nil {
+					continue
+				}
+				due := tmpl.NextOccurrenceAt.UTC()
+				if due.Before(now) || due.After(ahead) {
+					continue
+				}
+				days := int(due.Sub(now).Hours()/24) + 1
+				if days < 1 {
+					days = 1
+				}
+				if days > 3 {
+					continue
+				}
+				// Only nudge once when ~3 days out (hour job will re-check; keep body short).
+				if days == 3 || days == 1 {
+					_ = s.notify.NotifyBillUpcoming(ctx, tmpl.UserID, tmpl.ID, tmpl.Title, tmpl.Amount.StringFixed(Scale), tmpl.CurrencyCode, days)
+				}
+			}
+		}
+	}
+	return n, nil
+}
+
+func (s *Service) resolveCategory(ctx context.Context, userID uuid.UUID, kind, name string, id *uuid.UUID) (string, *uuid.UUID, error) {
+	cats, err := s.store.ListCategories(ctx, userID, kind)
+	if err != nil {
+		return "", nil, err
+	}
+	if id != nil {
+		for _, c := range cats {
+			if c.ID == *id {
+				return c.Name, &c.ID, nil
+			}
+		}
+		return "", nil, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"category_id": "unknown category",
+		})
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		name = "Other"
+	}
+	slug := slugify(name)
+	for _, c := range cats {
+		if strings.EqualFold(c.Slug, slug) || strings.EqualFold(c.Name, name) {
+			cid := c.ID
+			return c.Name, &cid, nil
+		}
+	}
+	return name, nil, nil
+}
+
+func normalizeKind(raw string) (string, error) {
+	k := strings.TrimSpace(strings.ToLower(raw))
+	switch k {
+	case KindIncome:
+		return KindIncome, nil
+	case KindExpense, "outcome":
+		return KindExpense, nil
+	default:
+		return "", httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"kind": "must be income or expense",
+		})
+	}
+}
+
+func normalizeRecurrence(in *string) (*string, error) {
+	if in == nil {
+		return nil, nil
+	}
+	v := strings.TrimSpace(strings.ToLower(*in))
+	if v == "" || v == "none" || v == "one_time" {
+		return nil, nil
+	}
+	switch v {
+	case RecurrenceWeekly, RecurrenceMonthly, RecurrenceYearly:
+		return &v, nil
+	default:
+		return nil, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"recurrence": "must be weekly, monthly, or yearly",
+		})
+	}
+}
+
+func nextOccurrence(recurrence string, from, now time.Time) time.Time {
+	base := from.UTC()
+	if base.Before(now) {
+		base = now
+	}
+	switch recurrence {
+	case RecurrenceWeekly:
+		return base.AddDate(0, 0, 7)
+	case RecurrenceYearly:
+		return base.AddDate(1, 0, 0)
+	default:
+		return base.AddDate(0, 1, 0)
+	}
+}
+
+func parsePositive(raw string) (decimal.Decimal, error) {
+	d, err := decimal.NewFromString(strings.TrimSpace(raw))
+	if err != nil || !d.GreaterThan(decimal.Zero) {
+		return decimal.Decimal{}, errors.New("invalid")
+	}
+	return d.Round(Scale), nil
+}
+
+func cleanNote(in *string) (*string, error) {
+	if in == nil {
+		return nil, nil
+	}
+	n := strings.TrimSpace(*in)
+	if n == "" {
+		return nil, nil
+	}
+	if utf8.RuneCountInString(n) > 500 {
+		return nil, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"note": "max 500 characters",
+		})
+	}
+	return &n, nil
+}
+
+func slugify(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	var b strings.Builder
+	prevDash := false
+	for _, r := range name {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			prevDash = false
+			continue
+		}
+		if !prevDash {
+			b.WriteByte('-')
+			prevDash = true
+		}
+	}
+	out := strings.Trim(b.String(), "-")
+	if out == "" {
+		return "custom"
+	}
+	if len(out) > 64 {
+		out = out[:64]
+	}
+	return out
+}
+
+func (s *Service) resolveAccountID(ctx context.Context, userID uuid.UUID, currency string, preferred *uuid.UUID) (*uuid.UUID, error) {
+	if preferred != nil {
+		return preferred, nil
+	}
+	if s.accounts == nil {
+		return nil, nil
+	}
+	return s.accounts.PickAccount(ctx, userID, currency, nil)
+}
+
+func (s *Service) applyAccount(ctx context.Context, userID uuid.UUID, rec Entry) error {
+	if s.accounts == nil || rec.Status != StatusConfirmed || rec.IsTemplate {
+		return nil
+	}
+	accountID := rec.AccountID
+	if accountID == nil {
+		picked, err := s.accounts.PickAccount(ctx, userID, rec.CurrencyCode, nil)
+		if err != nil {
+			return err
+		}
+		accountID = picked
+	}
+	if accountID == nil {
+		return httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"account_id": "choose which account received this money",
+		})
+	}
+	note := rec.Title
+	return s.accounts.ApplyCashflowDelta(ctx, userID, *accountID, rec.Kind, rec.Amount, rec.CurrencyCode, note)
+}
+
+func firstAccountID(preferred, fallback *uuid.UUID) *uuid.UUID {
+	if preferred != nil {
+		return preferred
+	}
+	return fallback
+}
+
+func (s *Service) UpsertBudget(ctx context.Context, userID uuid.UUID, in BudgetInput) (BudgetDTO, error) {
+	name := strings.TrimSpace(in.CategoryName)
+	if name == "" && in.CategoryID != nil {
+		cats, err := s.store.ListCategories(ctx, userID, KindExpense)
+		if err != nil {
+			return BudgetDTO{}, err
+		}
+		for _, c := range cats {
+			if c.ID == *in.CategoryID {
+				name = c.Name
+				break
+			}
+		}
+	}
+	if name == "" || utf8.RuneCountInString(name) > 64 {
+		return BudgetDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"category_name": "required, max 64 characters",
+		})
+	}
+	currency := strings.ToUpper(strings.TrimSpace(in.CurrencyCode))
+	if len(currency) != 3 {
+		return BudgetDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"currency_code": "must be a 3-letter currency code",
+		})
+	}
+	limit, err := parsePositive(in.LimitAmount)
+	if err != nil {
+		return BudgetDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"limit_amount": "must be a positive decimal",
+		})
+	}
+	month, err := parsePeriodMonth(in.PeriodMonth)
+	if err != nil {
+		return BudgetDTO{}, err
+	}
+	now := s.now().UTC()
+	saved, err := s.store.UpsertBudget(ctx, Budget{
+		UserID:       userID,
+		CategoryID:   in.CategoryID,
+		CategoryName: name,
+		CurrencyCode: currency,
+		LimitAmount:  limit,
+		PeriodMonth:  month,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	})
+	if err != nil {
+		return BudgetDTO{}, err
+	}
+	_, from, to, _, err := s.resolvePayday(ctx, userID)
+	if err != nil {
+		return BudgetDTO{}, err
+	}
+	_, _, _, pacePct := cyclePace(s.now().UTC(), from, to)
+	return s.budgetDTO(ctx, userID, saved, from, to, pacePct)
+}
+
+func (s *Service) DeleteBudget(ctx context.Context, userID, id uuid.UUID) error {
+	if err := s.store.DeleteBudget(ctx, userID, id); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return httpx.E(http.StatusNotFound, "NOT_FOUND", "budget not found")
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Service) budgetDTO(ctx context.Context, userID uuid.UUID, b Budget, from, to time.Time, pacePct int) (BudgetDTO, error) {
+	spent := decimal.Zero
+	rows, err := s.store.CategoryBreakdown(ctx, userID, KindExpense, &from, &to)
+	if err != nil {
+		return BudgetDTO{}, err
+	}
+	for _, row := range rows {
+		if !strings.EqualFold(row.CurrencyCode, b.CurrencyCode) {
+			continue
+		}
+		if !strings.EqualFold(row.Category, b.CategoryName) {
+			continue
+		}
+		amt, err := decimal.NewFromString(row.Amount)
+		if err == nil {
+			spent = amt
+		}
+		break
+	}
+	remaining := b.LimitAmount.Sub(spent)
+	paceAmt := b.LimitAmount.Mul(decimal.NewFromInt(int64(pacePct))).Div(decimal.NewFromInt(100))
+	pct := spentPctOf(spent, b.LimitAmount)
+	return BudgetDTO{
+		ID:           b.ID,
+		CategoryID:   b.CategoryID,
+		CategoryName: b.CategoryName,
+		CurrencyCode: b.CurrencyCode,
+		LimitAmount:  b.LimitAmount.StringFixed(Scale),
+		PeriodMonth:  b.PeriodMonth.Format("2006-01-02"),
+		Spent:        spent.StringFixed(Scale),
+		Remaining:    remaining.StringFixed(Scale),
+		CycleStart:   from.Format("2006-01-02"),
+		CycleEnd:     to.Format("2006-01-02"),
+		PacePct:      pacePct,
+		PaceAmount:   paceAmt.StringFixed(Scale),
+		SpentPct:     pct,
+		Ahead:        spent.GreaterThan(paceAmt),
+		CreatedAt:    b.CreatedAt,
+		UpdatedAt:    b.UpdatedAt,
+	}, nil
+}
+
+func parsePeriodMonth(raw string) (time.Time, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		now := time.Now().UTC()
+		return time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC), nil
+	}
+	if t, err := time.Parse("2006-01-02", raw); err == nil {
+		return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC), nil
+	}
+	if t, err := time.Parse("2006-01", raw); err == nil {
+		return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC), nil
+	}
+	return time.Time{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+		"period_month": "must be YYYY-MM or YYYY-MM-01",
+	})
+}
+
+func smsOccurredAt(explicit *time.Time, text string, now time.Time) time.Time {
+	if explicit != nil && !explicit.IsZero() && explicit.Year() >= 2000 && explicit.Before(now.Add(48*time.Hour)) {
+		return explicit.UTC()
+	}
+	if t, ok := extractSMSWhen(text); ok {
+		return t
+	}
+	return now.UTC()
+}
+
+func (s *Service) realignCashflowDate(ctx context.Context, ent Entry, occurred time.Time) (Entry, bool) {
+	if occurred.IsZero() || ent.OccurredAt.Sub(occurred).Abs() < 2*time.Hour {
+		return ent, false
+	}
+	ent.OccurredAt = occurred
+	ent.UpdatedAt = s.now().UTC()
+	updated, err := s.store.Update(ctx, ent)
+	if err != nil {
+		return ent, false
+	}
+	return updated, true
+}
+
+func calendarDayUTC(t time.Time) time.Time {
+	y, m, d := t.UTC().Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+}
+
+const smsCategory = "Transfers"
+
+type SMSIngestInput struct {
+	Text      string
+	AccountID *uuid.UUID
+	Create    bool
+	// Optional client-side parse (mobile). When set, these win over server re-parse
+	// so phone and API never disagree on amount / direction / summary.
+	Kind          string
+	Amount        string
+	CurrencyCode  string
+	AccountLast4  string
+	Counterparty  string
+	Title         string
+	Note          string
+	StatedBalance string
+	OccurredAt    *time.Time
+}
+
+type SMSIngestResult struct {
+	Parsed            ParsedSMS `json:"parsed"`
+	Entry             *EntryDTO `json:"entry,omitempty"`
+	Duplicate         bool      `json:"duplicate,omitempty"`
+	MatchedExistingID *string   `json:"matched_existing_id,omitempty"` // receipt/cashflow already recorded
+}
+
+func (s *Service) IngestSMS(ctx context.Context, userID uuid.UUID, in SMSIngestInput) (SMSIngestResult, error) {
+	text := strings.TrimSpace(in.Text)
+	if text == "" {
+		return SMSIngestResult{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"text": "required",
+		})
+	}
+	if utf8.RuneCountInString(text) > 4000 {
+		return SMSIngestResult{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"text": "max 4000 characters",
+		})
+	}
+	fp := SMSFingerprint(text)
+	parsed := ParseTransferSMS(text)
+	// Prefer the phone's parse when the client already extracted a transfer.
+	if k := strings.ToLower(strings.TrimSpace(in.Kind)); k == KindIncome || k == KindExpense {
+		parsed.Kind = k
+	}
+	if amt := normalizeSMSAmount(in.Amount); amt != "" {
+		parsed.Amount = amt
+	}
+	if cur := strings.ToUpper(strings.TrimSpace(in.CurrencyCode)); len(cur) == 3 {
+		parsed.CurrencyCode = cur
+	}
+	if last4 := strings.TrimSpace(in.AccountLast4); len(last4) >= 4 {
+		digits := regexp.MustCompile(`\D`).ReplaceAllString(last4, "")
+		if len(digits) >= 4 {
+			parsed.AccountLast4 = digits[len(digits)-4:]
+		}
+	}
+	if cp := strings.TrimSpace(in.Counterparty); cp != "" {
+		parsed.Counterparty = cp
+		if parsed.Kind == KindIncome {
+			parsed.SummaryTitle = "From " + cp
+		} else if parsed.Kind == KindExpense {
+			parsed.SummaryTitle = "To " + cp
+		}
+	}
+	if t := strings.TrimSpace(in.Title); t != "" {
+		parsed.SummaryTitle = t
+	}
+	if bal := normalizeSMSAmount(in.StatedBalance); bal != "" {
+		parsed.StatedBalance = bal
+	}
+	occurred := smsOccurredAt(in.OccurredAt, text, s.now().UTC())
+	if logger, ok := s.store.(SMSLogStore); ok {
+		if existing, err := logger.GetSMSIngest(ctx, userID, fp); err == nil && existing != nil {
+			out := SMSIngestResult{Parsed: parsed, Duplicate: true}
+			if existing.CashflowID != nil {
+				if ent, err := s.store.Get(ctx, userID, *existing.CashflowID); err == nil {
+					if updated, ok := s.realignCashflowDate(ctx, ent, occurred); ok {
+						ent = updated
+					}
+					dto := toDTO(ent)
+					out.Entry = &dto
+				}
+			}
+			return out, nil
+		}
+	}
+	out := SMSIngestResult{Parsed: parsed}
+	if !in.Create {
+		if logger, ok := s.store.(SMSLogStore); ok {
+			excerpt := text
+			if len(excerpt) > 280 {
+				excerpt = excerpt[:280]
+			}
+			_ = logger.InsertSMSIngest(ctx, userID, fp, excerpt, parsed, nil)
+		}
+		return out, nil
+	}
+	if parsed.Amount == "" || parsed.Kind == "" {
+		return SMSIngestResult{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"text": "could not detect amount and direction — edit manually",
+		})
+	}
+	currency := parsed.CurrencyCode
+	if currency == "" {
+		currency = "USD"
+	}
+
+	// Skip if the same payment was already recorded (e.g. receipt scan for the same lunch).
+	if dup := s.findRecentPayment(ctx, userID, parsed.Kind, parsed.Amount, currency, occurred); dup != nil {
+		dto := toDTO(*dup)
+		id := dup.ID.String()
+		out.Duplicate = true
+		out.MatchedExistingID = &id
+		out.Entry = &dto
+		if logger, ok := s.store.(SMSLogStore); ok {
+			excerpt := text
+			if len(excerpt) > 280 {
+				excerpt = excerpt[:280]
+			}
+			cid := dup.ID
+			_ = logger.InsertSMSIngest(ctx, userID, fp, excerpt, parsed, &cid)
+		}
+		return out, nil
+	}
+
+	title := strings.TrimSpace(in.Title)
+	if title == "" {
+		title = strings.TrimSpace(parsed.SummaryTitle)
+	}
+	if title == "" {
+		title = "Transfer"
+		if parsed.Counterparty != "" {
+			cp := parsed.Counterparty
+			if utf8.RuneCountInString(cp) > 40 {
+				r := []rune(cp)
+				cp = string(r[:40])
+			}
+			if parsed.Kind == KindIncome {
+				title = "From " + cp
+			} else {
+				title = "To " + cp
+			}
+		} else if parsed.AccountLast4 != "" {
+			title = "Account …" + parsed.AccountLast4
+		}
+	}
+	// Keep a short note — never store the full SMS body as the visible summary.
+	note := strings.TrimSpace(in.Note)
+	if note == "" {
+		note = "Bank transfer"
+		if parsed.AccountLast4 != "" {
+			note = "acct …" + parsed.AccountLast4
+		}
+		if parsed.Counterparty != "" && !strings.Contains(strings.ToLower(title), strings.ToLower(parsed.Counterparty)) {
+			note = note + " · " + parsed.Counterparty
+		}
+	}
+	if utf8.RuneCountInString(note) > 120 {
+		note = string([]rune(note)[:120])
+	}
+
+	accountID := in.AccountID
+	if accountID == nil && s.accounts != nil {
+		if parsed.AccountLast4 != "" {
+			if id, err := s.accounts.FindAccountByLast4(ctx, userID, currency, parsed.AccountLast4); err == nil && id != nil {
+				accountID = id
+			}
+		}
+		if accountID == nil {
+			if id, err := s.accounts.PickAccount(ctx, userID, currency, nil); err == nil {
+				accountID = id
+			}
+		}
+	}
+	if accountID == nil {
+		return SMSIngestResult{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"account_id": "add or choose an account for this currency first",
+		})
+	}
+
+	skipDelta := parsed.StatedBalance != ""
+	entry, err := s.Create(ctx, userID, CreateInput{
+		Kind:             parsed.Kind,
+		Title:            title,
+		Amount:           parsed.Amount,
+		CurrencyCode:     currency,
+		Category:         smsCategory,
+		AccountID:        accountID,
+		Note:             &note,
+		OccurredAt:       occurred,
+		SkipAccountDelta: skipDelta,
+	})
+	if err != nil {
+		return SMSIngestResult{}, err
+	}
+	out.Entry = &entry
+	if skipDelta && accountID != nil && s.accounts != nil {
+		_ = s.accounts.SetStatedBalance(ctx, userID, *accountID, parsed.StatedBalance, "sms stated balance")
+	}
+	if logger, ok := s.store.(SMSLogStore); ok {
+		excerpt := text
+		if len(excerpt) > 280 {
+			excerpt = excerpt[:280]
+		}
+		cid := entry.ID
+		_ = logger.InsertSMSIngest(ctx, userID, fp, excerpt, parsed, &cid)
+	}
+	return out, nil
+}
+
+// findRecentPayment returns a confirmed cashflow with the same kind/amount/currency within ±2 days
+// (covers receipt scans of the same real-world payment).
+func (s *Service) findRecentPayment(ctx context.Context, userID uuid.UUID, kind, amount, currency string, around time.Time) *Entry {
+	amt, err := decimal.NewFromString(strings.TrimSpace(strings.ReplaceAll(amount, ",", "")))
+	if err != nil || !amt.GreaterThan(decimal.Zero) {
+		return nil
+	}
+	currency = strings.ToUpper(strings.TrimSpace(currency))
+	from := around.AddDate(0, 0, -2)
+	to := around.AddDate(0, 0, 2)
+	rows, err := s.store.List(ctx, userID, ListQuery{Kind: kind, From: &from, To: &to, Limit: 200})
+	if err != nil {
+		return nil
+	}
+	for i := range rows {
+		row := &rows[i]
+		if row.IsTemplate || row.Status != StatusConfirmed {
+			continue
+		}
+		// Rows from other SMS are separate transfers; their own fingerprint already dedupes them.
+		if row.Category == smsCategory {
+			continue
+		}
+		if !strings.EqualFold(row.CurrencyCode, currency) {
+			continue
+		}
+		if !row.Amount.Equal(amt.Round(Scale)) && row.Amount.StringFixed(Scale) != amt.StringFixed(Scale) {
+			continue
+		}
+		return row
+	}
+	return nil
+}
+
+type ReceiptScanInput struct {
+	Mime      string
+	Base64    string
+	AccountID *uuid.UUID
+	Create    bool
+}
+
+type ReceiptScanResult struct {
+	Extract ReceiptExtract `json:"extract"`
+	Entry   *EntryDTO      `json:"entry,omitempty"`
+}
+
+func (s *Service) ScanReceipt(ctx context.Context, userID uuid.UUID, in ReceiptScanInput) (ReceiptScanResult, error) {
+	if s.receipts == nil {
+		return ReceiptScanResult{}, httpx.E(http.StatusServiceUnavailable, "AI_UNAVAILABLE", "receipt scanning requires AI")
+	}
+	mime := strings.TrimSpace(in.Mime)
+	if mime == "" {
+		mime = "image/jpeg"
+	}
+	b64 := strings.TrimSpace(in.Base64)
+	if b64 == "" {
+		return ReceiptScanResult{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"image_base64": "required",
+		})
+	}
+	if len(b64) > 12<<20 {
+		return ReceiptScanResult{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"image_base64": "image too large",
+		})
+	}
+	extract, err := s.receipts.ExtractReceipt(ctx, userID, mime, b64)
+	if err != nil {
+		return ReceiptScanResult{}, err
+	}
+	// Soft-match expected entries by amount for reconciliation.
+	if extract.Amount != "" {
+		from := s.now().UTC().AddDate(0, -2, 0)
+		to := s.now().UTC().AddDate(0, 1, 0)
+		rows, listErr := s.store.List(ctx, userID, ListQuery{From: &from, To: &to, Limit: 100})
+		if listErr == nil {
+			for _, row := range rows {
+				if row.Status != StatusExpected {
+					continue
+				}
+				if row.Amount.StringFixed(Scale) == extract.Amount {
+					id := row.ID
+					extract.MatchedID = &id
+					break
+				}
+			}
+		}
+	}
+	out := ReceiptScanResult{Extract: extract}
+	if !in.Create {
+		return out, nil
+	}
+	kind := extract.Kind
+	if kind != KindIncome && kind != KindExpense {
+		kind = KindExpense
+	}
+	title := strings.TrimSpace(extract.Title)
+	if title == "" {
+		title = strings.TrimSpace(extract.Merchant)
+	}
+	if title == "" {
+		title = "Receipt scan"
+	}
+	currency := strings.ToUpper(strings.TrimSpace(extract.CurrencyCode))
+	if len(currency) != 3 {
+		currency = "USD"
+	}
+	occurred := s.now().UTC()
+	if extract.OccurredAt != "" {
+		if t, err := time.Parse(time.RFC3339, extract.OccurredAt); err == nil {
+			occurred = t.UTC()
+		} else if t, err := time.Parse("2006-01-02", extract.OccurredAt); err == nil {
+			occurred = t.UTC()
+		}
+	}
+	note := extract.Note
+	if note == "" && extract.Merchant != "" {
+		note = "Merchant: " + extract.Merchant
+	}
+	var notePtr *string
+	if note != "" {
+		notePtr = &note
+	}
+	if extract.MatchedID != nil {
+		rec, err := s.Receive(ctx, userID, *extract.MatchedID, in.AccountID, nil)
+		if err == nil {
+			out.Entry = &rec
+			return out, nil
+		}
+	}
+	entry, err := s.Create(ctx, userID, CreateInput{
+		Kind:         kind,
+		Title:        title,
+		Amount:       extract.Amount,
+		CurrencyCode: currency,
+		Category:     "Receipts",
+		AccountID:    in.AccountID,
+		Note:         notePtr,
+		OccurredAt:   occurred,
+	})
+	if err != nil {
+		return ReceiptScanResult{}, err
+	}
+	out.Entry = &entry
+	return out, nil
+}
+
+// SMSLogStore is an optional store capability for SMS dedupe.
+type SMSLogStore interface {
+	GetSMSIngest(ctx context.Context, userID uuid.UUID, fingerprint string) (*SMSIngestRow, error)
+	InsertSMSIngest(ctx context.Context, userID uuid.UUID, fingerprint, excerpt string, parsed ParsedSMS, cashflowID *uuid.UUID) error
+}
+
+type SMSIngestRow struct {
+	ID         uuid.UUID
+	CashflowID *uuid.UUID
+}

@@ -19,8 +19,8 @@ web-build/
 npm-debug.*
 
 # Go
-apps/api/bin/
-apps/api/tmp/
+backend/api/bin/
+backend/api/tmp/
 *.exe
 *.test
 *.out
