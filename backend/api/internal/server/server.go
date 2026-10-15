@@ -150,6 +150,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 	expensesSvc.SetNotifier(notifications.CashflowHooks{Svc: notifySvc})
 	accountsSvc.SetCardNotifier(notifications.CardHooks{Svc: notifySvc})
 	expensesSvc.SetReceipts(aiSvc)
+	expensesSvc.SetVoice(aiSvc)
 	goalsSvc.SetPlanExtractor(aiSvc)
 	aiSvc.SetGoalPrices(goalsSvc)
 	go func() {
@@ -187,7 +188,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 		fast := middleware.Timeout(30 * time.Second)(next)
 		slow := middleware.Timeout(120 * time.Second)(next)
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			if strings.HasSuffix(req.URL.Path, "/ai/coach/messages/stream") || strings.HasSuffix(req.URL.Path, "/cashflow/receipt-scan") || strings.HasSuffix(req.URL.Path, "/bank-profiles/extract") || strings.HasSuffix(req.URL.Path, "/ai/plan-chat") {
+			if strings.HasSuffix(req.URL.Path, "/ai/coach/messages/stream") || strings.HasSuffix(req.URL.Path, "/cashflow/receipt-scan") || strings.HasSuffix(req.URL.Path, "/cashflow/voice-parse") || strings.HasSuffix(req.URL.Path, "/bank-profiles/extract") || strings.HasSuffix(req.URL.Path, "/ai/plan-chat") {
 				slow.ServeHTTP(w, req)
 				return
 			}
@@ -299,6 +300,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 			r.With(idem.Handler("cashflow.create")).Post("/cashflow", expensesH.Create)
 			r.With(idem.Handler("cashflow.sms")).Post("/cashflow/sms-ingest", expensesH.IngestSMS)
 			r.With(idem.Handler("cashflow.receipt")).Post("/cashflow/receipt-scan", expensesH.ScanReceipt)
+			r.With(idem.Handler("cashflow.voice")).Post("/cashflow/voice-parse", expensesH.ParseVoice)
 			r.Patch("/cashflow/{id}", expensesH.Update)
 			r.With(idem.Handler("cashflow.delete")).Delete("/cashflow/{id}", expensesH.Delete)
 			r.With(idem.Handler("cashflow.share")).Post("/cashflow/{id}/share", expensesH.Share)

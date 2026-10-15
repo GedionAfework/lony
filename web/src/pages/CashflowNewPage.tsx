@@ -19,6 +19,7 @@ import { Field, SelectField } from '../components/Field';
 import { Button } from '../components/Button';
 import { Segmented } from '../components/Segmented';
 import { useToast } from '../components/Toast';
+import { VoiceAddButton, type VoiceDraft } from '../components/VoiceAddButton';
 
 type Kind = 'income' | 'expense';
 
@@ -273,11 +274,50 @@ export function CashflowNewPage() {
     }
   }
 
+  function applyVoiceDraft(draft: VoiceDraft) {
+    if (draft.kind) setKind(draft.kind);
+    if (draft.amount) setAmount(formatAmountCommas(draft.amount));
+    if (draft.title) setTitle(draft.title);
+    if (draft.currency_code && draft.currency_code.length === 3) setCurrency(draft.currency_code.toUpperCase());
+    if (draft.note) setNote(draft.note);
+    if (draft.occurred_at) setDate(draft.occurred_at.slice(0, 10));
+    if (draft.category_id && categories.some((c) => c.id === draft.category_id)) {
+      setCategoryId(draft.category_id);
+    } else if (draft.category_hint) {
+      const hint = draft.category_hint.toLowerCase();
+      const hit = categories.find(
+        (c) => c.name.toLowerCase().includes(hint) || hint.includes(c.name.toLowerCase()),
+      );
+      if (hit) setCategoryId(hit.id);
+    }
+    if (draft.account_id && accounts.some((a) => a.id === draft.account_id)) {
+      setAccountId(draft.account_id);
+    } else if (draft.account_hint) {
+      const hint = draft.account_hint.toLowerCase();
+      const hit = accounts.find(
+        (a) => a.name.toLowerCase().includes(hint) || hint.includes(a.name.toLowerCase()),
+      );
+      if (hit) {
+        setAccountId(hit.id);
+        if (hit.currency_code) setCurrency(hit.currency_code.toUpperCase());
+      }
+    }
+  }
+
   if (loading) return <div className="page">Loading…</div>;
 
   return (
     <div className="page page-narrow">
-      <PageHeader title={editing ? 'Edit entry' : kind === 'income' ? 'New income' : 'New expense'} back onBack={() => navigate(-1)} />
+      <PageHeader
+        title={editing ? 'Edit entry' : kind === 'income' ? 'New income' : 'New expense'}
+        back
+        onBack={() => navigate(-1)}
+        right={
+          editing || !token ? null : (
+            <VoiceAddButton token={token} disabled={busy} onDraft={applyVoiceDraft} onError={showError} />
+          )
+        }
+      />
       <Card>
         {!editing ? (
           <Segmented value={kind} onChange={(v) => setKind(v as Kind)} options={[{ id: 'income', label: 'Income' }, { id: 'expense', label: 'Expense' }]} />

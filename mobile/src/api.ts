@@ -1017,6 +1017,30 @@ export const api = {
       headers: { 'Idempotency-Key': idemKey('cashflow-receipt') },
       body: JSON.stringify(body),
     }, token),
+  parseCashflowVoice: (
+    token: string,
+    body: { text?: string; mime?: string; audio_base64?: string },
+  ) =>
+    request<{
+      extract: {
+        transcript?: string;
+        kind?: string;
+        title?: string;
+        amount?: string;
+        currency_code?: string;
+        category_hint?: string;
+        account_hint?: string;
+        occurred_at?: string;
+        note?: string;
+        category_id?: string;
+        account_id?: string;
+        confidence?: number;
+      };
+    }>('/cashflow/voice-parse', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('cashflow-voice') },
+      body: JSON.stringify(body),
+    }, token),
   fxRates: (base: string) =>
     request<{ base: string; as_of: string; rates: Record<string, string> }>(
       `/fx/rates?base=${encodeURIComponent(base)}`,

@@ -24,6 +24,7 @@ import { IconContact, IconEdit, IconSearch, IconTrash } from './icons';
 import { dialForCountry, toE164 } from './phone';
 import { SearchSelect } from './SearchSelect';
 import { fonts, radii, space, useTheme } from './theme';
+import { VoiceAddButton, type VoiceDraft } from './VoiceAddButton';
 import {
   Card,
   EmptyState,
@@ -66,6 +67,7 @@ type Props = {
     | { status: 'invited' | 'pending' | 'error' }
   >;
   onFriendsChanged?: () => void;
+  onKind?: (kind: Kind) => void;
 };
 
 type SplitFriend = {
@@ -128,6 +130,7 @@ export function CashflowFormScreen({
   onError,
   onLookupPhone,
   onFriendsChanged,
+  onKind,
 }: Props) {
   const { colors } = useTheme();
   const [busy, setBusy] = useState(false);
@@ -706,6 +709,39 @@ export function CashflowFormScreen({
     }
   }
 
+  function applyVoiceDraft(draft: VoiceDraft) {
+    if (draft.kind && draft.kind !== kind) onKind?.(draft.kind);
+    if (draft.amount) setAmount(formatAmountCommas(draft.amount));
+    if (draft.title) setTitle(draft.title);
+    if (draft.currency_code && draft.currency_code.length === 3) setCurrency(draft.currency_code.toUpperCase());
+    if (draft.note) setNote(draft.note);
+    if (draft.occurred_at) setDate(draft.occurred_at.slice(0, 10));
+    if (draft.category_id && categories.some((c) => c.id === draft.category_id)) {
+      setCategoryId(draft.category_id);
+    } else if (draft.category_hint) {
+      const hint = draft.category_hint.toLowerCase();
+      const hit = categories.find(
+        (c) => c.name.toLowerCase().includes(hint) || hint.includes(c.name.toLowerCase()),
+      );
+      if (hit) setCategoryId(hit.id);
+    }
+    if (draft.account_id && accounts.some((a) => a.id === draft.account_id)) {
+      setAccountId(draft.account_id);
+    } else if (draft.account_hint) {
+      const hint = draft.account_hint.toLowerCase();
+      const hit = accounts.find(
+        (a) =>
+          a.name.toLowerCase().includes(hint) ||
+          hint.includes(a.name.toLowerCase()) ||
+          (a.institution_label || '').toLowerCase().includes(hint),
+      );
+      if (hit) {
+        setAccountId(hit.id);
+        if (hit.currency_code) setCurrency(hit.currency_code.toUpperCase());
+      }
+    }
+  }
+
   const categoryOptions = categories.map((c) => ({
     id: c.id,
     label: c.name,
@@ -745,6 +781,17 @@ export function CashflowFormScreen({
                   : 'New expense'
         }
         onBack={onBack}
+        right={
+          editing ? undefined : (
+            <VoiceAddButton
+              token={token}
+              locale={user.locale}
+              disabled={busy}
+              onDraft={applyVoiceDraft}
+              onError={onError}
+            />
+          )
+        }
       />
       {prefill && !editing ? (
         <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>

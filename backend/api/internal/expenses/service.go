@@ -29,6 +29,8 @@ type AccountLinker interface {
 	PickAccount(ctx context.Context, userID uuid.UUID, currency string, preferred *uuid.UUID) (*uuid.UUID, error)
 	// FindAccountByLast4 matches an account whose name/label contains …last4.
 	FindAccountByLast4(ctx context.Context, userID uuid.UUID, currency, last4 string) (*uuid.UUID, error)
+	// MatchAccount picks an account from a spoken hint (name, institution, last4) or currency.
+	MatchAccount(ctx context.Context, userID uuid.UUID, hint, currency string) (*uuid.UUID, error)
 }
 
 type RecurringPrefs interface {
@@ -41,6 +43,7 @@ type Service struct {
 	accounts AccountLinker
 	notify   BillNotifier
 	receipts ReceiptExtractor
+	voice    VoiceParser
 	prefs    RecurringPrefs
 	now      func() time.Time
 }

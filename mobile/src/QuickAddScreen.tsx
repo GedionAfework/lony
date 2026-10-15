@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { View } from 'react-native';
 import { api, type CashflowCategory, type CashflowEntry, type MoneyAccount, type User } from './api';
-import { stripAmount } from './amountFormat';
+import { formatAmountCommas, stripAmount } from './amountFormat';
 import { CURRENCIES } from './catalogs';
 import { t } from './i18n';
 import { saveCashflowDraft } from './offlineDrafts';
 import { SearchSelect } from './SearchSelect';
 import { space } from './theme';
+import { VoiceAddButton, type VoiceDraft } from './VoiceAddButton';
 import { Card, Field, PrimaryButton, ScreenHeader, Segmented } from './ui';
 
 type Kind = 'income' | 'expense';
@@ -90,6 +91,34 @@ export function QuickAddScreen({ user, token, kind, onKind, onBack, onSaved, onE
     [accounts, currency],
   );
 
+  function applyVoiceDraft(draft: VoiceDraft) {
+    if (draft.kind && draft.kind !== kind) onKind(draft.kind);
+    if (draft.amount) setAmount(formatAmountCommas(draft.amount));
+    if (draft.title) setTitle(draft.title);
+    if (draft.currency_code && draft.currency_code.length === 3) setCurrency(draft.currency_code.toUpperCase());
+    if (draft.category_id && categories.some((c) => c.id === draft.category_id)) {
+      setCategoryId(draft.category_id);
+    } else if (draft.category_hint) {
+      const hint = draft.category_hint.toLowerCase();
+      const hit = categories.find(
+        (c) => c.name.toLowerCase().includes(hint) || hint.includes(c.name.toLowerCase()),
+      );
+      if (hit) setCategoryId(hit.id);
+    }
+    if (draft.account_id && accounts.some((a) => a.id === draft.account_id)) {
+      setAccountId(draft.account_id);
+    } else if (draft.account_hint) {
+      const hint = draft.account_hint.toLowerCase();
+      const hit = accounts.find(
+        (a) => a.name.toLowerCase().includes(hint) || hint.includes(a.name.toLowerCase()),
+      );
+      if (hit) {
+        setAccountId(hit.id);
+        if (hit.currency_code) setCurrency(hit.currency_code.toUpperCase());
+      }
+    }
+  }
+
   async function save() {
     const payAmount = stripAmount(amount);
     if (!payAmount || Number(payAmount) <= 0) {
@@ -145,7 +174,20 @@ export function QuickAddScreen({ user, token, kind, onKind, onBack, onSaved, onE
 
   return (
     <View style={{ gap: space.md, paddingTop: 4 }}>
-      <ScreenHeader title={t(user.locale, 'quickAdd.title')} onBack={onBack} backLabel={t(user.locale, 'common.back')} />
+      <ScreenHeader
+        title={t(user.locale, 'quickAdd.title')}
+        onBack={onBack}
+        backLabel={t(user.locale, 'common.back')}
+        right={
+          <VoiceAddButton
+            token={token}
+            locale={user.locale}
+            disabled={busy}
+            onDraft={applyVoiceDraft}
+            onError={onError}
+          />
+        }
+      />
       <Segmented
         options={[
           { id: 'expense', label: t(user.locale, 'quickAdd.expense') },

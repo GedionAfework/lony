@@ -602,6 +602,28 @@ func (h *Handler) ScanReceipt(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, out)
 }
 
+type voiceParseBody struct {
+	Text        string `json:"text"`
+	Mime        string `json:"mime"`
+	AudioBase64 string `json:"audio_base64"`
+}
+
+func (h *Handler) ParseVoice(w http.ResponseWriter, r *http.Request) {
+	var body voiceParseBody
+	if err := httpx.Decode(r, &body); err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	out, err := h.svc.ParseVoice(r.Context(), auth.UserIDFrom(r.Context()), VoiceParseInput{
+		Text: body.Text, Mime: body.Mime, AudioBase64: body.AudioBase64,
+	})
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"extract": out})
+}
+
 func parseEntryID(r *http.Request) (uuid.UUID, error) {
 	id, err := uuid.Parse(chi.URLParam(r, "id"))
 	if err != nil {

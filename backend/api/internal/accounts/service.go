@@ -470,6 +470,42 @@ func (s *Service) FindAccountByLast4(ctx context.Context, userID uuid.UUID, curr
 	return nil, nil
 }
 
+func (s *Service) MatchAccount(ctx context.Context, userID uuid.UUID, hint, currency string) (*uuid.UUID, error) {
+	hint = strings.TrimSpace(hint)
+	currency = strings.ToUpper(strings.TrimSpace(currency))
+	digits := make([]rune, 0, len(hint))
+	for _, r := range hint {
+		if r >= '0' && r <= '9' {
+			digits = append(digits, r)
+		}
+	}
+	if len(digits) >= 4 {
+		if id, err := s.FindAccountByLast4(ctx, userID, currency, string(digits)); err == nil && id != nil {
+			return id, nil
+		}
+	}
+	if hint != "" {
+		if acc, err := s.FindByInstitution(ctx, userID, hint, currency); err == nil && acc != nil {
+			id := acc.ID
+			return &id, nil
+		}
+		rows, err := s.List(ctx, userID, false)
+		if err == nil {
+			want := strings.ToLower(hint)
+			for _, a := range rows {
+				if currency != "" && !strings.EqualFold(a.CurrencyCode, currency) {
+					continue
+				}
+				if strings.Contains(strings.ToLower(a.Name), want) || strings.Contains(want, strings.ToLower(a.Name)) {
+					id := a.ID
+					return &id, nil
+				}
+			}
+		}
+	}
+	return s.PickAccount(ctx, userID, currency, nil)
+}
+
 func (s *Service) Transfer(ctx context.Context, userID uuid.UUID, in TransferInput) (TransferDTO, error) {
 	if in.FromAccountID == in.ToAccountID {
 		return TransferDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{

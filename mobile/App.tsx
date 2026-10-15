@@ -2481,6 +2481,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                 setScreen('home');
               }}
               onError={(message) => setError(message)}
+              onKind={setCashflowKind}
               onFriendsChanged={() => {
                 void refreshFriends();
               }}

@@ -6,6 +6,7 @@ export const RecordingPresets = {
 
 type StubRecorder = {
   uri: string | null;
+  isRecording: boolean;
   prepareToRecordAsync: (preset?: unknown) => Promise<void>;
   record: () => void;
   stop: () => Promise<void>;
@@ -14,6 +15,7 @@ type StubRecorder = {
 export function useAudioRecorder(_preset?: unknown): StubRecorder {
   return {
     uri: null,
+    isRecording: false,
     prepareToRecordAsync: async () => undefined,
     record: () => undefined,
     stop: async () => undefined,
