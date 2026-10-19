@@ -980,10 +980,14 @@ export function SettingsScreen(props: Props) {
       ) : null}
       <Card>
         <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>
-          {t(props.locale, 'settings.premium')}
+          {props.isAdmin || props.planTier === 'premium'
+            ? t(props.locale, 'settings.premium')
+            : t(props.locale, 'settings.freePlan')}
         </Text>
         <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13, marginTop: 4 }}>
-          {t(props.locale, 'settings.premiumUnlocked')}
+          {props.isAdmin || props.planTier === 'premium'
+            ? t(props.locale, 'settings.premiumUnlocked')
+            : t(props.locale, 'settings.freePlanHint')}
         </Text>
       </Card>
       <Card>

@@ -31,9 +31,8 @@ Prefer kind "expense" for store receipts. If amount is unclear, still return bes
 JSON only — no markdown.`
 
 // ExtractReceipt implements expenses.ReceiptExtractor.
-// Receipt OCR is a core cashflow feature (not Premium personas).
 func (s *Service) ExtractReceipt(ctx context.Context, userID uuid.UUID, mime, b64 string) (expenses.ReceiptExtract, error) {
-	if err := s.ensureAICoreAvailable(ctx); err != nil {
+	if err := s.ensureAICoreAvailable(ctx, userID); err != nil {
 		return expenses.ReceiptExtract{}, err
 	}
 	if err := s.allowLLM(ctx, userID); err != nil {
@@ -105,19 +104,13 @@ func (s *Service) ExtractReceipt(ctx context.Context, userID uuid.UUID, mime, b6
 	return out, nil
 }
 
-// ensureAICoreAvailable checks global kill-switch + LLM config only (no Premium gate).
-func (s *Service) ensureAICoreAvailable(ctx context.Context) error {
+// ensureAICoreAvailable requires Premium, a live LLM, and the global AI kill-switch off.
+func (s *Service) ensureAICoreAvailable(ctx context.Context, userID uuid.UUID) error {
+	if err := s.ensureAIEnabled(ctx, userID); err != nil {
+		return err
+	}
 	if s.llm == nil || !s.llm.Available() {
 		return httpx.E(http.StatusServiceUnavailable, "AI_UNAVAILABLE", "AI is not configured")
-	}
-	if s.gate != nil {
-		off, err := s.gate.AIDisabled(ctx)
-		if err != nil {
-			return err
-		}
-		if off {
-			return httpx.E(http.StatusServiceUnavailable, "AI_DISABLED", "AI features are temporarily disabled")
-		}
 	}
 	return nil
 }

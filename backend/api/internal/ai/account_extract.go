@@ -40,7 +40,7 @@ type AccountExtract struct {
 
 // ExtractAccountDetails reads holder name, account number, and yearly profit % from an image.
 func (s *Service) ExtractAccountDetails(ctx context.Context, userID uuid.UUID, mime, b64 string) (AccountExtract, error) {
-	if err := s.ensureAICoreAvailable(ctx); err != nil {
+	if err := s.ensureAICoreAvailable(ctx, userID); err != nil {
 		return AccountExtract{}, err
 	}
 	if err := s.allowLLM(ctx, userID); err != nil {

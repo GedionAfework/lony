@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Camera } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
-import { api, type AppCalendar, type AppLocale } from '../lib/api';
+import { api, isPremiumPlan, type AppCalendar, type AppLocale } from '../lib/api';
 import { COUNTRIES, TIMEZONES } from '../lib/catalogs';
 import { applyDocumentDirection, parseLocaleMessages, setActivePack, t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
@@ -62,7 +62,7 @@ export function SettingsPage() {
   const [calendars, setCalendars] = useState<AppCalendar[]>([]);
 
   const isAdmin = user?.role === 'admin';
-  const isPremium = true;
+  const isPremium = isPremiumPlan(user);
 
   useEffect(() => {
     let cancelled = false;
@@ -457,12 +457,12 @@ export function SettingsPage() {
       {!isPremium ? (
         <Card>
           <div style={{ fontWeight: 700 }}>Free plan</div>
-          <p className="muted" style={{ fontSize: 13, marginTop: 4 }}>Insights AI (Analysis, Reports, Coach) requires Premium. Ask an admin to upgrade your account.</p>
+          <p className="muted" style={{ fontSize: 13, marginTop: 4 }}>Voice add, receipt scan, Plan AI, and Coach require Premium. Ask an admin to upgrade your account.</p>
         </Card>
       ) : (
         <Card>
           <div style={{ fontWeight: 700 }}>Premium</div>
-          <p className="muted" style={{ fontSize: 13, marginTop: 4 }}>AI personas are unlocked for this account.</p>
+          <p className="muted" style={{ fontSize: 13, marginTop: 4 }}>All AI features are unlocked for this account.</p>
         </Card>
       )}
       <Card tight>

@@ -28,7 +28,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import { api, DISCLAIMER, setTokenRefresher, type AppNotification, type BankProfile, type BankProfileShare, type CashflowEntry, type Dashboard, type Friendship, type Loan, type LoanInstallment, type Repayment, type SearchHit, type User } from './src/api';
+import { api, DISCLAIMER, isPremiumPlan, setTokenRefresher, type AppNotification, type BankProfile, type BankProfileShare, type CashflowEntry, type Dashboard, type Friendship, type Loan, type LoanInstallment, type Repayment, type SearchHit, type User } from './src/api';
 import { formatMoney as formatMoneyLocale, stripAmount } from './src/amountFormat';
 import { formatDisplayDate, formatDisplayDateTime } from './src/calendarFormat';
 import { AnalyticsScreen } from './src/AnalyticsScreen';
@@ -2183,6 +2183,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         >
           <IconRefresh size={18} color={colors.text} />
         </Pressable>
+        {isPremiumPlan(user) ? (
         <Pressable
           onPress={async () => {
             try {
@@ -2230,6 +2231,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         >
           <IconCamera size={18} color={colors.text} />
         </Pressable>
+        ) : null}
       </View>
     ) : undefined;
 

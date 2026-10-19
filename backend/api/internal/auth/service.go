@@ -774,7 +774,7 @@ func ToPublic(user UserRecord) users.PublicUser {
 		EmailVerified:         user.EmailVerifiedAt != nil,
 		Status:                user.Status,
 		Role:                  user.Role,
-		PlanTier:              "premium",
+		PlanTier:              user.PlanTier,
 		CreatedAt:             user.CreatedAt,
 	}
 	if out.Role == "" {

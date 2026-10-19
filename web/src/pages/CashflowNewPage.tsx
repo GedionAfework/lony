@@ -3,6 +3,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import {
   api,
+  isPremiumPlan,
   type CashflowCategory,
   type CashflowEntry,
   type Loan,
@@ -313,7 +314,7 @@ export function CashflowNewPage() {
         back
         onBack={() => navigate(-1)}
         right={
-          editing || !token ? null : (
+          editing || !token || !isPremiumPlan(user) ? null : (
             <VoiceAddButton token={token} disabled={busy} onDraft={applyVoiceDraft} onError={showError} />
           )
         }

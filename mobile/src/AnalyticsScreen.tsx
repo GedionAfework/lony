@@ -12,6 +12,7 @@ import {
   type InsightsOverview,
   type LonyScore,
   type User,
+  isPremiumPlan,
 } from './api';
 import { RichText } from './RichText';
 import { t } from './i18n';
@@ -366,7 +367,7 @@ export function AnalyticsScreen({
   );
   const [gradeModalOpen, setGradeModalOpen] = useState(false);
 
-  const isPremium = true;
+  const isPremium = isPremiumPlan(user);
 
   const reload = useCallback(async () => {
     if (!preferred || !token) return;

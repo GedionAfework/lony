@@ -262,12 +262,19 @@ func (s *Service) AIDisabled(ctx context.Context) (bool, error) {
 	return strings.EqualFold(strings.TrimSpace(v), "true") || v == "1", nil
 }
 
+func CanUseAI(planTier, role string) bool {
+	if strings.EqualFold(strings.TrimSpace(role), "admin") {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(planTier), "premium")
+}
+
 func (s *Service) UserCanUseAI(ctx context.Context, userID uuid.UUID) (bool, error) {
-	if _, _, err := s.store.GetUserPlanAccess(ctx, userID); err != nil {
+	planTier, role, err := s.store.GetUserPlanAccess(ctx, userID)
+	if err != nil {
 		return false, err
 	}
-	// Every account is premium until billing is turned on.
-	return true, nil
+	return CanUseAI(planTier, role), nil
 }
 
 func (s *Service) SetAIDisabled(ctx context.Context, disabled bool) error {

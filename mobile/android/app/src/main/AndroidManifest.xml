@@ -50,13 +50,6 @@
         <category android:name="android.intent.category.BROWSABLE"/>
         <category android:name="android.intent.category.DEFAULT"/>
       </intent-filter>
-      <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts"/>
     </activity>
-    <receiver android:name=".widget.LonyWidgetProvider" android:exported="true" android:label="@string/widget_name">
-      <intent-filter>
-        <action android:name="android.appwidget.action.APPWIDGET_UPDATE"/>
-      </intent-filter>
-      <meta-data android:name="android.appwidget.provider" android:resource="@xml/lony_widget_info"/>
-    </receiver>
   </application>
 </manifest>

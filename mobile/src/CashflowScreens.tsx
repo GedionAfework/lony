@@ -12,6 +12,7 @@ import {
   type SearchHit,
   type TripBudget,
   type User,
+  isPremiumPlan,
 } from './api';
 import { stripAmount, formatAmountCommas } from './amountFormat';
 import { CURRENCIES } from './catalogs';
@@ -782,7 +783,7 @@ export function CashflowFormScreen({
         }
         onBack={onBack}
         right={
-          editing ? undefined : (
+          editing || !isPremiumPlan(user) ? undefined : (
             <VoiceAddButton
               token={token}
               locale={user.locale}

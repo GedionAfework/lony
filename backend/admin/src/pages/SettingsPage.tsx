@@ -125,7 +125,7 @@ export function SettingsPage() {
         <div className="card stack">
           <strong>Billing note</strong>
           <p className="muted" style={{ margin: 0 }}>
-            v1 uses admin-managed plan_tier (free / premium). Stripe checkout is out of scope.
+            Two tiers: Free (no AI) and Premium (all AI). Flip plan_tier on Users until Polar checkout is wired.
           </p>
         </div>
       </PermissionGate>

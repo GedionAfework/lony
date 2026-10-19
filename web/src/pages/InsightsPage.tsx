@@ -13,6 +13,7 @@ import {
   type InsightsMonthPoint,
   type InsightsOverview,
   type LonyScore,
+  isPremiumPlan,
 } from '../lib/api';
 import { formatMoney } from '../lib/format';
 import { PageHeader } from '../components/PageHeader';
@@ -144,7 +145,7 @@ export function InsightsPage() {
   const { showError } = useToast();
   const preferred = (user?.default_currency_code || '').toUpperCase();
   const locale = user?.locale || 'en';
-  const isPremium = true;
+  const isPremium = isPremiumPlan(user);
 
   const [tab, setTab] = useState<Tab>('overview');
   const [overview, setOverview] = useState<InsightsOverview | null>(null);
@@ -310,7 +311,7 @@ export function InsightsPage() {
 
   return (
     <div className="page">
-      <PageHeader title="Insights" subtitle={!isPremium ? 'AI Analysis, Reports, and Coach unlock with Premium' : undefined} />
+      <PageHeader title="Insights" subtitle={!isPremium ? 'Voice add, receipt scan, Plan AI, Analysis, Reports, and Coach unlock with Premium' : undefined} />
       <Segmented value={tab} onChange={(v) => setTab(v as Tab)} options={tabs} />
 
       {tab === 'overview' ? (

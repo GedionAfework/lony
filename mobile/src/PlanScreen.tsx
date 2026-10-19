@@ -19,6 +19,7 @@ import {
   type PlanAssistantImage,
   type PlanAssistantSource,
   type User,
+  isPremiumPlan,
 } from './api';
 import { stripAmount } from './amountFormat';
 import { CURRENCIES } from './catalogs';
@@ -527,7 +528,7 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
     setUrlBusy(true);
     try {
       const previewPromise = api.previewGoalUrl(token, url).catch(() => null);
-      const extractPromise = api.extractGoalDraft(token, url).catch(() => null);
+      const extractPromise = isPremiumPlan(user) ? api.extractGoalDraft(token, url).catch(() => null) : Promise.resolve(null);
       const preview = await previewPromise;
       const scraped = preview?.preview;
       // A scraped full price is enough. Only wait on extract when the page had no price.
@@ -1515,21 +1516,23 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
       }));
   })();
 
+  const visibleCreateTab = !isPremiumPlan(user) && createTab === 'ai' ? 'detail' : createTab;
+
   if (mode === 'create') {
     return (
       <View style={{ gap: space.md }}>
         <ScreenHeader title={t(user.locale, 'plan.new') || 'New financial plan'} onBack={goIndex} />
         <Segmented
-          value={createTab}
+          value={visibleCreateTab}
           onChange={(id) => setCreateTab(id as 'detail' | 'link' | 'ai')}
           options={[
             { id: 'detail', label: t(user.locale, 'plan.tabDetail') },
             { id: 'link', label: t(user.locale, 'plan.tabLink') },
-            { id: 'ai', label: t(user.locale, 'plan.tabAi') },
+            ...(isPremiumPlan(user) ? [{ id: 'ai', label: t(user.locale, 'plan.tabAi') }] : []),
           ]}
         />
 
-        {createTab === 'detail' ? (
+        {visibleCreateTab === 'detail' ? (
           <Card>
             <SectionLabel>{t(user.locale, 'plan.details')}</SectionLabel>
             <Field label={t(user.locale, 'cashflow.title')} value={title} onChange={setTitle} />
@@ -1568,7 +1571,7 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
           </Card>
         ) : null}
 
-        {createTab === 'link' ? (
+        {visibleCreateTab === 'link' ? (
           <Card>
             <SectionLabel>{t(user.locale, 'plan.pasteLink')}</SectionLabel>
             <Field label={t(user.locale, 'plan.productLink')} value={productUrl} onChange={setProductUrl} placeholder="https://…" />
@@ -1583,7 +1586,7 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
           </Card>
         ) : null}
 
-        {createTab === 'ai' ? (
+        {visibleCreateTab === 'ai' ? (
           <Card>
             <SectionLabel>{t(user.locale, 'plan.askAssistant')}</SectionLabel>
             {aiMessages.length === 0 ? (

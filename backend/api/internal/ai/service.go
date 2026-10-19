@@ -154,7 +154,7 @@ func (s *Service) ensureAIEnabled(ctx context.Context, userID uuid.UUID) error {
 			return err
 		}
 		if !ok {
-			return httpx.E(http.StatusPaymentRequired, "AI_PREMIUM_REQUIRED", "AI personas require a Premium plan")
+			return httpx.E(http.StatusPaymentRequired, "AI_PREMIUM_REQUIRED", "AI features require a Premium plan")
 		}
 	}
 	return nil

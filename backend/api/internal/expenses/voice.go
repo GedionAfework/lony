@@ -3,6 +3,7 @@ package expenses
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"net/http"
 	"regexp"
 	"strings"
@@ -80,7 +81,13 @@ func (s *Service) ParseVoice(ctx context.Context, userID uuid.UUID, in VoicePars
 
 	out := ParseVoiceFallback(transcript)
 	if s.voice != nil {
-		if refined, err := s.voice.ParseVoiceText(ctx, userID, transcript, names); err == nil && refined.Amount != "" {
+		refined, err := s.voice.ParseVoiceText(ctx, userID, transcript, names)
+		if err != nil {
+			var api *httpx.APIError
+			if errors.As(err, &api) && api.Code == "AI_PREMIUM_REQUIRED" {
+				return VoiceExtract{}, err
+			}
+		} else if refined.Amount != "" {
 			refined.Transcript = transcript
 			out = refined
 		}

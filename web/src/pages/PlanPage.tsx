@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Camera, Plus, Trash2 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
-import { api, type Goal, type MoneyAccount } from '../lib/api';
+import { api, isPremiumPlan, type Goal, type MoneyAccount } from '../lib/api';
 import { formatMoney, stripAmount } from '../lib/format';
 import { CURRENCIES } from '../lib/catalogs';
 import { PageHeader } from '../components/PageHeader';
@@ -186,12 +186,13 @@ export function PlanPage() {
       return;
     }
     setUrlBusy(true);
-    try {
       try {
-        const res = await api.extractGoalDraft(token, url);
-        applyDraft(res.draft ?? {});
-      } catch {
-        const res = await api.previewGoalUrl(token, url);
+        try {
+          if (!isPremiumPlan(user)) throw new Error('skip-ai');
+          const res = await api.extractGoalDraft(token, url);
+          applyDraft(res.draft ?? {});
+        } catch {
+          const res = await api.previewGoalUrl(token, url);
         const p = res.preview;
         applyDraft({
           title: p.title,
@@ -459,6 +460,8 @@ export function PlanPage() {
       </div>
 
       <Modal open={createOpen} title="New plan" onClose={() => setCreateOpen(false)}>
+        {isPremiumPlan(user) ? (
+          <>
         <div className="muted" style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4 }}>
           Describe with AI
         </div>
@@ -472,6 +475,10 @@ export function PlanPage() {
         <Button variant="secondary" onClick={() => void onExtractDescribe()} busy={extractBusy} disabled={extractBusy || urlBusy || busy} block>
           {extractBusy ? 'Extracting…' : 'Fill form with AI'}
         </Button>
+          </>
+        ) : (
+          <p className="muted" style={{ fontSize: 13 }}>Plan AI is included with Premium.</p>
+        )}
         <div className="muted" style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, marginTop: 8 }}>
           Or paste a link
         </div>

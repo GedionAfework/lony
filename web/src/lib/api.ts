@@ -27,6 +27,10 @@ export type User = {
   profile_complete?: boolean;
 };
 
+export function isPremiumPlan(user?: Pick<User, 'plan_tier' | 'role'> | null): boolean {
+  return user?.plan_tier === 'premium' || user?.role === 'admin';
+}
+
 export type AppLocale = {
   code: string;
   name: string;

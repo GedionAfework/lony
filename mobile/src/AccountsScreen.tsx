@@ -4,7 +4,7 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import * as WebBrowser from 'expo-web-browser';
-import { api, type AccountReconcile, type BankLinkConnection, type BankLinkStatus, type CardInstallment, type MoneyAccount, type User } from './api';
+import { api, isPremiumPlan, type AccountReconcile, type BankLinkConnection, type BankLinkStatus, type CardInstallment, type MoneyAccount, type User } from './api';
 import { listSmsForAccount, type ArchivedSms } from './smsArchive';
 import { stripAmount } from './amountFormat';
 import type { CatalogOption } from './catalogs';
@@ -1566,6 +1566,7 @@ export function AccountsScreen({
                 'Scan a statement or fill in the holder name, account number, and yearly profit %. You can then share this account when someone owes you.'}
             </Text>
             <ScrollView contentContainerStyle={{ gap: space.md }} keyboardShouldPersistTaps="handled">
+              {isPremiumPlan(user) ? (
               <SecondaryButton
                 label={
                   acceptBusy
@@ -1575,6 +1576,7 @@ export function AccountsScreen({
                 onPress={() => void onScanAcceptStatement()}
                 disabled={acceptBusy}
               />
+              ) : null}
               <Field
                 label={t(user.locale, 'accounts.fullName') || 'Full name'}
                 value={acceptFullName}

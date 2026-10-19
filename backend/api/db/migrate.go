@@ -192,7 +192,10 @@ func applyLaterMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	if err := applyMigration(ctx, pool, "00046", "migrations/00046_cashflow_split.sql"); err != nil {
 		return err
 	}
-	return applyMigration(ctx, pool, "00047", "migrations/00047_trips.sql")
+	if err := applyMigration(ctx, pool, "00047", "migrations/00047_trips.sql"); err != nil {
+		return err
+	}
+	return applyMigration(ctx, pool, "00048", "migrations/00048_free_default_plan.sql")
 }
 
 func applyMigration(ctx context.Context, pool *pgxpool.Pool, version, path string) error {
