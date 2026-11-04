@@ -44,6 +44,9 @@ type Config struct {
 	PlaidEnv            string
 	PlaidRedirectURI    string
 	PublicBaseURL       string
+	// ExposeAuthCodes puts sign-up codes in API responses so local testing works without
+	// email. Opt-in only (DEV_EXPOSE_CODES=1) and never on a hosted server.
+	ExposeAuthCodes bool
 }
 
 func Load() (Config, error) {
@@ -82,6 +85,7 @@ func Load() (Config, error) {
 		PlaidEnv:            getenv("PLAID_ENV", "sandbox"),
 		PlaidRedirectURI:    strings.TrimSpace(os.Getenv("PLAID_REDIRECT_URI")),
 		PublicBaseURL:       strings.TrimRight(strings.TrimSpace(os.Getenv("PUBLIC_BASE_URL")), "/"),
+		ExposeAuthCodes:     exposeAuthCodes(),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -112,6 +116,15 @@ func loadBankKey(hexKey, jwtSecret string, dev bool) ([]byte, error) {
 	}
 	sum := sha256.Sum256([]byte("equilend-bank-profiles|" + jwtSecret))
 	return sum[:], nil
+}
+
+// exposeAuthCodes is true only when a developer asks for it on their own machine.
+func exposeAuthCodes() bool {
+	if os.Getenv("FLY_APP_NAME") != "" {
+		return false
+	}
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("DEV_EXPOSE_CODES")))
+	return v == "1" || v == "true"
 }
 
 func (c Config) Dev() bool {

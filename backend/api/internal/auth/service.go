@@ -272,9 +272,9 @@ func (s *Service) ResendVerification(ctx context.Context, email string) (CodeRes
 		return CodeResult{}, err
 	}
 	out := CodeResult{VerificationHint: "We sent a 6-digit code to your email."}
-	if s.cfg.Dev() && (s.mail == nil || !s.mail.Configured()) {
+	if s.cfg.ExposeAuthCodes && (s.mail == nil || !s.mail.Configured()) {
 		out.VerificationCode = code
-		out.VerificationHint = "Development mode: use the verification_code in this response."
+		out.VerificationHint = "Local testing: use the verification_code in this response."
 	}
 	return out, nil
 }
@@ -299,10 +299,10 @@ func (s *Service) ForgotPassword(ctx context.Context, email string) (CodeResult,
 	if err != nil {
 		return CodeResult{}, err
 	}
-	if s.cfg.Dev() && (s.mail == nil || !s.mail.Configured()) {
-		hint.VerificationCode = code
-		hint.VerificationHint = "Development mode: use the verification_code in this response."
-	}
+	// Never put a password-reset code in the response, not even in development mode:
+	// anyone who knows an email address could otherwise take over that account.
+	// Without a mailer the code is only written to the server log.
+	_ = code
 	return hint, nil
 }
 
@@ -741,9 +741,9 @@ func (s *Service) registerResult(user UserRecord, code string) RegisterResult {
 		User:             ToPublic(user),
 		VerificationHint: "We sent a 6-digit code to your email.",
 	}
-	if s.cfg.Dev() && (s.mail == nil || !s.mail.Configured()) {
+	if s.cfg.ExposeAuthCodes && (s.mail == nil || !s.mail.Configured()) {
 		out.VerificationCode = code
-		out.VerificationHint = "Development mode: use the verification_code in this response."
+		out.VerificationHint = "Local testing: use the verification_code in this response."
 	}
 	return out
 }

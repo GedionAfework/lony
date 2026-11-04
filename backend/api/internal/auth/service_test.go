@@ -12,6 +12,7 @@ func testService() (*Service, *memoryStore) {
 	store := newMemoryStore()
 	svc := NewService(store, config.Config{
 		AppEnv:              "development",
+		ExposeAuthCodes:     true,
 		JWTSecret:           "dev-only-change-me-to-at-least-32-chars",
 		AccessTokenTTL:      15 * time.Minute,
 		RefreshTokenTTL:     24 * time.Hour,

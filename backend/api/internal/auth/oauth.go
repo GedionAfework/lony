@@ -120,7 +120,8 @@ func (s *Service) SetAvatar(ctx context.Context, userID uuid.UUID, objectKey str
 }
 
 func (s *Service) verifyGoogle(ctx context.Context, idToken string) (subject, email, name string, err error) {
-	if s.cfg.GoogleClientID == "" && len(s.cfg.GoogleClientIDs) == 0 && !s.cfg.Dev() {
+	// Without a client ID we cannot tell whether a token was issued for Lony, so refuse.
+	if s.cfg.GoogleClientID == "" && len(s.cfg.GoogleClientIDs) == 0 {
 		return "", "", "", httpx.E(http.StatusServiceUnavailable, "GOOGLE_UNCONFIGURED",
 			"Set GOOGLE_CLIENT_ID to enable Google sign-in")
 	}
