@@ -435,10 +435,10 @@ export function PlanPage() {
                 style={{ cursor: 'pointer' }}
               >
                 {g.cover_image_url ? (
-                  <img src={g.cover_image_url} alt={g.title} className="cover-image" style={{ height: 110 }} />
+                  <img src={g.cover_image_url} alt={g.title} className="cover-image" style={{ height: 130 }} />
                 ) : (
-                  <div style={{ height: 56, borderRadius: 12, background: 'var(--primary-soft)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                    <span style={{ color: 'var(--primary)', fontWeight: 700, fontSize: 13 }}>{typeDisplay(g, goalTypes)}</span>
+                  <div className={`goal-cover goal-${g.goal_type}`}>
+                    <span>{typeDisplay(g, goalTypes)}</span>
                   </div>
                 )}
                 <div className="card-row">

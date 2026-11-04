@@ -3,13 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import { Plus } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { api, type Loan } from '../lib/api';
-import { formatSignedMoney } from '../lib/format';
-import { PageHeader } from '../components/PageHeader';
+import { formatMoney } from '../lib/format';
 import { Button } from '../components/Button';
+import { Card } from '../components/Card';
+import { EmptyState } from '../components/EmptyState';
 import { Segmented } from '../components/Segmented';
-import { Money } from '../components/Money';
 import { DueDatePill } from '../components/StatusPill';
-import { DataTable, type Column } from '../components/DataTable';
+import { Hero, HeroStat, Initials } from '../components/Visuals';
 import { useToast } from '../components/Toast';
 
 const FILTERS = [
@@ -19,6 +19,12 @@ const FILTERS = [
   { id: 'pending', label: 'Pending' },
   { id: 'overdue', label: 'Overdue' },
 ];
+
+const OPEN = ['active', 'overdue', 'repayment_pending', 'pending'];
+
+function remaining(loan: Loan): number {
+  return Number(loan.outstanding_amount || loan.expected_total || loan.principal || 0);
+}
 
 function nextInstallmentDue(loan: Loan): string | null {
   const rows = loan.installments ?? [];
@@ -48,68 +54,86 @@ export function LoansPage() {
     void reload(filter);
   }, [reload, filter]);
 
-  const columns: Column<Loan>[] = [
-    {
-      key: 'title',
-      header: 'Loan',
-      render: (loan) => {
-        const peer = loan.your_role === 'borrower' ? loan.lender : loan.borrower;
-        const title = loan.institution_label || peer.display_name;
-        return (
-          <div>
-            <div style={{ fontWeight: 700 }}>{loan.title || title}</div>
-            <div className="muted" style={{ fontSize: 12 }}>
-              {loan.reference_code}
-              {loan.currency_code ? ` · ${loan.currency_code}` : ''}
-              {loan.title ? ` · ${title}` : ''}
-            </div>
-          </div>
-        );
-      },
-    },
-    {
-      key: 'role',
-      header: 'Role',
-      render: (loan) => <span className="muted">{loan.your_role === 'lender' ? 'Lending' : 'Borrowing'}</span>,
-    },
-    {
-      key: 'due',
-      header: 'Due',
-      render: (loan) => <DueDatePill dueAt={nextInstallmentDue(loan)} status={loan.status} locale={locale} />,
-    },
-    {
-      key: 'amount',
-      header: 'Amount',
-      align: 'right',
-      render: (loan) =>
-        loan.principal ? (
-          <Money value={formatSignedMoney(loan.expected_total, loan.currency_code, loan.your_role === 'lender' ? 1 : -1, locale)} raw tone={loan.your_role === 'lender' ? 'positive' : 'negative'} />
-        ) : (
-          <span className="muted" style={{ fontSize: 12 }}>Waiting for terms</span>
-        ),
-    },
-  ];
+  // Totals always use every loan, whatever filter is showing.
+  const [allLoans, setAllLoans] = useState<Loan[]>([]);
+  useEffect(() => {
+    if (!token) return;
+    api
+      .listLoans(token, {})
+      .then((res) => setAllLoans(res.loans ?? []))
+      .catch(() => setAllLoans([]));
+  }, [token]);
+  const ccy = (user?.default_currency_code || allLoans[0]?.currency_code || 'USD').toUpperCase();
+  const open = allLoans.filter((l) => OPEN.includes(l.status) && (l.currency_code || ccy).toUpperCase() === ccy);
+  const owedToMe = open.filter((l) => l.your_role === 'lender').reduce((n, l) => n + remaining(l), 0);
+  const iOwe = open.filter((l) => l.your_role === 'borrower').reduce((n, l) => n + remaining(l), 0);
+  const overdue = allLoans.filter((l) => l.status === 'overdue').length;
 
   return (
     <div className="page">
-      <PageHeader
-        title="Loans"
-        subtitle="Peer loans, shared expenses, and long-term debt"
-        right={
+      <div className="page-head">
+        <div>
+          <h1 className="page-title">Loans</h1>
+          <div className="page-subtitle muted">Money between you and the people you trust</div>
+        </div>
+        <div className="page-actions">
           <Button onClick={() => navigate('/loans/new')}>
             <Plus size={15} /> New loan
           </Button>
+        </div>
+      </div>
+
+      <Hero
+        label="Owed to you"
+        value={formatMoney(owedToMe.toFixed(2), ccy, locale)}
+        sub={`${open.length} open loan${open.length === 1 ? '' : 's'}`}
+        aside={
+          <>
+            <HeroStat label="You owe" value={formatMoney(iOwe.toFixed(2), ccy, locale)} tone="down" />
+            <HeroStat label="Overdue" value={overdue === 0 ? 'None' : `${overdue} loan${overdue === 1 ? '' : 's'}`} />
+          </>
         }
       />
-      <Segmented value={filter} onChange={setFilter} options={FILTERS} />
-      <DataTable
-        columns={columns}
-        rows={loans}
-        rowKey={(l) => l.id}
-        onRowClick={(l) => navigate(`/loans/${l.id}`)}
-        emptyTitle="No loans in sight"
-        emptyBody="Start with a friend, search someone, or set up a long-term debt schedule."
-      />
+
+      <div className="tabs-row">
+        <Segmented value={filter} onChange={setFilter} options={FILTERS} />
+      </div>
+
+      <Card>
+        {loans.length === 0 ? (
+          <EmptyState
+            title="No loans here"
+            body="Lend to a friend, split a bill, or track a long-term debt."
+            action={
+              <Button onClick={() => navigate('/loans/new')} style={{ marginTop: 8 }}>
+                <Plus size={15} /> New loan
+              </Button>
+            }
+          />
+        ) : (
+          loans.map((loan) => {
+            const peer = loan.your_role === 'borrower' ? loan.lender : loan.borrower;
+            const name = loan.institution_label || peer?.display_name || loan.title || 'Loan';
+            const lending = loan.your_role === 'lender';
+            return (
+              <button key={loan.id} type="button" className="tx-row loan-row" onClick={() => navigate(`/loans/${loan.id}`)}>
+                <Initials name={name} size={42} />
+                <div className="tx-main">
+                  <div className="tx-title">{name}</div>
+                  <div className="tx-sub">
+                    {lending ? 'Owes you' : 'You owe'}
+                    {loan.title && loan.title !== name ? ` · ${loan.title}` : ''} · {loan.reference_code}
+                  </div>
+                </div>
+                <DueDatePill dueAt={nextInstallmentDue(loan)} status={loan.status} locale={locale} />
+                <div className={`tx-amount loan-amount ${lending ? 'in' : 'out'}`}>
+                  {loan.principal ? formatMoney(remaining(loan), loan.currency_code, locale) : <span className="muted">Waiting for terms</span>}
+                </div>
+              </button>
+            );
+          })
+        )}
+      </Card>
     </div>
   );
 }

@@ -1,44 +1,52 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   Banknote,
   Bell,
-  Home,
-  LandmarkIcon,
+  ChevronDown,
+  House,
+  Landmark,
   LayoutGrid,
-  LineChart,
   LogOut,
   Menu,
   MessageCircle,
   Moon,
+  Plus,
   Settings as SettingsIcon,
   Sun,
   Target,
   Wallet,
+  type LucideIcon,
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { useTheme } from '../lib/theme';
 import { api, type AppNotification } from '../lib/api';
-import { Button } from '../components/Button';
 
-const NAV_ITEMS = [
-  { to: '/', label: 'Home', icon: Home, end: true },
-  { to: '/accounts', label: 'Accounts', icon: Wallet },
-  { to: '/cashflow', label: 'Cashflow', icon: LineChart },
-  { to: '/loans', label: 'Loans', icon: Banknote },
-  { to: '/chats', label: 'Chats', icon: MessageCircle },
-  { to: '/insights', label: 'Insights', icon: LayoutGrid },
-  { to: '/plan', label: 'Plan', icon: Target },
-  { to: '/banks', label: 'Banks', icon: LandmarkIcon },
-  { to: '/settings', label: 'Settings', icon: SettingsIcon },
+type NavItem = { to: string; label: string; icon: LucideIcon; end?: boolean; group: string };
+
+const NAV_ITEMS: NavItem[] = [
+  { to: '/', label: 'Home', icon: House, end: true, group: 'Money' },
+  { to: '/accounts', label: 'Accounts', icon: Wallet, group: 'Money' },
+  { to: '/plan', label: 'Plan', icon: Target, group: 'Money' },
+  { to: '/insights', label: 'Insights', icon: LayoutGrid, group: 'Money' },
+  { to: '/loans', label: 'Loans', icon: Banknote, group: 'People' },
+  { to: '/chats', label: 'Chats', icon: MessageCircle, group: 'People' },
+  { to: '/banks', label: 'Banks', icon: Landmark, group: 'More' },
+  { to: '/settings', label: 'Settings', icon: SettingsIcon, group: 'More' },
 ];
 
 const BOTTOM_TABS = [
-  { to: '/', label: 'Home', icon: Home, end: true },
+  { to: '/', label: 'Home', icon: House, end: true },
+  { to: '/accounts', label: 'Accounts', icon: Wallet },
   { to: '/loans', label: 'Loans', icon: Banknote },
   { to: '/chats', label: 'Chats', icon: MessageCircle },
-  { to: '/insights', label: 'Insights', icon: LayoutGrid },
   { to: '/settings', label: 'You', icon: SettingsIcon },
+];
+
+const ADD_ACTIONS = [
+  { label: 'Expense', to: '/cashflow/new?kind=expense' },
+  { label: 'Income', to: '/cashflow/new?kind=income' },
+  { label: 'Loan', to: '/loans/new' },
 ];
 
 function timeAgo(iso: string): string {
@@ -46,23 +54,27 @@ function timeAgo(iso: string): string {
   const diff = Math.max(0, Date.now() - d);
   const mins = Math.floor(diff / 60000);
   if (mins < 1) return 'now';
-  if (mins < 60) return `${mins}m`;
+  if (mins < 60) return `${mins}m ago`;
   const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h`;
-  return `${Math.floor(hrs / 24)}d`;
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
 }
 
 export function AppShell() {
   const { user, token, logout } = useAuth();
   const { mode, toggle } = useTheme();
   const navigate = useNavigate();
+  const location = useLocation();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [addOpen, setAddOpen] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [chatUnread, setChatUnread] = useState(0);
   const notifRef = useRef<HTMLDivElement>(null);
   const userRef = useRef<HTMLDivElement>(null);
+  const addRef = useRef<HTMLDivElement>(null);
 
   const loadNotifications = useCallback(async () => {
     if (!token) return;
@@ -70,6 +82,12 @@ export function AppShell() {
       const res = await api.listNotifications(token);
       setNotifications(res.notifications ?? []);
       setUnreadCount(res.unread_count ?? 0);
+    } catch {
+      /* ignore */
+    }
+    try {
+      const chats = await api.listConversations(token);
+      setChatUnread((chats.conversations ?? []).reduce((n, c) => n + (c.unread_count || 0), 0));
     } catch {
       /* ignore */
     }
@@ -83,12 +101,30 @@ export function AppShell() {
 
   useEffect(() => {
     function onClick(e: MouseEvent) {
-      if (notifRef.current && !notifRef.current.contains(e.target as Node)) setNotifOpen(false);
-      if (userRef.current && !userRef.current.contains(e.target as Node)) setUserMenuOpen(false);
+      const t = e.target as Node;
+      if (notifRef.current && !notifRef.current.contains(t)) setNotifOpen(false);
+      if (userRef.current && !userRef.current.contains(t)) setUserMenuOpen(false);
+      if (addRef.current && !addRef.current.contains(t)) setAddOpen(false);
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== 'Escape') return;
+      setNotifOpen(false);
+      setUserMenuOpen(false);
+      setAddOpen(false);
+      setSidebarOpen(false);
     }
     document.addEventListener('mousedown', onClick);
-    return () => document.removeEventListener('mousedown', onClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onClick);
+      document.removeEventListener('keydown', onKey);
+    };
   }, []);
+
+  // Each new page starts at the top.
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [location.pathname]);
 
   async function onMarkRead(id: string) {
     if (!token) return;
@@ -115,35 +151,50 @@ export function AppShell() {
     navigate('/login');
   }
 
-  const initial = (user?.first_name || user?.display_name || user?.username || '?').trim().slice(0, 1).toUpperCase() || '?';
+  const name = user?.display_name || user?.username || 'Account';
+  const initial = (user?.first_name || name).trim().slice(0, 1).toUpperCase() || '?';
+  const current =
+    NAV_ITEMS.find((i) => (i.end ? location.pathname === i.to : location.pathname.startsWith(i.to))) ??
+    (location.pathname.startsWith('/cashflow') ? NAV_ITEMS[0] : location.pathname.startsWith('/people') ? NAV_ITEMS[5] : null);
 
   return (
     <div className="app-shell">
       {sidebarOpen ? <div className="sidebar-scrim" onClick={() => setSidebarOpen(false)} /> : null}
       <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-brand">
-          <div className="mark">L</div>
+          <img src="/lony-logo.png" alt="" width={34} height={34} />
           <div className="name">Lony</div>
         </div>
+
         <nav className="nav-group">
-          {NAV_ITEMS.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.end}
-              className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
-              onClick={() => setSidebarOpen(false)}
-            >
-              <item.icon size={18} />
-              {item.label}
-            </NavLink>
+          {NAV_ITEMS.map((item, i) => (
+            <div key={item.to} className="nav-slot">
+              {i === 0 || NAV_ITEMS[i - 1].group !== item.group ? <div className="nav-heading">{item.group}</div> : null}
+              <NavLink
+                to={item.to}
+                end={item.end}
+                className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
+                onClick={() => setSidebarOpen(false)}
+              >
+                <item.icon size={18} strokeWidth={2} />
+                <span>{item.label}</span>
+                {item.to === '/chats' && chatUnread > 0 ? <span className="nav-count">{chatUnread > 9 ? '9+' : chatUnread}</span> : null}
+              </NavLink>
+            </div>
           ))}
         </nav>
+
         <div className="sidebar-footer">
-          <Button variant="ghost" block onClick={onLogout} style={{ justifyContent: 'flex-start', gap: 10 }}>
+          <button type="button" className="sidebar-user" onClick={() => navigate('/settings')}>
+            <div className="avatar">{user?.avatar_url ? <img src={user.avatar_url} alt="" /> : initial}</div>
+            <div className="who">
+              <strong>{name}</strong>
+              <small>{user?.email}</small>
+            </div>
+          </button>
+          <button type="button" className="icon-btn ghost" aria-label="Sign out" title="Sign out" onClick={onLogout}>
             <LogOut size={16} />
-            Sign out
-          </Button>
+          </button>
         </div>
       </aside>
 
@@ -152,7 +203,37 @@ export function AppShell() {
           <button className="icon-btn menu-toggle" aria-label="Menu" onClick={() => setSidebarOpen((v) => !v)}>
             <Menu size={18} />
           </button>
+          <div className="topbar-title">{current?.label ?? ''}</div>
           <div className="spacer" />
+
+          <div className="dropdown" ref={addRef}>
+            <button className="btn btn-primary topbar-add" onClick={() => setAddOpen((v) => !v)} aria-haspopup="menu" aria-expanded={addOpen}>
+              <Plus size={16} strokeWidth={2.5} />
+              <span>Add</span>
+            </button>
+            {addOpen ? (
+              <div className="dropdown-panel menu-panel" role="menu">
+                {ADD_ACTIONS.map((a) => (
+                  <button
+                    key={a.to}
+                    type="button"
+                    role="menuitem"
+                    className="menu-item"
+                    onClick={() => {
+                      setAddOpen(false);
+                      navigate(a.to);
+                    }}
+                  >
+                    {a.label}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+
+          <button className="icon-btn" aria-label={mode === 'dark' ? 'Light mode' : 'Dark mode'} title={mode === 'dark' ? 'Light mode' : 'Dark mode'} onClick={toggle}>
+            {mode === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
+          </button>
 
           <div className="dropdown" ref={notifRef}>
             <button className="icon-btn" aria-label="Notifications" onClick={() => setNotifOpen((v) => !v)}>
@@ -177,7 +258,7 @@ export function AppShell() {
                       >
                         <div className="title">{n.title}</div>
                         <div className="body">{n.body}</div>
-                        <div className="time">{timeAgo(n.created_at)} ago</div>
+                        <div className="time">{timeAgo(n.created_at)}</div>
                       </div>
                     ))
                   )}
@@ -186,35 +267,30 @@ export function AppShell() {
             ) : null}
           </div>
 
-          <button className="icon-btn" aria-label="Toggle theme" onClick={toggle}>
-            {mode === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
-          </button>
-
-          <div className="dropdown" ref={userRef}>
-            <div className="user-chip" onClick={() => setUserMenuOpen((v) => !v)}>
-              <div className="avatar">
-                {user?.avatar_url ? <img src={user.avatar_url} alt="" /> : initial}
-              </div>
-              <span>{user?.display_name || user?.username || 'Account'}</span>
-            </div>
+          <div className="dropdown topbar-user" ref={userRef}>
+            <button type="button" className="user-chip" onClick={() => setUserMenuOpen((v) => !v)}>
+              <div className="avatar">{user?.avatar_url ? <img src={user.avatar_url} alt="" /> : initial}</div>
+              <ChevronDown size={14} />
+            </button>
             {userMenuOpen ? (
-              <div className="dropdown-panel" style={{ minWidth: 200 }}>
-                <div className="dropdown-list">
-                  <div
-                    className="dropdown-item"
-                    onClick={() => {
-                      setUserMenuOpen(false);
-                      navigate('/settings');
-                    }}
-                  >
-                    <div className="title">Settings</div>
-                  </div>
-                  <div className="dropdown-item" onClick={onLogout}>
-                    <div className="title" style={{ color: 'var(--error)' }}>
-                      Sign out
-                    </div>
-                  </div>
+              <div className="dropdown-panel menu-panel" role="menu">
+                <div className="menu-who">
+                  <strong>{name}</strong>
+                  <small>{user?.email}</small>
                 </div>
+                <button
+                  type="button"
+                  className="menu-item"
+                  onClick={() => {
+                    setUserMenuOpen(false);
+                    navigate('/settings');
+                  }}
+                >
+                  Settings
+                </button>
+                <button type="button" className="menu-item danger" onClick={onLogout}>
+                  Sign out
+                </button>
               </div>
             ) : null}
           </div>
@@ -226,11 +302,9 @@ export function AppShell() {
       <nav className="bottom-nav">
         {BOTTOM_TABS.map((tab) => (
           <NavLink key={tab.to} to={tab.to} end={tab.end} className={({ isActive }) => (isActive ? 'active' : '')}>
-            <tab.icon size={19} />
-            {tab.label}
-            {tab.to === '/chats' && unreadCount > 0 ? (
-              <span className="nav-badge">{unreadCount > 9 ? '9+' : unreadCount}</span>
-            ) : null}
+            <tab.icon size={20} />
+            <span>{tab.label}</span>
+            {tab.to === '/chats' && chatUnread > 0 ? <span className="nav-badge">{chatUnread > 9 ? '9+' : chatUnread}</span> : null}
           </NavLink>
         ))}
       </nav>

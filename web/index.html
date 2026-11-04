@@ -4,10 +4,22 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Lony</title>
+    <link rel="icon" type="image/png" href="/lony-logo.png" />
+    <script>
+      // Paint the right background before the app loads, so dark mode never flashes white.
+      (function () {
+        try {
+          var dark = localStorage.getItem('lony_web_theme_mode') === 'dark';
+          document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+          document.documentElement.style.background = dark ? '#0A0F18' : '#F4F6F9';
+          document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+        } catch (e) {}
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600&family=Manrope:wght@400;500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap"
       rel="stylesheet"
     />
   </head>

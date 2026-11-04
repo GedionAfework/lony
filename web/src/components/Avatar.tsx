@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { apiBaseUrl } from '../lib/api';
+import { hueFor } from './Visuals';
 
 function resolveMediaUrl(path: string): string {
   if (
@@ -59,7 +60,11 @@ export function Avatar({
     };
   }, [src, token]);
 
-  const style = size ? { width: size, height: size, fontSize: Math.round(size * 0.36) } : undefined;
+  const color = hueFor(letter || '?');
+  const style = {
+    ...(size ? { width: size, height: size, fontSize: Math.round(size * 0.36) } : {}),
+    ...(uri ? {} : { color, background: `color-mix(in srgb, ${color} 15%, transparent)` }),
+  };
   return (
     <div className="avatar" style={style}>
       {uri ? <img src={uri} alt="" /> : letter.slice(0, 1).toUpperCase()}

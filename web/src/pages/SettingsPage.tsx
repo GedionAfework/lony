@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Camera } from 'lucide-react';
+import { Bell, Camera, ChevronRight, CreditCard, FileText, Lock, Palette, Shield, SlidersHorizontal, User, Wrench, type LucideIcon } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { api, isPremiumPlan, type AppCalendar, type AppLocale } from '../lib/api';
 import { COUNTRIES, TIMEZONES } from '../lib/catalogs';
@@ -14,14 +14,18 @@ import { useToast } from '../components/Toast';
 
 type Page = 'hub' | 'profile' | 'region' | 'payments' | 'notifications' | 'privacy' | 'security' | 'legal';
 
-function HubRow({ title, subtitle, onClick }: { title: string; subtitle: string; onClick: () => void }) {
+function HubRow({ title, subtitle, onClick, icon: Icon }: { title: string; subtitle: string; onClick: () => void; icon: LucideIcon }) {
   return (
-    <div className="list-row clickable-row" onClick={onClick}>
-      <div className="main">
-        <div className="title">{title}</div>
-        <div className="sub">{subtitle}</div>
+    <button type="button" className="tx-row hub-row" onClick={onClick}>
+      <span className="hub-icon">
+        <Icon size={18} />
+      </span>
+      <div className="tx-main">
+        <div className="tx-title">{title}</div>
+        <div className="tx-sub">{subtitle}</div>
       </div>
-    </div>
+      <ChevronRight size={18} className="hub-chevron" />
+    </button>
   );
 }
 
@@ -466,15 +470,15 @@ export function SettingsPage() {
         </Card>
       )}
       <Card tight>
-        <HubRow title={t(locale, 'settings.profile')} subtitle={t(locale, 'settings.profileSubtitle')} onClick={() => setPage('profile')} />
-        <HubRow title="Preferences" subtitle={t(locale, 'settings.regionSubtitle')} onClick={() => setPage('region')} />
-        <HubRow title={t(locale, 'settings.themes')} subtitle={t(locale, 'settings.themesSubtitle')} onClick={() => navigate('/themes')} />
-        <HubRow title={t(locale, 'settings.payments')} subtitle={t(locale, 'settings.paymentsSubtitle')} onClick={() => setPage('payments')} />
-        <HubRow title={t(locale, 'settings.notifications')} subtitle={t(locale, 'settings.notificationsSubtitle')} onClick={() => setPage('notifications')} />
-        <HubRow title={t(locale, 'settings.privacy')} subtitle={t(locale, 'settings.privacySubtitle')} onClick={() => setPage('privacy')} />
-        <HubRow title={t(locale, 'settings.security')} subtitle={t(locale, 'settings.securitySubtitle')} onClick={() => setPage('security')} />
-        <HubRow title={t(locale, 'settings.legal')} subtitle={t(locale, 'settings.legalSubtitle')} onClick={() => setPage('legal')} />
-        {isAdmin ? <HubRow title={t(locale, 'settings.admin')} subtitle={t(locale, 'settings.adminSubtitle')} onClick={() => navigate('/admin')} /> : null}
+        <HubRow title={t(locale, 'settings.profile')} subtitle={t(locale, 'settings.profileSubtitle')} onClick={() => setPage('profile')} icon={User} />
+        <HubRow title="Preferences" subtitle={t(locale, 'settings.regionSubtitle')} onClick={() => setPage('region')} icon={SlidersHorizontal} />
+        <HubRow title={t(locale, 'settings.themes')} subtitle={t(locale, 'settings.themesSubtitle')} onClick={() => navigate('/themes')} icon={Palette} />
+        <HubRow title={t(locale, 'settings.payments')} subtitle={t(locale, 'settings.paymentsSubtitle')} onClick={() => setPage('payments')} icon={CreditCard} />
+        <HubRow title={t(locale, 'settings.notifications')} subtitle={t(locale, 'settings.notificationsSubtitle')} onClick={() => setPage('notifications')} icon={Bell} />
+        <HubRow title={t(locale, 'settings.privacy')} subtitle={t(locale, 'settings.privacySubtitle')} onClick={() => setPage('privacy')} icon={Shield} />
+        <HubRow title={t(locale, 'settings.security')} subtitle={t(locale, 'settings.securitySubtitle')} onClick={() => setPage('security')} icon={Lock} />
+        <HubRow title={t(locale, 'settings.legal')} subtitle={t(locale, 'settings.legalSubtitle')} onClick={() => setPage('legal')} icon={FileText} />
+        {isAdmin ? <HubRow title={t(locale, 'settings.admin')} subtitle={t(locale, 'settings.adminSubtitle')} onClick={() => navigate('/admin')} icon={Wrench} /> : null}
       </Card>
       <Button variant="secondary" onClick={onLogout} busy={authBusy} block>
         {t(locale, 'common.signOut')}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowLeftRight, CreditCard, Landmark, Pencil, RefreshCw, Scale, Trash2, Upload, Wallet } from 'lucide-react';
+import { ArrowLeftRight, Banknote, CreditCard, Landmark, Pencil, PiggyBank, Plus, RefreshCw, Scale, Smartphone, Trash2, Upload, Wallet, type LucideIcon } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import {
   api,
@@ -13,9 +13,8 @@ import {
 import { formatMoney, stripAmount } from '../lib/format';
 import type { CatalogOption } from '../lib/catalogs';
 import { CURRENCIES } from '../lib/catalogs';
-import { PageHeader } from '../components/PageHeader';
+import { Hero, HeroStat, SectionHead, hueFor } from '../components/Visuals';
 import { Card } from '../components/Card';
-import { Money } from '../components/Money';
 import { Button } from '../components/Button';
 import { Field, SelectField } from '../components/Field';
 import { Modal } from '../components/Modal';
@@ -36,6 +35,14 @@ const COMPOUNDING = [
   { id: 'monthly', label: 'Monthly' },
   { id: 'yearly', label: 'Yearly compound' },
 ];
+
+const ACCOUNT_ICONS: Record<string, LucideIcon> = {
+  bank: Landmark,
+  cash: Banknote,
+  mobile_money: Smartphone,
+  wallet: Wallet,
+  credit_card: CreditCard,
+};
 
 type Panel = null | 'create' | 'edit' | 'balance' | 'transfer' | 'reconcile' | 'import' | 'installments';
 
@@ -512,43 +519,64 @@ export function AccountsPage() {
     }
   }
 
+  const heroCurrency = (() => {
+    const pref = (user?.default_currency_code || '').toUpperCase();
+    if (accounts.some((a) => a.currency_code === pref)) return pref;
+    return accounts[0]?.currency_code || pref || 'USD';
+  })();
+  const inHero = accounts.filter((a) => a.currency_code === heroCurrency);
+  const heroTotal = inHero.reduce((sum, a) => sum + (Number(a.balance) || 0), 0);
+  const heroAssets = inHero.filter((a) => a.account_type !== 'credit_card').reduce((sum, a) => sum + (Number(a.balance) || 0), 0);
+  const heroCards = Math.abs(inHero.filter((a) => a.account_type === 'credit_card').reduce((sum, a) => sum + (Number(a.balance) || 0), 0));
+  const otherCurrencies = [...new Set(accounts.map((a) => a.currency_code).filter((c) => c !== heroCurrency))];
+
   return (
     <div className="page">
-      <PageHeader
-        title="Accounts"
-        subtitle="Cash, bank, mobile money, and wallet balances"
-        right={
-          <div className="flex-row">
-            {accounts.length >= 1 ? (
-              <Button variant="secondary" size="sm" onClick={onReconcile} busy={busy}>
-                <Scale size={14} /> Reconcile
-              </Button>
-            ) : null}
-            {accounts.length >= 2 ? (
-              <Button variant="secondary" size="sm" onClick={() => setPanel('transfer')}>
-                <ArrowLeftRight size={14} /> Transfer
-              </Button>
-            ) : null}
-            <Button size="sm" onClick={openCreate}>
-              <Wallet size={14} /> Add account
+      <div className="page-head">
+        <div>
+          <h1 className="page-title">Accounts</h1>
+          <div className="page-subtitle muted">Your cash, banks, cards and wallets</div>
+        </div>
+        <div className="page-actions">
+          {accounts.length >= 1 ? (
+            <Button variant="secondary" onClick={onReconcile} busy={busy}>
+              <Scale size={15} /> Reconcile
             </Button>
-          </div>
-        }
-      />
+          ) : null}
+          {accounts.length >= 2 ? (
+            <Button variant="secondary" onClick={() => setPanel('transfer')}>
+              <ArrowLeftRight size={15} /> Transfer
+            </Button>
+          ) : null}
+          <Button onClick={openCreate}>
+            <Plus size={15} /> Add account
+          </Button>
+        </div>
+      </div>
+
+      {accounts.length > 0 ? (
+        <Hero
+          label="Across all accounts"
+          value={formatMoney(heroTotal.toFixed(2), heroCurrency, locale)}
+          sub={otherCurrencies.length ? `Plus ${otherCurrencies.join(', ')} accounts, shown separately below` : `${accounts.length} account${accounts.length === 1 ? '' : 's'}`}
+          aside={
+            <>
+              <HeroStat label="Money you have" value={formatMoney(heroAssets.toFixed(2), heroCurrency, locale)} tone="up" />
+              <HeroStat label="Card balances" value={formatMoney(heroCards.toFixed(2), heroCurrency, locale)} tone="down" />
+            </>
+          }
+        />
+      ) : null}
 
       {duplicates.length > 0 ? (
-        <Card>
-          <div className="section-label" style={{ color: 'var(--warning)' }}>These may be counted twice</div>
-          <div className="muted" style={{ fontSize: 13 }}>
-            A credit card balance already includes purchases and installment plans on that card. If one of these debts is part of a card, link
-            it so your net worth subtracts it once.
-          </div>
-          {duplicates.map((d) => (
-            <div key={d.loan_id} className="flex-col" style={{ gap: 6, paddingBlock: 10, borderBottom: '1px solid var(--border)' }}>
-              <div style={{ fontWeight: 700 }}>
-                {d.loan_title} · {formatMoney(d.outstanding, d.currency_code, locale)}
-              </div>
-              <div className="flex-row" style={{ gap: 8, flexWrap: 'wrap' }}>
+        <div className="notice">
+          <div className="notice-text">
+            <strong>These may be counted twice.</strong> If a debt is already part of a card balance, link it so it's only subtracted once.
+            {duplicates.map((d) => (
+              <div key={d.loan_id} className="flex-row" style={{ gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+                <span style={{ fontWeight: 700 }}>
+                  {d.loan_title} · {formatMoney(d.outstanding, d.currency_code, locale)}
+                </span>
                 {d.cards.map((c) => (
                   <Button key={c.id} size="sm" onClick={() => onResolveDuplicate(d.loan_id, c.id)}>
                     <CreditCard size={14} /> Part of {c.name}
@@ -558,126 +586,148 @@ export function AccountsPage() {
                   Not the same
                 </Button>
               </div>
-            </div>
-          ))}
-        </Card>
+            ))}
+          </div>
+        </div>
       ) : null}
 
-      <Card>
-        <div className="section-label">Linked banks</div>
-        {bankConnections.map((c) => (
-          <div key={c.id} className="list-row">
-            <div className="main">
-              <div className="title">{c.institution_label || c.provider}</div>
-              <div className="sub">
-                {c.status}
-                {c.last_synced_at ? ` · synced ${new Date(c.last_synced_at).toLocaleDateString(locale)}` : ''}
+      {accounts.length === 0 ? (
+        <Card>
+          <EmptyState
+            icon={<Wallet size={24} />}
+            title="No accounts yet"
+            body="Add your cash, bank accounts, cards or wallets to see your total balance."
+            action={
+              <Button onClick={openCreate} style={{ marginTop: 8 }}>
+                <Plus size={15} /> Add account
+              </Button>
+            }
+          />
+        </Card>
+      ) : (
+        <div className="acct-grid">
+          {accounts.map((a) => {
+            const Icon = ACCOUNT_ICONS[a.account_type] ?? PiggyBank;
+            const color = hueFor(a.institution_label || a.name);
+            const negative = Number(a.balance) < 0;
+            const typeLabel = accountTypes.find((t) => t.id === a.account_type)?.label || a.account_type;
+            return (
+              <div key={a.id} className="acct-card">
+                <div className="acct-top">
+                  <span className="cat-icon" style={{ width: 42, height: 42, color, background: `color-mix(in srgb, ${color} 14%, transparent)` }}>
+                    <Icon size={19} />
+                  </span>
+                  <div className="acct-name">
+                    <strong>{a.name}</strong>
+                    <small>
+                      {a.institution_label && a.institution_label !== a.name ? `${a.institution_label} · ` : ''}
+                      {typeLabel}
+                    </small>
+                  </div>
+                  <span className="acct-ccy">{a.currency_code}</span>
+                </div>
+                <div className={`acct-balance ${negative ? 'neg' : ''}`}>{formatMoney(a.balance, a.currency_code, locale)}</div>
+                {a.account_type === 'credit_card' && a.credit_limit ? (
+                  <div className="acct-credit">
+                    <div className="cat-track">
+                      <div
+                        style={{
+                          width: `${Math.min(100, Math.max(2, a.utilization_pct ?? 0))}%`,
+                          background: (a.utilization_pct ?? 0) >= 70 ? 'var(--error)' : (a.utilization_pct ?? 0) >= 30 ? 'var(--warning)' : 'var(--primary)',
+                        }}
+                      />
+                    </div>
+                    <span>
+                      {a.utilization_pct ?? 0}% of {formatMoney(a.credit_limit, a.currency_code, locale)}
+                      {a.next_due_at ? ` · due ${new Date(a.next_due_at).toLocaleDateString(locale, { month: 'short', day: 'numeric' })}` : ''}
+                    </span>
+                  </div>
+                ) : a.interest_rate_percent ? (
+                  <div className="acct-note">
+                    {a.interest_rate_percent}% interest
+                    {a.projected_balance_12m ? ` · about ${formatMoney(a.projected_balance_12m, a.currency_code, locale)} in a year` : ''}
+                  </div>
+                ) : (
+                  <div className="acct-note">Updated {new Date(a.balance_as_of || a.updated_at).toLocaleDateString(locale, { month: 'short', day: 'numeric' })}</div>
+                )}
+                <div className="acct-actions">
+                  <button
+                    type="button"
+                    className="acct-action"
+                    onClick={() => {
+                      setActiveId(a.id);
+                      setNewBalance(a.balance);
+                      setPanel('balance');
+                    }}
+                  >
+                    <Scale size={14} /> Balance
+                  </button>
+                  <button
+                    type="button"
+                    className="acct-action"
+                    onClick={() => {
+                      setActiveId(a.id);
+                      setImportCsv('');
+                      setImportFileName('');
+                      setImportEndingBalance('');
+                      setImportResult(null);
+                      setPanel('import');
+                    }}
+                  >
+                    <Upload size={14} /> Import
+                  </button>
+                  {a.account_type === 'credit_card' ? (
+                    <button type="button" className="acct-action" onClick={() => void openInstallments(a)}>
+                      <CreditCard size={14} /> Plans
+                    </button>
+                  ) : null}
+                  <span className="spacer" />
+                  <button type="button" className="icon-btn sm ghost" aria-label="Edit" title="Edit" onClick={() => openEdit(a)}>
+                    <Pencil size={14} />
+                  </button>
+                  <button type="button" className="icon-btn sm ghost" aria-label="Archive" title="Archive" onClick={() => onArchive(a.id)}>
+                    <Trash2 size={14} />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+          <button type="button" className="acct-card acct-add" onClick={openCreate}>
+            <Plus size={22} />
+            <span>Add account</span>
+          </button>
+        </div>
+      )}
+
+      {bankConnections.length > 0 || bankStatus?.available ? (
+        <Card>
+          <SectionHead title="Linked banks" sub="Balances sync automatically" />
+          {bankConnections.map((c) => (
+            <div key={c.id} className="list-row">
+              <div className="main">
+                <div className="title">{c.institution_label || c.provider}</div>
+                <div className="sub">
+                  {c.status}
+                  {c.last_synced_at ? ` · synced ${new Date(c.last_synced_at).toLocaleDateString(locale)}` : ''}
+                </div>
+              </div>
+              <div className="flex-row">
+                <Button variant="secondary" size="sm" onClick={() => onSyncConnection(c)} disabled={busy || c.status !== 'active'}>
+                  <RefreshCw size={13} /> Sync
+                </Button>
+                <Button variant="icon" aria-label="Disconnect" onClick={() => onDisconnect(c)}>
+                  <Trash2 size={15} />
+                </Button>
               </div>
             </div>
-            <div className="flex-row">
-              <Button variant="secondary" size="sm" onClick={() => onSyncConnection(c)} disabled={busy || c.status !== 'active'}>
-                <RefreshCw size={13} /> Sync
-              </Button>
-              <Button variant="icon" aria-label="Disconnect" onClick={() => onDisconnect(c)}>
-                <Trash2 size={15} />
-              </Button>
-            </div>
-          </div>
-        ))}
-        {bankStatus?.available ? (
-          <Button variant="secondary" onClick={onConnectBank} busy={busy} block>
-            <Landmark size={15} /> Connect a bank
-          </Button>
-        ) : null}
-      </Card>
-
-      <Card>
-        <div className="section-label">Your accounts</div>
-        {accounts.length === 0 ? (
-          <EmptyState icon={<Wallet size={22} />} title="No accounts yet" body="Add cash, bank, cards, or wallets for net worth tracking." />
-        ) : (
-          <div className="table-wrap">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Account</th>
-                  <th>Type</th>
-                  <th style={{ textAlign: 'right' }}>Balance</th>
-                  <th>Interest</th>
-                  <th style={{ textAlign: 'right' }}>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {accounts.map((a) => (
-                  <tr key={a.id}>
-                    <td>
-                      <div style={{ fontWeight: 700 }}>{a.name}</div>
-                      {a.institution_label ? <div className="muted" style={{ fontSize: 12 }}>{a.institution_label}</div> : null}
-                    </td>
-                    <td className="muted">
-                      {accountTypes.find((t) => t.id === a.account_type)?.label || a.account_type} · {a.currency_code}
-                    </td>
-                    <td style={{ textAlign: 'right' }}>
-                      <Money value={a.balance} currency={a.currency_code} locale={locale} />
-                      {a.account_type === 'credit_card' && a.credit_limit ? (
-                        <div className="muted" style={{ fontSize: 12 }}>
-                          {a.utilization_pct ?? 0}% of {formatMoney(a.credit_limit, a.currency_code, locale)}
-                          {a.next_due_at ? ` · due ${new Date(a.next_due_at).toLocaleDateString(locale, { month: 'short', day: 'numeric' })}` : ''}
-                        </div>
-                      ) : null}
-                    </td>
-                    <td className="muted" style={{ fontSize: 12 }}>
-                      {a.interest_rate_percent
-                        ? `${a.interest_rate_percent}% ${a.compounding || 'none'}${a.projected_balance_12m ? ` → ~${formatMoney(a.projected_balance_12m, a.currency_code, locale)}/12mo` : ''}`
-                        : '—'}
-                    </td>
-                    <td>
-                      <div className="flex-row" style={{ justifyContent: 'flex-end' }}>
-                        <Button
-                          variant="icon"
-                          aria-label="Update balance"
-                          onClick={() => {
-                            setActiveId(a.id);
-                            setNewBalance(a.balance);
-                            setPanel('balance');
-                          }}
-                        >
-                          <Scale size={15} />
-                        </Button>
-                        <Button
-                          variant="icon"
-                          aria-label="Import statement"
-                          onClick={() => {
-                            setActiveId(a.id);
-                            setImportCsv('');
-                            setImportFileName('');
-                            setImportEndingBalance('');
-                            setImportResult(null);
-                            setPanel('import');
-                          }}
-                        >
-                          <Upload size={15} />
-                        </Button>
-                        {a.account_type === 'credit_card' ? (
-                          <Button variant="icon" aria-label="Installments" onClick={() => void openInstallments(a)}>
-                            <CreditCard size={15} />
-                          </Button>
-                        ) : null}
-                        <Button variant="icon" aria-label="Edit" onClick={() => openEdit(a)}>
-                          <Pencil size={15} />
-                        </Button>
-                        <Button variant="icon" aria-label="Archive" onClick={() => onArchive(a.id)}>
-                          <Trash2 size={15} />
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
+          ))}
+          {bankStatus?.available ? (
+            <Button variant="secondary" onClick={onConnectBank} busy={busy} block>
+              <Landmark size={15} /> Connect a bank
+            </Button>
+          ) : null}
+        </Card>
+      ) : null}
 
       <Modal open={panel === 'create' || panel === 'edit'} title={panel === 'edit' ? 'Edit account' : 'New account'} onClose={() => setPanel(null)}>
         <SelectField
