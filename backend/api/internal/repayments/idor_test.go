@@ -20,7 +20,7 @@ func TestIDORStrangerCannotSeeOrConfirmRepayment(t *testing.T) {
 	if _, err := svc.Get(ctx, stranger, claimed.ID); err == nil {
 		t.Fatal("stranger read repayment")
 	}
-	if _, err := svc.Confirm(ctx, stranger, claimed.ID); err == nil {
+	if _, err := svc.Confirm(ctx, stranger, claimed.ID, ConfirmInput{}); err == nil {
 		t.Fatal("stranger confirmed repayment")
 	}
 	if _, err := svc.ListForLoan(ctx, stranger, loanID); err == nil {

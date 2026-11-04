@@ -120,3 +120,11 @@ export function IconBalance({ size = 22, color, style }: IconProps) {
 export function IconRepeat({ size = 22, color, style }: IconProps) {
   return <FontAwesome name="refresh" size={size} color={useIconColor(color)} style={style} />;
 }
+
+export function IconShare({ size = 22, color, style }: IconProps) {
+  return <FontAwesome name="share-alt" size={size} color={useIconColor(color)} style={style} />;
+}
+
+export function IconCopy({ size = 22, color, style }: IconProps) {
+  return <FontAwesome name="copy" size={size} color={useIconColor(color)} style={style} />;
+}

@@ -31,6 +31,8 @@ type SQLStoreAdapter struct {
 		CashflowCalendarDays(ctx context.Context, userID uuid.UUID, from, to time.Time, currency, tz string) ([]CalendarBucket, error)
 		GetSMSIngest(ctx context.Context, userID uuid.UUID, fingerprint string) (*SMSIngestRow, error)
 		InsertSMSIngest(ctx context.Context, userID uuid.UUID, fingerprint, excerpt string, parsed ParsedSMS, cashflowID *uuid.UUID) error
+		SMSLinkedToEntry(ctx context.Context, userID, entryID uuid.UUID) (bool, error)
+		EntryBacksRepayment(ctx context.Context, entryID uuid.UUID) (bool, error)
 		InsertTrip(ctx context.Context, rec Trip) (Trip, error)
 		UpdateTrip(ctx context.Context, rec Trip) (Trip, error)
 		GetTrip(ctx context.Context, userID, id uuid.UUID) (Trip, error)
@@ -38,7 +40,20 @@ type SQLStoreAdapter struct {
 		DeleteTrip(ctx context.Context, userID, id uuid.UUID) error
 		TripSpend(ctx context.Context, userID, tripID uuid.UUID) (decimal.Decimal, error)
 		AssignTripEntries(ctx context.Context, userID, tripID uuid.UUID, currency string, from, to time.Time) error
+		ApplyEntryBalance(ctx context.Context, userID, entryID uuid.UUID, accountID *uuid.UUID) error
+		UpdateEntryWithBalance(ctx context.Context, rec Entry) (Entry, error)
+		DeleteEntryWithBalance(ctx context.Context, userID, entryID uuid.UUID) error
 	}
+}
+
+func (a SQLStoreAdapter) ApplyEntryBalance(ctx context.Context, userID, entryID uuid.UUID, accountID *uuid.UUID) error {
+	return a.Inner.ApplyEntryBalance(ctx, userID, entryID, accountID)
+}
+func (a SQLStoreAdapter) UpdateEntryWithBalance(ctx context.Context, rec Entry) (Entry, error) {
+	return a.Inner.UpdateEntryWithBalance(ctx, rec)
+}
+func (a SQLStoreAdapter) DeleteEntryWithBalance(ctx context.Context, userID, entryID uuid.UUID) error {
+	return a.Inner.DeleteEntryWithBalance(ctx, userID, entryID)
 }
 
 func (a SQLStoreAdapter) Insert(ctx context.Context, rec Entry) (Entry, error) {
@@ -103,6 +118,12 @@ func (a SQLStoreAdapter) GetSMSIngest(ctx context.Context, userID uuid.UUID, fin
 }
 func (a SQLStoreAdapter) InsertSMSIngest(ctx context.Context, userID uuid.UUID, fingerprint, excerpt string, parsed ParsedSMS, cashflowID *uuid.UUID) error {
 	return a.Inner.InsertSMSIngest(ctx, userID, fingerprint, excerpt, parsed, cashflowID)
+}
+func (a SQLStoreAdapter) SMSLinkedToEntry(ctx context.Context, userID, entryID uuid.UUID) (bool, error) {
+	return a.Inner.SMSLinkedToEntry(ctx, userID, entryID)
+}
+func (a SQLStoreAdapter) EntryBacksRepayment(ctx context.Context, entryID uuid.UUID) (bool, error) {
+	return a.Inner.EntryBacksRepayment(ctx, entryID)
 }
 func (a SQLStoreAdapter) InsertTrip(ctx context.Context, rec Trip) (Trip, error) {
 	return a.Inner.InsertTrip(ctx, rec)

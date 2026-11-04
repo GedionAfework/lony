@@ -38,6 +38,42 @@ func (h LoanHooks) AfterAccept(ctx context.Context, loan loans.Record) error {
 	return nil
 }
 
+// AfterReject tells the person who asked that their request was turned down. For a
+// friend's share of an expense, the payer is asked what to do with the cost.
+func (h LoanHooks) AfterReject(ctx context.Context, loan loans.Record, actor uuid.UUID) error {
+	recipient := loan.LenderID
+	if actor == loan.LenderID {
+		recipient = loan.BorrowerID
+	}
+	if loan.SourceEntryID != nil {
+		amount := ""
+		if loan.Principal != nil && loan.CurrencyCode != nil {
+			amount = *loan.CurrencyCode + " " + loan.Principal.StringFixed(2) + " "
+		}
+		what := "a shared expense"
+		if loan.Title != nil && *loan.Title != "" {
+			what = "“" + *loan.Title + "”"
+		}
+		return h.Svc.Notify(ctx, recipient, TypeShareDeclined, &loan.ID, "Share declined",
+			fmt.Sprintf("Your friend declined their %sshare of %s. Ask again or keep the full cost.", amount, what),
+			map[string]any{"entry_id": loan.SourceEntryID.String(), "reference_code": loan.ReferenceCode})
+	}
+	return h.Svc.Notify(ctx, recipient, TypeLoanRejected, &loan.ID, "Loan request declined",
+		"Loan "+loan.ReferenceCode+" was declined.", map[string]any{"reference_code": loan.ReferenceCode})
+}
+
+// ChatHooks pushes new chat messages to the recipient's phone.
+type ChatHooks struct {
+	Svc *Service
+}
+
+func (h ChatHooks) OnChatMessage(ctx context.Context, recipient, sender uuid.UUID, senderName, preview string) error {
+	return h.Svc.Push(ctx, recipient, senderName, preview, map[string]any{
+		"type":    "chat_message",
+		"peer_id": sender.String(),
+	})
+}
+
 type FriendHooks struct {
 	Svc *Service
 }

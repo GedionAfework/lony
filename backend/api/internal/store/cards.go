@@ -127,7 +127,7 @@ func (s *SQLStore) ListCreditCardAccounts(ctx context.Context) ([]accounts.Accou
 	defer rows.Close()
 	var out []accounts.Account
 	for rows.Next() {
-		rec, err := scanMoneyAccount(rows)
+		rec, err := s.scanMoneyAccount(rows)
 		if err != nil {
 			return nil, err
 		}

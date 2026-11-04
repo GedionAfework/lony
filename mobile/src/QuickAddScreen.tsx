@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { View } from 'react-native';
-import { api, isPremiumPlan, type CashflowCategory, type CashflowEntry, type MoneyAccount, type User } from './api';
+import { api, type CashflowCategory, type CashflowEntry, type MoneyAccount, type User } from './api';
 import { formatAmountCommas, stripAmount } from './amountFormat';
 import { CURRENCIES } from './catalogs';
 import { t } from './i18n';
@@ -179,15 +179,13 @@ export function QuickAddScreen({ user, token, kind, onKind, onBack, onSaved, onE
         onBack={onBack}
         backLabel={t(user.locale, 'common.back')}
         right={
-          isPremiumPlan(user) ? (
-            <VoiceAddButton
-              token={token}
-              locale={user.locale}
-              disabled={busy}
-              onDraft={applyVoiceDraft}
-              onError={onError}
-            />
-          ) : undefined
+          <VoiceAddButton
+            token={token}
+            locale={user.locale}
+            disabled={busy}
+            onDraft={applyVoiceDraft}
+            onError={onError}
+          />
         }
       />
       <Segmented

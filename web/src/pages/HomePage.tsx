@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Repeat } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
-import { api, type Budget, type CashflowBill, type CashflowCalendar, type CashflowEntry, type CashflowSummary, type CategorySpend, type Loan, type PaydayCycle, type TripBudget, type WealthSummary } from '../lib/api';
+import { api, type Budget, type CashflowBill, type CashflowCalendar, type CashflowEntry, type CashflowSummary, type CategorySpend, type DeclinedShare, type Loan, type PaydayCycle, type TripBudget, type WealthSummary } from '../lib/api';
 import { CURRENCIES } from '../lib/catalogs';
 import { formatMoney, stripAmount } from '../lib/format';
 import { Card } from '../components/Card';
@@ -48,14 +48,16 @@ function toIsoLocal(d: Date): string {
 }
 
 function loanRemaining(loan: Loan): number {
-  return Number(loan.expected_total || loan.principal || 0);
+  return Number(loan.outstanding_amount || loan.expected_total || loan.principal || 0);
 }
 
 export function HomePage() {
   const { user, token } = useAuth();
   const navigate = useNavigate();
-  const { showError } = useToast();
+  const { showError, show } = useToast();
   const [tab, setTab] = useState<Tab>('dashboard');
+  // Friends who turned down their share of one of your expenses.
+  const [declined, setDeclined] = useState<DeclinedShare[]>([]);
   const [summary, setSummary] = useState<CashflowSummary | null>(null);
   const [wealth, setWealth] = useState<WealthSummary | null>(null);
   const [income, setIncome] = useState<CashflowEntry[]>([]);
@@ -169,6 +171,25 @@ export function HomePage() {
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  useEffect(() => {
+    if (!token) return;
+    api
+      .declinedShares(token)
+      .then((r) => setDeclined(r.declined_shares ?? []))
+      .catch(() => setDeclined([]));
+  }, [token]);
+
+  async function onDeclined(share: DeclinedShare, action: 'ask_again' | 'keep_cost') {
+    if (!token) return;
+    try {
+      await api.resolveDeclinedShare(token, share.loan_id, action);
+      setDeclined((prev) => prev.filter((d) => d.loan_id !== share.loan_id));
+      show(action === 'ask_again' ? `Asked ${share.friend.display_name} again` : 'Kept the full cost');
+    } catch (e) {
+      showError(e instanceof Error ? e.message : 'Could not update the share');
+    }
+  }
 
   const slice = summary?.by_currency?.find((s) => s.currency_code === preferred) ?? summary?.by_currency?.[0] ?? null;
   const currency = slice?.currency_code || preferred;
@@ -565,6 +586,23 @@ export function HomePage() {
       ) : tab === 'dashboard' ? (
         <div className="grid grid-main-side">
           <div className="flex-col">
+            {declined.map((d) => (
+              <Card key={d.loan_id}>
+                <div className="section-label" style={{ color: 'var(--warning)' }}>Share declined</div>
+                <div>
+                  <strong>{d.friend.display_name}</strong> declined their {formatMoney(d.amount, d.currency_code, user?.locale || 'en')} share
+                  {d.entry_title ? ` of “${d.entry_title}”` : ''}. You're covering the full cost for now.
+                </div>
+                <div className="flex-row" style={{ gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+                  <Button size="sm" onClick={() => onDeclined(d, 'ask_again')}>
+                    Ask again
+                  </Button>
+                  <Button size="sm" variant="secondary" onClick={() => onDeclined(d, 'keep_cost')}>
+                    Keep the full cost
+                  </Button>
+                </div>
+              </Card>
+            ))}
             <Card>
               <div className="card-row">
                 <div className="section-label">Net worth</div>
@@ -573,6 +611,12 @@ export function HomePage() {
                 </button>
               </div>
               <Money value={wealth?.net_worth ?? '0'} currency={wealth?.preferred_currency || currency} size="xl" tone={Number(wealth?.net_worth || 0) >= 0 ? 'positive' : 'negative'} locale={locale} />
+              {wealth?.converted ? (
+                <div className="muted" style={{ fontSize: 12 }}>
+                  All currencies at today's rate
+                  {wealth.missing_rates?.length ? ` · not included (no rate): ${wealth.missing_rates.join(', ')}` : ''}
+                </div>
+              ) : null}
               <div className="grid grid-3">
                 <div className="stat-card">
                   <div className="label">Cash on hand</div>

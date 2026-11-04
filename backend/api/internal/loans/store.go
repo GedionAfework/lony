@@ -31,6 +31,7 @@ const (
 	EventRejected      = "rejected"
 	EventCancelled     = "cancelled"
 	EventOverdue       = "marked_overdue"
+	EventAccountLinked = "account_linked"
 
 	KindOneTime  = "one_time"
 	KindLongTerm = "long_term"
@@ -69,6 +70,7 @@ type Record struct {
 	Title                *string
 	LoanKind             string
 	InterestPeriodMonths *int32
+	InterestCharge       string // once | per_month | per_year (one-time loans)
 	InstallmentCount     *int32
 	InstallmentAmount    *decimal.Decimal
 	InstitutionLabel     *string
@@ -83,6 +85,27 @@ type Record struct {
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
 	CoLenderIDs          []uuid.UUID
+	// PendingPaid is the pending repayment claim backed by an expense the borrower
+	// already recorded (the money left their account; the lender has not confirmed yet).
+	PendingPaid *decimal.Decimal
+	// LinkedAccountID: a self-recorded debt that is part of this credit card's balance.
+	LinkedAccountID      *uuid.UUID
+	AccountLinkDismissed bool
+	// SourceEntryID: the shared expense this loan is a friend's share of.
+	SourceEntryID *uuid.UUID
+	// DeclineHandled: the payer has answered a declined share (asked again or kept the cost).
+	DeclineHandled bool
+}
+
+// DeclinedShare is a friend's share of an expense that the friend turned down and the
+// payer has not dealt with yet.
+type DeclinedShare struct {
+	LoanID       uuid.UUID `json:"loan_id"`
+	EntryID      uuid.UUID `json:"entry_id"`
+	EntryTitle   string    `json:"entry_title"`
+	Friend       Party     `json:"friend"`
+	Amount       string    `json:"amount"`
+	CurrencyCode string    `json:"currency_code"`
 }
 
 type Terms struct {
@@ -98,6 +121,7 @@ type Terms struct {
 	Note                 *string
 	LoanKind             string
 	InterestPeriodMonths *int32
+	InterestCharge       string
 	InstallmentCount     *int32
 	InstallmentAmount    *decimal.Decimal
 	InstitutionLabel     *string
@@ -137,12 +161,15 @@ type LoanDTO struct {
 	Lender               Party             `json:"lender"`
 	YourRole             string            `json:"your_role"`
 	InterestBasis        string            `json:"interest_basis"`
+	InterestCharge       string            `json:"interest_charge,omitempty"`
 	LoanKind             string            `json:"loan_kind"`
 	Principal            *string           `json:"principal"`
 	CurrencyCode         *string           `json:"currency_code"`
 	InterestRatePercent  *string           `json:"interest_rate_percent"`
 	InterestAmount       *string           `json:"interest_amount"`
 	ExpectedTotal        *string           `json:"expected_total"`
+	OutstandingAmount    *string           `json:"outstanding_amount"`
+	LinkedAccountID      *uuid.UUID        `json:"linked_account_id,omitempty"`
 	DueAt                *time.Time        `json:"due_at"`
 	Note                 *string           `json:"note"`
 	Title                *string           `json:"title,omitempty"`
@@ -173,6 +200,7 @@ type TermsDTO struct {
 	Version              int32      `json:"version"`
 	Status               string     `json:"status"`
 	InterestBasis        string     `json:"interest_basis"`
+	InterestCharge       string     `json:"interest_charge,omitempty"`
 	LoanKind             string     `json:"loan_kind"`
 	Principal            string     `json:"principal"`
 	CurrencyCode         string     `json:"currency_code"`
@@ -228,6 +256,12 @@ type CreateInput struct {
 	StartAt              *time.Time
 	// AutoAccept activates peer loans immediately (used for expense splits).
 	AutoAccept bool
+	// LinkedAccountID marks a self-recorded debt as part of this credit card's balance.
+	LinkedAccountID *uuid.UUID
+	// InterestCharge: once (default), per_month or per_year. One-time loans only.
+	InterestCharge *string
+	// SourceEntryID marks the loan as a friend's share of this expense.
+	SourceEntryID *uuid.UUID
 }
 
 type TermsInput struct {
@@ -241,6 +275,7 @@ type TermsInput struct {
 	InstallmentCount     *int32
 	InstitutionLabel     *string
 	StartAt              *time.Time
+	InterestCharge       string
 }
 
 type ListQuery struct {
@@ -252,6 +287,10 @@ type ListQuery struct {
 
 type Store interface {
 	GetParty(ctx context.Context, id uuid.UUID) (Party, error)
+	// SetAccountLink stores which card a self-recorded debt belongs to (nil = none) and
+	// whether the user said it is a separate debt.
+	SetAccountLink(ctx context.Context, rec Record, event Event) (Record, error)
+	MarkDeclineHandled(ctx context.Context, loanID uuid.UUID) error
 	InsertLoan(ctx context.Context, rec Record, terms *Terms, events []Event) (Record, error)
 	GetLoan(ctx context.Context, id uuid.UUID) (Record, error)
 	ListLoans(ctx context.Context, userID uuid.UUID, status, role string) ([]Record, error)
@@ -266,6 +305,31 @@ type Store interface {
 	ApplyTransition(ctx context.Context, rec Record, acceptedTermsID *uuid.UUID, event Event) (Record, error)
 	SaveScheduleMeta(ctx context.Context, rec Record) (Record, error)
 	MarkOverdue(ctx context.Context, now time.Time) (int, error)
+}
+
+// Remaining is what is still owed: outstanding after confirmed repayments and
+// paid installments, falling back to the expected total. Totals (net worth,
+// receivables, payables) must use this so repaid money is not counted twice.
+func (r Record) Remaining() *decimal.Decimal {
+	if r.OutstandingAmount != nil {
+		return r.OutstandingAmount
+	}
+	return r.ExpectedTotal
+}
+
+// RemainingFor is what still counts in viewer's totals. For the borrower, a pending
+// claim paid from a tracked account is no longer owed: the expense already took it out
+// of their balance, and counting it again would double it.
+func (r Record) RemainingFor(viewer uuid.UUID) *decimal.Decimal {
+	rem := r.Remaining()
+	if rem == nil || r.PendingPaid == nil || viewer != r.BorrowerID || r.Status != StatusRepaymentPending {
+		return rem
+	}
+	out := rem.Sub(*r.PendingPaid)
+	if out.IsNegative() {
+		out = decimal.Zero
+	}
+	return &out
 }
 
 func (r Record) IsInstitutional() bool {

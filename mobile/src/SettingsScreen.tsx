@@ -99,6 +99,8 @@ type Props = {
   onAuthPref: (v: 'email' | 'google' | 'telegram') => void;
   onSave: () => void | Promise<void>;
   onSaveRegion?: () => void | Promise<void>;
+  /** Settings save on change; this shows whether the last change reached the server. */
+  saveState?: 'idle' | 'saving' | 'saved' | 'error';
   onAvatar: () => void;
   onTos: () => void;
   onBanks: () => void;
@@ -278,7 +280,26 @@ export function SettingsScreen(props: Props) {
   }
 
   function Back({ title }: { title: string }) {
-    return <ScreenHeader title={title} onBack={goHub} />;
+    const state = props.saveState;
+    return (
+      <ScreenHeader
+        title={title}
+        onBack={goHub}
+        right={
+          state === 'saving' || state === 'saved' || state === 'error' ? (
+            <Text
+              style={{
+                color: state === 'error' ? colors.error : colors.muted,
+                fontFamily: fonts.ui,
+                fontSize: 12,
+              }}
+            >
+              {state === 'saving' ? 'Saving…' : state === 'saved' ? 'Saved ✓' : 'Not saved'}
+            </Text>
+          ) : undefined
+        }
+      />
+    );
   }
 
   if (page === 'themes') {
@@ -409,9 +430,6 @@ export function SettingsScreen(props: Props) {
           </View>
           {smsAutoImport ? (
             <>
-              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12, marginTop: 4 }}>
-                {t(props.locale, 'settings.smsAutoImportHint')}
-              </Text>
               <SearchSelect
                 label={t(props.locale, 'settings.smsDailyCheckup')}
                 value={smsCheckupHour}
@@ -421,15 +439,7 @@ export function SettingsScreen(props: Props) {
                 }}
                 options={smsHourOpts}
               />
-              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12, marginBottom: 8 }}>
-                {t(props.locale, 'settings.smsDailyCheckupHint')}
-              </Text>
             </>
-          ) : null}
-          {Platform.OS === 'android' ? (
-            <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12, marginTop: 8, marginBottom: 4 }}>
-              {t(props.locale, 'settings.homeWidgetHint')}
-            </Text>
           ) : null}
           <View
             style={{
@@ -459,21 +469,6 @@ export function SettingsScreen(props: Props) {
               {t(props.locale, 'settings.rtlNotice')}
             </Text>
           ) : null}
-          <PrimaryButton
-            label={props.busy ? t(props.locale, 'common.loading') : t(props.locale, 'save')}
-            onPress={() => {
-              void (async () => {
-                try {
-                  if (props.onSaveRegion) await props.onSaveRegion();
-                  else await props.onSave?.();
-                  goHub();
-                } catch {
-                  /* error surfaced by parent */
-                }
-              })();
-            }}
-            disabled={props.busy}
-          />
         </Card>
       </View>
     );
@@ -546,11 +541,11 @@ export function SettingsScreen(props: Props) {
               );
             })}
           </View>
-          <PrimaryButton
-            label={props.busy ? t(props.locale, 'common.saving') : t(props.locale, 'save')}
-            onPress={props.onSave}
-            disabled={props.busy || !props.username.trim() || !props.firstName.trim() || !props.lastName.trim()}
-          />
+          {!props.username.trim() || !props.firstName.trim() || !props.lastName.trim() ? (
+            <Text style={{ color: colors.warning, fontFamily: fonts.ui, fontSize: 13 }}>
+              Username, first and last name are needed before changes save.
+            </Text>
+          ) : null}
         </Card>
       </View>
     );
@@ -912,7 +907,7 @@ export function SettingsScreen(props: Props) {
                     placeholder={mfaKind === 'pin' ? '123456' : '••••••'}
                   />
                   <PrimaryButton
-                    label={mfaBusy ? t(props.locale, 'common.loading') : t(props.locale, 'save')}
+                    label={mfaBusy ? t(props.locale, 'common.loading') : mfaKind === 'pin' ? 'Set PIN' : 'Set password'}
                     disabled={mfaBusy}
                     onPress={() => {
                       void (async () => {

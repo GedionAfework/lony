@@ -8,6 +8,7 @@ import {
   type BankLinkStatus,
   type CardInstallment,
   type MoneyAccount,
+  type PossibleDuplicateDebt,
 } from '../lib/api';
 import { formatMoney, stripAmount } from '../lib/format';
 import type { CatalogOption } from '../lib/catalogs';
@@ -56,6 +57,8 @@ export function AccountsPage() {
   const locale = user?.locale || 'en';
 
   const [accounts, setAccounts] = useState<MoneyAccount[]>([]);
+  // Self-recorded debts that may already be inside a card balance (counted twice).
+  const [duplicates, setDuplicates] = useState<PossibleDuplicateDebt[]>([]);
   const [bankStatus, setBankStatus] = useState<BankLinkStatus | null>(null);
   const [bankConnections, setBankConnections] = useState<BankLinkConnection[]>([]);
   const [busy, setBusy] = useState(false);
@@ -102,6 +105,10 @@ export function AccountsPage() {
     try {
       const res = await api.listAccounts(token);
       setAccounts(res.accounts ?? []);
+      api
+        .possibleDuplicateDebts(token)
+        .then((r) => setDuplicates(r.duplicates ?? []))
+        .catch(() => setDuplicates([]));
       const links = await api.listBankLinks(token).catch(() => null);
       if (links) {
         setBankStatus(links.status);
@@ -494,6 +501,17 @@ export function AccountsPage() {
   const accountOptions = accounts.map((a) => ({ id: a.id, label: `${a.name} (${a.currency_code})` }));
   const activeAccount = accounts.find((a) => a.id === activeId);
 
+  async function onResolveDuplicate(loanId: string, accountId: string | null) {
+    if (!token) return;
+    try {
+      await api.setLoanAccountLink(token, loanId, accountId ? { account_id: accountId } : { dismiss: true });
+      setDuplicates((prev) => prev.filter((d) => d.loan_id !== loanId));
+      show(accountId ? 'Linked to the card, counted once' : 'Kept as a separate debt');
+    } catch (e) {
+      showError(e instanceof Error ? e.message : 'Could not update the debt');
+    }
+  }
+
   return (
     <div className="page">
       <PageHeader
@@ -517,6 +535,33 @@ export function AccountsPage() {
           </div>
         }
       />
+
+      {duplicates.length > 0 ? (
+        <Card>
+          <div className="section-label" style={{ color: 'var(--warning)' }}>These may be counted twice</div>
+          <div className="muted" style={{ fontSize: 13 }}>
+            A credit card balance already includes purchases and installment plans on that card. If one of these debts is part of a card, link
+            it so your net worth subtracts it once.
+          </div>
+          {duplicates.map((d) => (
+            <div key={d.loan_id} className="flex-col" style={{ gap: 6, paddingBlock: 10, borderBottom: '1px solid var(--border)' }}>
+              <div style={{ fontWeight: 700 }}>
+                {d.loan_title} · {formatMoney(d.outstanding, d.currency_code, locale)}
+              </div>
+              <div className="flex-row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                {d.cards.map((c) => (
+                  <Button key={c.id} size="sm" onClick={() => onResolveDuplicate(d.loan_id, c.id)}>
+                    <CreditCard size={14} /> Part of {c.name}
+                  </Button>
+                ))}
+                <Button size="sm" variant="secondary" onClick={() => onResolveDuplicate(d.loan_id, null)}>
+                  Not the same
+                </Button>
+              </div>
+            </div>
+          ))}
+        </Card>
+      ) : null}
 
       <Card>
         <div className="section-label">Linked banks</div>

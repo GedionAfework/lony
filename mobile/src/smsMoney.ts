@@ -27,6 +27,11 @@ const ALIASES: [string, string][] = [
   ['₺', 'TRY'], ['TL', 'TRY'], ['zł', 'PLN'], ['₽', 'RUB'], ['₴', 'UAH'], ['₪', 'ILS'],
   ['€', 'EUR'], ['£', 'GBP'], ['Dhs', 'AED'], ['Dh', 'AED'], ['FCFA', 'XOF'], ['CFA', 'XOF'],
   ['Kwacha', 'ZMW'], ['Cedis', 'GHS'], ['$', 'USD'],
+  // Local-language names (Afaan Oromo, Tigrinya/Eritrea, Arabic, Bengali, Hindi, Urdu, Russian, Chinese).
+  ['Birrii', 'ETB'], ['Qarshii', 'ETB'], ['ናቕፋ', 'ERN'], ['Nfk', 'ERN'],
+  ['جنيه', 'EGP'], ['ج.م', 'EGP'], ['ريال', 'SAR'], ['ر.س', 'SAR'], ['درهم', 'AED'], ['د.إ', 'AED'],
+  ['৳', 'BDT'], ['টাকা', 'BDT'], ['Tk', 'BDT'], ['रु', 'INR'], ['रुपये', 'INR'], ['روپے', 'PKR'],
+  ['руб', 'RUB'], ['рублей', 'RUB'], ['人民币', 'CNY'],
 ].sort((a, b) => b[0].length - a[0].length) as [string, string][];
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -108,4 +113,21 @@ export function normalizeAmount(raw: string): string | null {
   const n = Number(s);
   if (!Number.isFinite(n) || n <= 0) return null;
   return n.toFixed(2);
+}
+
+/**
+ * Writes digits the way the parser reads them: Arabic-Indic (٥٠٠), Persian (۵۰۰),
+ * Devanagari (५००) and Bengali (৫০০) digits become 0-9, and Arabic decimal/thousands
+ * marks become "." and ",".
+ */
+export function normalizeDigits(text: string): string {
+  return (text || '').replace(/[\u0660-\u0669\u06F0-\u06F9\u0966-\u096F\u09E6-\u09EF\u066B\u066C]/g, (ch) => {
+    const c = ch.charCodeAt(0);
+    if (c === 0x066b) return '.';
+    if (c === 0x066c) return ',';
+    for (const base of [0x0660, 0x06f0, 0x0966, 0x09e6]) {
+      if (c >= base && c <= base + 9) return String(c - base);
+    }
+    return ch;
+  });
 }

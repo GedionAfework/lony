@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"net/http"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"equilend/api/internal/auth"
@@ -41,6 +42,23 @@ type claimBody struct {
 	ProofFilename      string  `json:"proof_filename"`
 	ProofMime          string  `json:"proof_mime"`
 	ProofAttachmentB64 string  `json:"proof_base64"`
+	// Record the payment as an expense from this account, atomically with the claim.
+	PayFromAccountID *uuid.UUID `json:"pay_from_account_id"`
+	Title            *string    `json:"title"`
+	Category         *string    `json:"category"`
+	CategoryID       *uuid.UUID `json:"category_id"`
+	OccurredAt       *time.Time `json:"occurred_at"`
+	// Or link an expense that is already recorded.
+	PaidEntryID *uuid.UUID `json:"paid_entry_id"`
+}
+
+type confirmBody struct {
+	ReceivedAccountID *uuid.UUID `json:"received_account_id"`
+	ReceivedEntryID   *uuid.UUID `json:"received_entry_id"`
+}
+
+type resolveBody struct {
+	Action string `json:"action"`
 }
 
 type rejectBody struct {
@@ -60,7 +78,16 @@ func (h *Handler) Claim(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	in := ClaimInput{Amount: body.Amount, Note: body.Note}
+	in := ClaimInput{
+		Amount:           body.Amount,
+		Note:             body.Note,
+		PayFromAccountID: body.PayFromAccountID,
+		Title:            body.Title,
+		Category:         body.Category,
+		CategoryID:       body.CategoryID,
+		OccurredAt:       body.OccurredAt,
+		PaidEntryID:      body.PaidEntryID,
+	}
 	if strings.TrimSpace(body.ProofAttachmentB64) != "" {
 		if h.disk == nil || h.meta == nil {
 			httpx.Error(w, httpx.E(http.StatusServiceUnavailable, "MEDIA_UNAVAILABLE", "media storage is not configured"))
@@ -131,7 +158,33 @@ func (h *Handler) Confirm(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, err)
 		return
 	}
-	out, err := h.svc.Confirm(r.Context(), auth.UserIDFrom(r.Context()), id)
+	var body confirmBody
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := httpx.Decode(r, &body); err != nil {
+			httpx.Error(w, err)
+			return
+		}
+	}
+	out, err := h.svc.Confirm(r.Context(), auth.UserIDFrom(r.Context()), id, ConfirmInput(body))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"repayment": out})
+}
+
+func (h *Handler) Resolve(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(r, "id")
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	var body resolveBody
+	if err := httpx.Decode(r, &body); err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	out, err := h.svc.Resolve(r.Context(), auth.UserIDFrom(r.Context()), id, body.Action)
 	if err != nil {
 		httpx.Error(w, err)
 		return

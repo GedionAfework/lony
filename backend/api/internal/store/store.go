@@ -15,7 +15,13 @@ import (
 type SQLStore struct {
 	pool *pgxpool.Pool
 	q    *sqlc.Queries
+	// accountKey encrypts money-account numbers at rest. Without it numbers are neither
+	// read nor written, so a process without the key can never wipe them.
+	accountKey []byte
 }
+
+// SetAccountNumberKey enables reading and writing encrypted account numbers.
+func (s *SQLStore) SetAccountNumberKey(key []byte) { s.accountKey = key }
 
 func New(pool *pgxpool.Pool) *SQLStore {
 	return &SQLStore{pool: pool, q: sqlc.New(pool)}

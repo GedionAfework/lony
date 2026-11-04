@@ -12,6 +12,7 @@ import (
 	"equilend/api/internal/httpx"
 
 	"github.com/google/uuid"
+	"github.com/shopspring/decimal"
 )
 
 const (
@@ -34,6 +35,15 @@ type PlanDraft struct {
 	SourceURL    string `json:"source_url,omitempty"`
 	ImageURL     string `json:"image_url,omitempty"`
 	TypeLabel    string `json:"type_label,omitempty"`
+	// SourcePrice/SourceCurrency: the listing's own price when it is in another currency
+	// than CurrencyCode (TargetAmount is then the converted figure). Sent back on create so
+	// price tracking compares like with like.
+	SourcePrice    string `json:"source_price,omitempty"`
+	SourceCurrency string `json:"source_currency,omitempty"`
+	// CurrencyUnknown: the page showed a price without saying which currency.
+	CurrencyUnknown bool `json:"currency_unknown,omitempty"`
+	// Estimated: the price is the assistant's estimate, not read from the page.
+	Estimated bool `json:"estimated,omitempty"`
 }
 
 // PlanExtractor turns free text into a goal draft (implemented by the AI service).
@@ -77,29 +87,46 @@ func findURL(text string) (string, string) {
 	return raw, strings.Join(strings.Fields(rest), " ")
 }
 
-// Extract builds a goal draft from free text and/or a product URL.
-func (s *Service) Extract(ctx context.Context, userID uuid.UUID, text string) (PlanDraft, error) {
+// Extract builds a goal draft from free text and/or a product URL. currency is the user's
+// planning currency: a listing priced in another currency is converted into it.
+// Reading a link needs no AI; AI only refines extra words around the link, or estimates
+// when the page cannot be read.
+func (s *Service) Extract(ctx context.Context, userID uuid.UUID, text, currency string) (PlanDraft, error) {
 	text = strings.TrimSpace(text)
 	if text == "" || utf8.RuneCountInString(text) > maxExtractTextLen {
 		return PlanDraft{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
 			"text": "required, max 4000 characters",
 		})
 	}
+	currency = strings.ToUpper(strings.TrimSpace(currency))
+	if len(currency) != 3 {
+		currency = ""
+	}
 	rawURL, rest := findURL(text)
 	if rawURL == "" {
 		if s.extractor == nil {
 			return PlanDraft{}, httpx.E(http.StatusServiceUnavailable, "AI_UNAVAILABLE", "AI is not configured")
 		}
-		return s.extractor.ExtractPlan(ctx, userID, text, nil)
+		prompt := text
+		if currency != "" {
+			prompt = "The user's currency is " + currency + ".\n" + text
+		}
+		draft, err := s.extractor.ExtractPlan(ctx, userID, prompt, nil)
+		if err == nil && draft.TargetAmount != "" {
+			draft.Estimated = true
+		}
+		return draft, err
 	}
 
 	prev, err := PreviewProductURL(ctx, rawURL)
 	if err != nil {
-		// Page could not be read: fall back to the text alone when AI can help.
+		// Page could not be read: estimate from the words when AI can help, and say so.
 		if s.extractor != nil {
-			draft, aerr := s.extractor.ExtractPlan(ctx, userID, text, &PlanDraft{GoalType: TypePurchase, SourceURL: rawURL})
+			draft, aerr := s.extractor.ExtractPlan(ctx, userID, text, &PlanDraft{GoalType: TypePurchase, SourceURL: rawURL, CurrencyCode: currency})
 			if aerr == nil && strings.TrimSpace(draft.Title) != "" {
 				draft.SourceURL = rawURL
+				draft.Estimated = draft.TargetAmount != ""
+				draft.Note = "The page could not be read; this is an estimate. Check the price on the site."
 				return draft, nil
 			}
 		}
@@ -107,17 +134,16 @@ func (s *Service) Extract(ctx context.Context, userID uuid.UUID, text string) (P
 	}
 
 	draft := PlanDraft{
-		Title:        prev.Title,
-		GoalType:     TypePurchase,
-		CurrencyCode: strings.ToUpper(prev.Currency),
-		SourceURL:    prev.URL,
-		ImageURL:     prev.ImageURL,
-	}
-	if p, err := parsePositive(prev.Price); err == nil {
-		draft.TargetAmount = p.StringFixed(Scale)
+		Title:     prev.Title,
+		GoalType:  TypePurchase,
+		SourceURL: prev.URL,
+		ImageURL:  prev.ImageURL,
 	}
 	if prev.Description != "" {
 		draft.Note = truncateRunes(prev.Description, 200)
+	}
+	if p, err := parsePositive(prev.Price); err == nil {
+		s.priceDraft(ctx, &draft, p, prev.Currency, currency, prev.SiteName)
 	}
 
 	if s.extractor != nil && rest != "" {
@@ -125,15 +151,50 @@ func (s *Service) Extract(ctx context.Context, userID uuid.UUID, text string) (P
 			draft = mergeDraft(draft, refined)
 		}
 	}
-	if draft.TargetAmount != "" && draft.SourceURL != "" {
-		line := fmt.Sprintf("Scraped live price %s %s from %s", draft.TargetAmount, draft.CurrencyCode, draft.SourceURL)
-		if strings.TrimSpace(draft.Note) == "" {
-			draft.Note = line
-		} else if !strings.Contains(strings.ToLower(draft.Note), "scraped") {
-			draft.Note = line + " · " + draft.Note
+	return draft, nil
+}
+
+// priceDraft fills the draft's amount from a listing price, converting to the user's
+// currency when the listing uses another one.
+func (s *Service) priceDraft(ctx context.Context, draft *PlanDraft, price decimal.Decimal, pageCurrency, userCurrency, site string) {
+	pageCurrency = strings.ToUpper(strings.TrimSpace(pageCurrency))
+	if site == "" {
+		site = strings.TrimPrefix(hostOf(draft.SourceURL), "www.")
+	}
+	switch {
+	case pageCurrency == "":
+		// A number with no currency: never assume it is the user's money.
+		draft.TargetAmount = price.StringFixed(2)
+		draft.CurrencyUnknown = true
+		draft.Note = joinNote(fmt.Sprintf("Price %s from %s; the page did not say the currency.", price.StringFixed(2), site), draft.Note)
+	case userCurrency == "" || pageCurrency == userCurrency:
+		draft.TargetAmount = price.StringFixed(2)
+		draft.CurrencyCode = pageCurrency
+		draft.Note = joinNote(fmt.Sprintf("Live price %s %s from %s.", price.StringFixed(2), pageCurrency, site), draft.Note)
+	default:
+		if converted, ok := s.convert(ctx, price, pageCurrency, userCurrency); ok {
+			draft.TargetAmount = converted.StringFixed(2)
+			draft.CurrencyCode = userCurrency
+			draft.SourcePrice = price.StringFixed(2)
+			draft.SourceCurrency = pageCurrency
+			draft.Note = joinNote(fmt.Sprintf("Live price %s %s from %s (≈ %s %s at today's rate).",
+				price.StringFixed(2), pageCurrency, site, converted.StringFixed(2), userCurrency), draft.Note)
+		} else {
+			// No rate today: keep the page's own currency rather than a wrong number.
+			draft.TargetAmount = price.StringFixed(2)
+			draft.CurrencyCode = pageCurrency
+			draft.Note = joinNote(fmt.Sprintf("Live price %s %s from %s (could not convert to %s right now).",
+				price.StringFixed(2), pageCurrency, site, userCurrency), draft.Note)
 		}
 	}
-	return draft, nil
+}
+
+func joinNote(line, rest string) string {
+	rest = strings.TrimSpace(rest)
+	if rest == "" {
+		return line
+	}
+	return truncateRunes(line+" "+rest, 400)
 }
 
 // mergeDraft overlays non-empty refined fields on base; scraped price, URL and image win.
@@ -171,21 +232,33 @@ func truncateRunes(s string, max int) string {
 	return string([]rune(s)[:max])
 }
 
+// applyScrapedPrice records a fresh listing price. The movement is judged in the listing's
+// own currency (so exchange-rate noise is not a "price change"), the target follows in the
+// goal's currency, and the goal's currency never changes: saved money stays meaningful.
 func (s *Service) applyScrapedPrice(ctx context.Context, rec Goal, prev PreviewURLResult) (GoalDTO, *PriceChange, error) {
 	newPrice, err := parsePositive(prev.Price)
 	if err != nil {
 		return GoalDTO{}, nil, err
 	}
-	if prev.Currency != "" && !strings.EqualFold(prev.Currency, rec.CurrencyCode) {
-		rec.CurrencyCode = strings.ToUpper(prev.Currency)
+	srcCur := listingCurrency(rec)
+	if c := strings.ToUpper(strings.TrimSpace(prev.Currency)); len(c) == 3 {
+		srcCur = c
 	}
 	old := rec.TargetAmount
-	if rec.LastSeenPrice != nil {
+	if rec.LastSeenPrice != nil && strings.EqualFold(listingCurrency(rec), srcCur) {
 		old = *rec.LastSeenPrice
+	} else if !strings.EqualFold(srcCur, rec.CurrencyCode) {
+		// First reading in this currency: nothing to compare against yet.
+		old = newPrice
 	}
 	now := s.now().UTC()
 	rec.LastSeenPrice = &newPrice
 	rec.LastPriceCheckedAt = &now
+	if strings.EqualFold(srcCur, rec.CurrencyCode) {
+		rec.SourceCurrency = nil
+	} else {
+		rec.SourceCurrency = &srcCur
+	}
 	moved := !newPrice.Equal(old)
 	dir := DirectionSame
 	if moved {
@@ -194,7 +267,10 @@ func (s *Service) applyScrapedPrice(ctx context.Context, rec Goal, prev PreviewU
 		} else {
 			dir = DirectionDown
 		}
-		rec.TargetAmount = newPrice
+	}
+	// The target is the listing price in the goal's currency; without a rate it stays put.
+	if target, ok := s.convert(ctx, newPrice, srcCur, rec.CurrencyCode); ok && !target.Equal(rec.TargetAmount) {
+		rec.TargetAmount = target
 		if rec.CurrentAmount.GreaterThanOrEqual(rec.TargetAmount) {
 			rec.CurrentAmount = rec.TargetAmount
 			rec.Status = StatusCompleted
@@ -213,7 +289,7 @@ func (s *Service) applyScrapedPrice(ctx context.Context, rec Goal, prev PreviewU
 		GoalID:       saved.ID,
 		UserID:       saved.UserID,
 		Price:        newPrice,
-		CurrencyCode: saved.CurrencyCode,
+		CurrencyCode: srcCur,
 		SourceURL:    source,
 		Direction:    dir,
 		CreatedAt:    now,
@@ -226,14 +302,14 @@ func (s *Service) applyScrapedPrice(ctx context.Context, rec Goal, prev PreviewU
 	change := &PriceChange{
 		GoalID:       saved.ID,
 		Title:        saved.Title,
-		CurrencyCode: saved.CurrencyCode,
+		CurrencyCode: srcCur,
 		OldPrice:     old.StringFixed(Scale),
 		NewPrice:     newPrice.StringFixed(Scale),
 		Delta:        deltaStr,
 		Direction:    dir,
 	}
 	if moved && s.prices != nil {
-		_ = s.prices.OnGoalPriceChange(ctx, saved.UserID, saved.ID, saved.Title, change.OldPrice, change.NewPrice, saved.CurrencyCode, dir)
+		_ = s.prices.OnGoalPriceChange(ctx, saved.UserID, saved.ID, saved.Title, change.OldPrice, change.NewPrice, srcCur, dir)
 	}
 	if !moved {
 		return dto, nil, nil
@@ -332,6 +408,8 @@ func (s *Service) TickTrackedPrices(ctx context.Context) (int, error) {
 
 type extractBody struct {
 	Text string `json:"text"`
+	// Currency is the user's planning currency (optional).
+	Currency string `json:"currency"`
 }
 
 func (h *Handler) Extract(w http.ResponseWriter, r *http.Request) {
@@ -340,7 +418,7 @@ func (h *Handler) Extract(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, err)
 		return
 	}
-	draft, err := h.svc.Extract(r.Context(), auth.UserIDFrom(r.Context()), body.Text)
+	draft, err := h.svc.Extract(r.Context(), auth.UserIDFrom(r.Context()), body.Text, body.Currency)
 	if err != nil {
 		httpx.Error(w, err)
 		return

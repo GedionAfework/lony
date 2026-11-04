@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -32,6 +33,23 @@ type memoryStore struct {
 	reactions     []Reaction
 	peers         map[uuid.UUID]Peer
 	readAt        map[string]time.Time
+	// clock moves a minute per write so ordering and "since" are deterministic.
+	clock time.Time
+}
+
+func (m *memoryStore) tick() time.Time {
+	if m.clock.IsZero() {
+		m.clock = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	}
+	m.clock = m.clock.Add(time.Minute)
+	return m.clock
+}
+
+func (m *memoryStore) touch(id uuid.UUID) {
+	if msg, ok := m.messages[id]; ok {
+		msg.UpdatedAt = m.tick()
+		m.messages[id] = msg
+	}
 }
 
 func newMem(a, b uuid.UUID) *memoryStore {
@@ -166,6 +184,7 @@ func (m *memoryStore) MoveMessages(_ context.Context, fromID, toID uuid.UUID) er
 	for id, msg := range m.messages {
 		if msg.ConversationID == fromID {
 			msg.ConversationID = toID
+			msg.UpdatedAt = m.tick()
 			m.messages[id] = msg
 		}
 	}
@@ -216,7 +235,8 @@ func (m *memoryStore) InsertMessage(_ context.Context, msg Message) (Message, er
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	msg.ID = uuid.New()
-	msg.CreatedAt = time.Now().UTC()
+	msg.CreatedAt = m.tick()
+	msg.UpdatedAt = msg.CreatedAt
 	m.messages[msg.ID] = msg
 	return msg, nil
 }
@@ -229,39 +249,77 @@ func (m *memoryStore) GetMessage(_ context.Context, id uuid.UUID) (Message, erro
 	}
 	return msg, nil
 }
-func (m *memoryStore) ListMessages(_ context.Context, conversationID uuid.UUID, after *time.Time, limit int32) ([]Message, error) {
+func (m *memoryStore) ListMessages(_ context.Context, conversationID uuid.UUID, q MessageQuery) ([]Message, time.Time, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := []Message{}
+	all := []Message{}
 	for _, msg := range m.messages {
-		if msg.ConversationID != conversationID {
+		if msg.ConversationID == conversationID {
+			all = append(all, msg)
+		}
+	}
+	byCreated := func(a, b Message) bool {
+		if a.CreatedAt.Equal(b.CreatedAt) {
+			return a.ID.String() < b.ID.String()
+		}
+		return a.CreatedAt.Before(b.CreatedAt)
+	}
+	sort.Slice(all, func(i, j int) bool { return byCreated(all[i], all[j]) })
+	now := m.clock
+	out := []Message{}
+	switch {
+	case q.Since != nil:
+		sort.Slice(all, func(i, j int) bool { return all[i].UpdatedAt.Before(all[j].UpdatedAt) })
+		for _, msg := range all {
+			if msg.UpdatedAt.After(q.Since.Add(-SinceOverlap)) && int32(len(out)) < q.Limit {
+				out = append(out, msg)
+			}
+		}
+		return out, now, nil
+	case q.After != nil:
+		for _, msg := range all {
+			if msg.DeletedAt == nil && msg.CreatedAt.After(*q.After) && int32(len(out)) < q.Limit {
+				out = append(out, msg)
+			}
+		}
+		return out, now, nil
+	}
+	for i := len(all) - 1; i >= 0 && int32(len(out)) < q.Limit; i-- {
+		msg := all[i]
+		if msg.DeletedAt != nil {
 			continue
 		}
-		if after != nil && !msg.CreatedAt.After(*after) {
-			continue
+		if q.Before != nil {
+			older := msg.CreatedAt.Before(*q.Before) ||
+				(msg.CreatedAt.Equal(*q.Before) && q.BeforeID != nil && msg.ID.String() < q.BeforeID.String())
+			if !older {
+				continue
+			}
 		}
-		out = append(out, msg)
+		out = append([]Message{msg}, out...)
 	}
-	if int32(len(out)) > limit {
-		out = out[:limit]
-	}
-	return out, nil
+	return out, now, nil
 }
+
 func (m *memoryStore) SoftDeleteMessage(_ context.Context, id, senderID uuid.UUID) (Message, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	msg, ok := m.messages[id]
-	if !ok || msg.SenderID != senderID {
+	if !ok || msg.SenderID != senderID || msg.DeletedAt != nil {
 		return Message{}, pgx.ErrNoRows
 	}
-	delete(m.messages, id)
+	at := m.tick()
+	msg.DeletedAt = &at
+	msg.UpdatedAt = at
+	m.messages[id] = msg
 	return msg, nil
 }
 func (m *memoryStore) UpsertReaction(_ context.Context, messageID, userID uuid.UUID, emoji string) (Reaction, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	r := Reaction{MessageID: messageID, UserID: userID, Emoji: emoji, CreatedAt: time.Now().UTC()}
+	r := Reaction{MessageID: messageID, UserID: userID, Emoji: emoji, CreatedAt: m.tick()}
 	m.reactions = append(m.reactions, r)
+	m.touch(messageID)
 	return r, nil
 }
 func (m *memoryStore) DeleteReaction(_ context.Context, messageID, userID uuid.UUID, emoji string) error {
@@ -275,6 +333,7 @@ func (m *memoryStore) DeleteReaction(_ context.Context, messageID, userID uuid.U
 		kept = append(kept, r)
 	}
 	m.reactions = kept
+	m.touch(messageID)
 	return nil
 }
 func (m *memoryStore) ListReactions(_ context.Context, messageIDs []uuid.UUID) ([]Reaction, error) {
@@ -447,9 +506,9 @@ func TestOpenForLoanMergesLoanScoped(t *testing.T) {
 	if opened.ID != dm.ID {
 		t.Fatalf("expected merged into DM %s got %s", dm.ID, opened.ID)
 	}
-	msgs, err := svc.ListMessages(ctx, a, dm.ID, nil, 50)
-	if err != nil || len(msgs) == 0 {
-		t.Fatalf("expected loan messages merged %+v %v", msgs, err)
+	page, err := svc.ListMessages(ctx, a, dm.ID, MessageQuery{})
+	if err != nil || len(page.Messages) == 0 {
+		t.Fatalf("expected loan messages merged %+v %v", page, err)
 	}
 }
 

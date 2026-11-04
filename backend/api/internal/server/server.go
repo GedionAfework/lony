@@ -63,6 +63,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 	accountsSvc := accounts.NewService(store.MoneyAccountsAdapter(sqlStore))
 	accountsSvc.SetLoans(loansSvc)
 	accountsSvc.SetPrefs(sqlStore)
+	loansSvc.SetCards(accountsSvc)
 	expensesSvc.SetAccounts(accountsSvc)
 	expensesSvc.SetPrefs(sqlStore)
 	expensesH := expenses.NewHandler(expensesSvc)
@@ -112,12 +113,16 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 	aiSvc.SetInsights(insightsSvc)
 	aiSvc.SetScore(scoreSvc)
 	aiSvc.SetGate(privacySvc)
+	aiSvc.SetCaptures(sqlStore, cfg.FreeCapturesMonth)
+	expensesSvc.SetCaptureGate(aiSvc)
 	aiSvc.SetLLM(llm.New(llm.Config{
 		APIKey:  cfg.OpenAIAPIKey,
 		BaseURL: cfg.OpenAIBaseURL,
 		Model:   cfg.OpenAIModel,
 	}), cfg.AIDailyUserCap)
 	aiSvc.SetFX(fxClient)
+	goalsSvc.SetFX(fxClient)
+	accountsSvc.SetFX(fxClient)
 	aiH := ai.NewHandler(aiSvc)
 	bankLinkSvc := banklink.NewService(store.BankLinkAdapter(sqlStore), banklink.Config{
 		ClientID:    cfg.PlaidClientID,
@@ -135,6 +140,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 	banksH := banks.NewHandler(banksSvc)
 	accountsSvc.SetBankProfiles(banksSvc)
 	repaySvc := repayments.NewService(sqlStore, loansSvc)
+	repaySvc.SetCategories(expensesSvc)
 	repayH := repayments.NewHandler(repaySvc).WithMedia(mediaStore, sqlStore)
 	notifySvc := notifications.NewService(sqlStore, notifications.NewPusher(cfg.ExpoAccessToken))
 	notifyH := notifications.NewHandler(notifySvc)
@@ -170,13 +176,20 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 
 	chatSvc := chat.NewService(sqlStore, mediaStore, friendsSvc)
 	chatSvc.SetLoans(loansSvc)
+	chatSvc.SetNotifier(notifications.ChatHooks{Svc: notifySvc})
 	chatH := chat.NewHandler(chatSvc, mediaStore)
 	banksSvc.SetNotifier(notifications.BankHooks{Svc: notifySvc, Chat: chatSvc})
 
-	authLimit := ratelimit.New(30, time.Minute)
+	// Sign-in endpoints: strict, against password guessing. Phones on one mobile network
+	// often share a public IP (carrier NAT), so this is per IP but not tiny.
+	authLimit := ratelimit.New(60, time.Minute)
+	// Token refresh is already gated by the refresh token; it only needs abuse protection.
+	refreshLimit := ratelimit.New(300, time.Minute)
 	// SMS auto-import can fire many cashflow/sms-ingest calls in one sync (one per transfer).
 	// 180/min was too low and surfaced as "Too many requests" on phones with a full inbox.
 	apiLimit := ratelimit.New(900, time.Minute)
+	// Signed-in routes: per session, so users on one carrier IP don't share a limit.
+	sessionLimit := ratelimit.New(900, time.Minute).PerSession()
 	idem := idempotency.New(sqlStore, 24*time.Hour)
 
 	r := chi.NewRouter()
@@ -204,8 +217,15 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 		MaxAge:           300,
 	}))
 
+	// Liveness only: Fly calls this every 15s. Pinging the database here kept Neon awake
+	// around the clock (burning its compute quota) and, when the database was down, made
+	// Fly refuse all traffic so users saw a bare 503 instead of a message.
 	r.Get("/health", func(w http.ResponseWriter, req *http.Request) {
-		ctx, cancel := context.WithTimeout(req.Context(), 2*time.Second)
+		httpx.JSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	})
+	// Readiness, for people and monitors: is the database reachable?
+	r.Get("/ready", func(w http.ResponseWriter, req *http.Request) {
+		ctx, cancel := context.WithTimeout(req.Context(), 5*time.Second)
 		defer cancel()
 		if err := pool.Ping(ctx); err != nil {
 			httpx.Error(w, httpx.E(http.StatusServiceUnavailable, "DB_UNAVAILABLE", "database unavailable"))
@@ -232,8 +252,12 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 			r.With(idem.Handler("auth.forgot")).Post("/auth/forgot-password", authH.ForgotPassword)
 			r.With(idem.Handler("auth.reset")).Post("/auth/reset-password", authH.ResetPassword)
 			r.With(idem.Handler("auth.login")).Post("/auth/login", authH.Login)
-			r.With(idem.Handler("auth.refresh")).Post("/auth/refresh", authH.Refresh)
 			r.With(idem.Handler("auth.oauth")).Post("/auth/oauth", authH.OAuth)
+		})
+		r.With(refreshLimit.Middleware, idem.Handler("auth.refresh")).Post("/auth/refresh", authH.Refresh)
+		// Public lists every app loads at start: the general limit, not the sign-in one.
+		r.Group(func(r chi.Router) {
+			r.Use(apiLimit.Middleware)
 			r.Get("/legal/tos", legalH.GetTOS)
 			r.Get("/payment-rails", railsH.List)
 			r.Get("/fx/rates", fxH.Rates)
@@ -242,7 +266,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 		})
 
 		r.Group(func(r chi.Router) {
-			r.Use(apiLimit.Middleware)
+			r.Use(sessionLimit.Middleware)
 			r.Use(auth.Middleware(cfg.JWTSecret, sqlStore))
 			r.Post("/auth/logout", authH.Logout)
 			r.With(idem.Handler("auth.password")).Post("/me/password", authH.ChangePassword)
@@ -270,6 +294,8 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 			r.Get("/wealth", accountsH.Wealth)
 			r.Get("/accounts", accountsH.List)
 			r.Get("/accounts/reconcile", accountsH.ReconcileAll)
+			r.Get("/accounts/debt-matches", accountsH.DebtMatches)
+			r.Get("/loans/possible-duplicates", accountsH.PossibleDuplicates)
 			r.With(idem.Handler("accounts.create")).Post("/accounts", accountsH.Create)
 			r.With(idem.Handler("accounts.transfer")).Post("/accounts/transfer", accountsH.Transfer)
 			r.Get("/accounts/{id}", accountsH.Get)
@@ -304,6 +330,8 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 			r.Patch("/cashflow/{id}", expensesH.Update)
 			r.With(idem.Handler("cashflow.delete")).Delete("/cashflow/{id}", expensesH.Delete)
 			r.With(idem.Handler("cashflow.share")).Post("/cashflow/{id}/share", expensesH.Share)
+			r.Get("/cashflow/declined-shares", expensesH.DeclinedShares)
+			r.With(idem.Handler("cashflow.declined_share")).Post("/cashflow/declined-shares/{loanId}", expensesH.ResolveDeclinedShare)
 			r.With(idem.Handler("cashflow.receive")).Post("/cashflow/{id}/receive", expensesH.Receive)
 			r.With(idem.Handler("cashflow.skip")).Post("/cashflow/{id}/skip", expensesH.Skip)
 			r.With(idem.Handler("cashflow.postpone")).Post("/cashflow/{id}/postpone", expensesH.Postpone)
@@ -320,6 +348,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 			r.Get("/goals/{id}", goalsH.Get)
 			r.Patch("/goals/{id}", goalsH.Update)
 			r.With(idem.Handler("goals.cover")).Post("/goals/{id}/cover", goalsH.UploadCover)
+			r.With(idem.Handler("goals.cover_url")).Post("/goals/{id}/cover-url", goalsH.CoverFromURL)
 			r.With(idem.Handler("goals.contribute")).Post("/goals/{id}/contribute", goalsH.Contribute)
 			r.Get("/goals/{id}/contributions", goalsH.ListContributions)
 			r.Get("/goals/{id}/projection", goalsH.Projection)
@@ -375,6 +404,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 
 			r.With(idem.Handler("ai.plan_chat")).Post("/ai/plan-chat", aiH.PlanChat)
 			r.Get("/ai/insights", aiH.ListInsights)
+			r.Get("/ai/capture-allowance", aiH.CaptureAllowance)
 			r.With(idem.Handler("ai.insights.refresh")).Post("/ai/insights/refresh", aiH.RefreshInsights)
 			r.With(idem.Handler("ai.insights.clear")).Post("/ai/insights/clear", aiH.ClearHistory)
 			r.With(idem.Handler("ai.insights.dismiss")).Post("/ai/insights/{id}/dismiss", aiH.DismissInsight)
@@ -397,11 +427,13 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 			r.With(idem.Handler("loans.accept")).Post("/loans/{id}/accept", loansH.Accept)
 			r.With(idem.Handler("loans.reject")).Post("/loans/{id}/reject", loansH.Reject)
 			r.With(idem.Handler("loans.cancel")).Post("/loans/{id}/cancel", loansH.Cancel)
+			r.With(idem.Handler("loans.account_link")).Post("/loans/{id}/account-link", loansH.SetAccountLink)
 			r.With(idem.Handler("loans.installment_paid")).Post("/loans/{id}/installments/{installmentID}/pay", loansH.MarkInstallmentPaid)
 			r.With(idem.Handler("repayments.claim")).Post("/loans/{id}/repayments", repayH.Claim)
 			r.Get("/loans/{id}/repayments", repayH.ListForLoan)
 			r.With(idem.Handler("repayments.confirm")).Post("/repayments/{id}/confirm", repayH.Confirm)
 			r.With(idem.Handler("repayments.reject")).Post("/repayments/{id}/reject", repayH.Reject)
+			r.With(idem.Handler("repayments.resolve")).Post("/repayments/{id}/resolve", repayH.Resolve)
 
 			r.Get("/bank-profiles", banksH.List)
 			r.With(idem.Handler("banks.create")).Post("/bank-profiles", banksH.Create)

@@ -3,7 +3,6 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import {
   api,
-  isPremiumPlan,
   type CashflowCategory,
   type CashflowEntry,
   type Loan,
@@ -193,7 +192,7 @@ export function CashflowNewPage() {
       }
       let payAmount = cleaned;
       if (kind === 'expense' && isLoanPayment && selectedLoan) {
-        payAmount = cleaned || String(Number(selectedLoan.expected_total || selectedLoan.principal || 0));
+        payAmount = cleaned || String(Number(selectedLoan.outstanding_amount || selectedLoan.expected_total || selectedLoan.principal || 0));
       }
       if (!payAmount) {
         showError('Enter an amount');
@@ -212,6 +211,26 @@ export function CashflowNewPage() {
         ...(kind === 'expense' && tripId && tripId !== 'none' ? { trip_id: tripId } : {}),
         ...(kind === 'expense' && editing && (!tripId || tripId === 'none') ? { clear_trip: true } : {}),
       };
+
+      // A loan payment is one server step: the expense, the balance change and the
+      // repayment claim are saved together, so the money is never counted twice.
+      if (!editing && kind === 'expense' && isLoanPayment && loanId) {
+        if (!accountId) {
+          showError('Choose which account paid');
+          return;
+        }
+        const res = await api.claimRepayment(token, loanId, {
+          amount: payAmount,
+          note: note.trim() || undefined,
+          pay_from_account_id: accountId,
+          title: title.trim() || undefined,
+          category_id: catId,
+          occurred_at: payload.occurred_at,
+        });
+        const paidEntry = res.repayment.paid_entry_id;
+        navigate(paidEntry ? `/cashflow/${paidEntry}` : `/loans/${loanId}`);
+        return;
+      }
 
       let entry: CashflowEntry;
       if (editing) {
@@ -256,14 +275,6 @@ export function CashflowNewPage() {
             entry = shared.entry;
           } catch (e) {
             showError(e instanceof Error ? e.message : 'Share failed');
-          }
-        }
-
-        if (kind === 'expense' && isLoanPayment && loanId) {
-          try {
-            await api.claimRepayment(token, loanId, { amount: payAmount, note: title.trim() || 'Expense payment' });
-          } catch (e) {
-            showError(e instanceof Error ? e.message : 'Expense saved, but loan payment failed');
           }
         }
       }
@@ -314,7 +325,7 @@ export function CashflowNewPage() {
         back
         onBack={() => navigate(-1)}
         right={
-          editing || !token || !isPremiumPlan(user) ? null : (
+          editing || !token ? null : (
             <VoiceAddButton token={token} disabled={busy} onDraft={applyVoiceDraft} onError={showError} />
           )
         }

@@ -17,6 +17,7 @@ import {
   type GoalPricePoint,
   type MoneyAccount,
   type PlanAssistantImage,
+  type PlanAssistantOption,
   type PlanAssistantSource,
   type User,
   isPremiumPlan,
@@ -27,9 +28,11 @@ import { DateField } from './DateField';
 import { t } from './i18n';
 import { IconCamera, IconTrash } from './icons';
 import { SearchSelect } from './SearchSelect';
+import { savingAdvice } from './planAdvice';
 import { apiBaseUrl, fonts, radii, space, useTheme } from './theme';
 import {
   Card,
+  HeroCard,
   EmptyState,
   Field,
   GhostButton,
@@ -47,6 +50,8 @@ type Props = {
   onError: (message: string) => void;
   reloadToken?: number;
   onDetailChange?: (open: boolean) => void;
+  /** Bumped by the floating add button to open the new-plan form. */
+  createSignal?: number;
 };
 
 const FALLBACK_GOAL_TYPES = [
@@ -127,6 +132,7 @@ type AiChatMessage = {
   draft?: GoalDraft;
   images?: PlanAssistantImage[];
   sources?: PlanAssistantSource[];
+  options?: PlanAssistantOption[];
 };
 
 type EstimateMemory = {
@@ -184,7 +190,7 @@ type AiInterview = {
   estimateExplain?: string;
 };
 
-export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0, onDetailChange }: Props) {
+export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0, onDetailChange, createSignal = 0 }: Props) {
   const { colors } = useTheme();
   const [goals, setGoals] = useState<Goal[]>([]);
   const [accounts, setAccounts] = useState<MoneyAccount[]>([]);
@@ -209,6 +215,8 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
   const [productUrl, setProductUrl] = useState('');
   const [urlBusy, setUrlBusy] = useState(false);
   const [pendingCover, setPendingCover] = useState<CoverDraft | null>(null);
+  // The product page's own price and currency, so price tracking compares like with like.
+  const listingRef = useRef<{ url: string; price?: string; currency?: string } | null>(null);
 
   const [createTab, setCreateTab] = useState<'detail' | 'link' | 'ai'>('detail');
   const [aiMessages, setAiMessages] = useState<AiChatMessage[]>([]);
@@ -222,6 +230,15 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
   const aiChatScrollRef = useRef<ScrollView>(null);
   /** Survives re-renders so “where did you get that?” always has context. */
   const estimateMemoryRef = useRef<EstimateMemory | null>(null);
+
+  useEffect(() => {
+    if (!createSignal) return;
+    resetForm();
+    setSelectedId(null);
+    setMode('create');
+    onDetailChange?.(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [createSignal]);
 
   useEffect(() => {
     let cancelled = false;
@@ -371,6 +388,7 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
   }
 
   function resetForm() {
+    listingRef.current = null;
     setTitle('');
     setGoalType('savings');
     setOtherType('');
@@ -470,6 +488,13 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
 
     const nextCurrency = d.currency_code && d.currency_code.length === 3 ? d.currency_code.toUpperCase() : currency;
     if (d.currency_code && d.currency_code.length === 3) setCurrency(nextCurrency);
+    if (d.source_url) {
+      listingRef.current = {
+        url: d.source_url,
+        price: d.source_price || d.target_amount,
+        currency: d.source_currency || (d.currency_unknown ? undefined : nextCurrency),
+      };
+    }
 
     let nextGoalType = goalType;
     let nextOtherType = otherType;
@@ -527,31 +552,20 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
     }
     setUrlBusy(true);
     try {
-      const previewPromise = api.previewGoalUrl(token, url).catch(() => null);
-      const extractPromise = isPremiumPlan(user) ? api.extractGoalDraft(token, url).catch(() => null) : Promise.resolve(null);
-      const preview = await previewPromise;
-      const scraped = preview?.preview;
-      // A scraped full price is enough. Only wait on extract when the page had no price.
-      const extracted = scraped?.price ? null : await extractPromise;
-      const draft = extracted?.draft;
-      const price = scraped?.price || draft?.target_amount || '';
-      const title = scraped?.title || draft?.title || '';
-      if (!title && !price) {
-        onError('That page did not include a product title or a full price. Try the product page itself, not a search or payment-plan link.');
+      // The server reads the page (no AI needed) and converts a foreign price to this currency.
+      const res = await api.extractGoalDraft(token, url, currency);
+      const draft = res.draft ?? {};
+      if (!draft.title && !draft.target_amount) {
+        onError('That page did not include a product title or a price. Try the product page itself, not a search or payment-plan link.');
         return;
       }
-      await applyDraft({
-        ...(draft ?? {}),
-        title: title || draft?.title,
-        target_amount: price || undefined,
-        currency_code: scraped?.currency || draft?.currency_code,
-        note: draft?.note || scraped?.description,
-        source_url: scraped?.url || draft?.source_url || url,
-        image_url: scraped?.image_url || draft?.image_url,
-        goal_type: draft?.goal_type || 'purchase',
-      });
-      if (!price) {
+      await applyDraft({ ...draft, source_url: draft.source_url || url, goal_type: draft.goal_type || 'purchase' });
+      if (!draft.target_amount) {
         onError('The page opened, but it did not list a full price. The title is filled in — add the amount on Detail.');
+      } else if (draft.currency_unknown) {
+        onError(`The page shows ${draft.target_amount} but not the currency. Check it is ${currency} before saving.`);
+      } else if (draft.estimated) {
+        onError('The page could not be read, so the price is an estimate. Check it on the site before saving.');
       }
       setCreateTab('detail');
     } catch (e) {
@@ -589,6 +603,9 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
         note: fields.note.trim() || undefined,
         type_label: fields.goalType === 'other' ? fields.otherType.trim() : undefined,
         source_url: fields.productUrl.trim() || undefined,
+        ...(listingRef.current && listingRef.current.url === fields.productUrl.trim() && listingRef.current.currency
+          ? { last_seen_price: listingRef.current.price, source_currency: listingRef.current.currency }
+          : {}),
       });
       if (fields.cover && res.goal?.id) {
         await api.uploadGoalCover(token, res.goal.id, {
@@ -1034,207 +1051,9 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
     return 'New or used, and any details that affect the price? Then I’ll scrape current selling prices.';
   }
 
-  async function runPriceEstimate(
-    contextLines: string[],
-    latestText: string,
-  ): Promise<{
-    draft: GoalDraft;
-    financeNote: string;
-    warning?: string;
-    source: NonNullable<AiInterview['estimateSource']>;
-    explain: string;
-  }> {
-    const blob = contextLines.join('\n');
-    const cur = currency.toUpperCase();
-    const merged: GoalDraft = { ...(aiDraft ?? {}), currency_code: cur };
-    let warning: string | undefined;
-    let source: NonNullable<AiInterview['estimateSource']> = 'market_estimate';
-    let explain = '';
-
-    const urlMatch = blob.match(/\bhttps?:\/\/[^\s<>"']+/i) || latestText.match(/\bwww\.[^\s<>"']+/i);
-    if (urlMatch) {
-      const rawUrl = urlMatch[0].toLowerCase().startsWith('http') ? urlMatch[0] : `https://${urlMatch[0]}`;
-      setAiStatus('Reading the product page…');
-      try {
-        const preview = await api.previewGoalUrl(token, rawUrl);
-        const p = preview.preview;
-        // Server already filters bare years and "/mo" installments; a $2,000 item is a real price.
-        if (p?.price) {
-          merged.target_amount = p.price;
-          if (p.currency) merged.currency_code = p.currency.toUpperCase();
-          if (p.title) merged.title = p.title;
-          if (p.image_url) merged.image_url = p.image_url;
-          merged.source_url = p.url || rawUrl;
-          source = 'product_link';
-          explain = `Scraped live price ${formatMoney(p.price, (merged.currency_code || cur).toUpperCase(), user.locale)} from ${merged.source_url}. I’ll keep tracking this listing for price changes.`;
-        } else {
-          merged.source_url = p?.url || rawUrl;
-          if (p?.title) merged.title = p.title;
-          warning = 'Opened the page but could not find a listed price.';
-        }
-      } catch (e) {
-        warning = e instanceof Error ? e.message : 'Could not scrape that link';
-        merged.source_url = rawUrl;
-      }
-      // Preview already has the live price. A second extract only helps when the page had no price.
-      if (!merged.target_amount) {
-        try {
-          const res = await api.extractGoalDraft(token, `${rawUrl}\n${blob}`);
-          for (const [key, value] of Object.entries(res.draft ?? {})) {
-            if (value === undefined || value === null || value === '') continue;
-            if (key === 'target_amount' && merged.target_amount) continue;
-            (merged as Record<string, unknown>)[key] = value;
-          }
-          if (!merged.source_url && res.draft?.source_url) merged.source_url = res.draft.source_url;
-          if (merged.target_amount && !isYearAmount(Number(merged.target_amount)) && source !== 'product_link') {
-            source = merged.source_url ? 'product_link' : source;
-            explain =
-              explain ||
-              `Pulled ${formatMoney(merged.target_amount, (merged.currency_code || cur).toUpperCase(), user.locale)} from the product page (${merged.source_url || rawUrl}).`;
-          }
-        } catch (e) {
-          if (!warning) warning = e instanceof Error ? e.message : 'Could not read that link';
-        }
-      }
-    }
-
-    const stated = parseStatedPrice(latestText);
-    if (stated) {
-      merged.target_amount = stated;
-      source = 'user_stated';
-      explain = `Using the price you stated: ${formatMoney(stated, (merged.currency_code || cur).toUpperCase(), user.locale)}.`;
-    }
-
-    const carSpec = currentCarSpec(contextLines);
-    const badModel =
-      implausibleIPhone(blob) || (carSpec.badYear ? implausibleCarYear(carSpec.badYear) : null);
-    if (badModel) {
-      merged.target_amount = undefined;
-      return {
-        draft: merged,
-        financeNote: '',
-        warning: badModel,
-        source: 'market_estimate',
-        explain: '',
-      };
-    }
-
-    const trusted = source === 'product_link' || source === 'user_stated';
-    if (!merged.target_amount || (!trusted && isYearAmount(Number(merged.target_amount)))) {
-      if (!trusted && isYearAmount(Number(merged.target_amount))) merged.target_amount = undefined;
-      const q = buildMarketQuery(contextLines);
-      if (q) {
-        setAiStatus(`Scraping live listings for “${carSearchTitle(contextLines) || q}”… (up to ~10s)`);
-        try {
-          const res = await api.searchGoalMarket(token, q, cur);
-          const m = res.market;
-          if (m?.typical) {
-            merged.target_amount = m.typical;
-            merged.currency_code = (m.currency_code || cur).toUpperCase();
-            if (m.source_url) merged.source_url = m.source_url;
-            if (!merged.title) merged.title = carSearchTitle(contextLines) || m.query;
-            source = 'market_scrape';
-            const low = m.low ? formatMoney(m.low, merged.currency_code, user.locale) : '';
-            const high = m.high ? formatMoney(m.high, merged.currency_code, user.locale) : '';
-            const typical = formatMoney(m.typical, merged.currency_code, user.locale);
-            const n = m.sample_count || m.listings?.length || 0;
-            explain = [
-              `Scraped live selling prices for “${merged.title || m.query}”.`,
-              `Typical ${typical}` + (low && high ? ` (listings from ${low} to ${high}` + (n ? `, ${n} prices` : '') + ')' : ''),
-            ]
-              .filter(Boolean)
-              .join(' ');
-            merged.note = explain.slice(0, 240);
-          }
-        } catch {
-          // A failed scrape is not something to dump into the chat. Fall through to an estimate.
-        }
-      }
-    }
-
-    if (!merged.target_amount) {
-      setAiStatus('Estimating a current price…');
-      try {
-        const res = await api.extractGoalDraft(
-          token,
-          `The user's currency is ${cur}. Estimate a current typical selling price in ${cur}. Never use a model year as the price.\n${blob}`,
-        );
-        const d = res.draft;
-        const amount = d?.target_amount ? Number(d.target_amount) : NaN;
-        if (d?.target_amount && Number.isFinite(amount) && amount > 0 && !isYearAmount(amount)) {
-          merged.target_amount = d.target_amount;
-          if (d.currency_code && d.currency_code.length === 3) merged.currency_code = d.currency_code.toUpperCase();
-          if (d.title) merged.title = d.title;
-          if (d.goal_type) merged.goal_type = d.goal_type;
-          if (d.target_date) merged.target_date = d.target_date;
-          if (d.note) merged.note = d.note;
-          source = 'market_estimate';
-          explain = d.note || `Estimated current selling price in ${merged.currency_code || cur}. Not copied from a live listing.`;
-        }
-      } catch (e) {
-        if (!warning) warning = e instanceof Error ? e.message : 'Could not estimate a price';
-      }
-    }
-
-    if (!merged.target_amount) {
-      const off = heuristicPrice(contextLines, cur);
-      if (off) {
-        merged.target_amount = off.amount;
-        if (!merged.title) merged.title = off.title;
-        source = 'offline_heuristic';
-        explain = off.explain;
-      }
-    }
-
-    if (merged.target_amount && !trusted && source !== 'market_scrape' && isYearAmount(Number(merged.target_amount))) {
-      merged.target_amount = undefined;
-    }
-
-    if (!merged.title) {
-      merged.title = carSearchTitle(contextLines) || buildMarketQuery(contextLines) || heuristicPrice(contextLines, cur)?.title;
-    }
-
-    const keepEstimate = source === 'market_estimate' && Boolean(merged.target_amount && merged.title);
-    const genericTitle = !merged.title || /^(20\d{2}|new purchase|vehicle(?:\s+\d{4})?|used car)$/i.test(merged.title.trim());
-    if (!keepEstimate && genericTitle && !hasSpecificItem(blob)) {
-      merged.target_amount = undefined;
-      merged.title = undefined;
-    } else if (!keepEstimate && genericTitle) {
-      const named = heuristicPrice(contextLines, cur);
-      merged.title = named?.title || merged.title;
-    }
-    if (!merged.goal_type) merged.goal_type = 'purchase';
-    if (!merged.currency_code) merged.currency_code = cur;
-
-    let financeNote = '';
-    setAiStatus('Comparing with your cashflow…');
-    try {
-      const ov = await api.insightsOverview(token, cur);
-      const income = Number(ov.overview?.income || 0);
-      const expense = Number(ov.overview?.expense || 0);
-      const net = income - expense;
-      const price = Number(merged.target_amount || 0);
-      if (price > 0) {
-        if (income > 0) {
-          const months = Math.max(1, Math.ceil(price / Math.max(net > 0 ? net : income * 0.15, 1)));
-          financeNote =
-            net > 0
-              ? `Based on this month’s cashflow (~${formatMoney(String(net), cur, user.locale)} net), you’d need about ${months} month(s) of similar surplus to fund it.`
-              : `This month’s spending is tight vs income — plan a dedicated savings streak for ${formatMoney(String(price), cur, user.locale)}.`;
-        } else {
-          financeNote = 'Log some income in Lony and I can compare this target to your cashflow.';
-        }
-      }
-    } catch {
-      /* optional */
-    }
-
-    return { draft: merged, financeNote, warning, source, explain };
-  }
-
-  async function onAiSend() {
-    const text = aiInput.trim();
-    if (!text) return;
+  async function onAiSend(picked?: string) {
+    const text = (picked ?? aiInput).trim();
+    if (!text || aiBusy) return;
     const userMsg: AiChatMessage = { id: `u-${Date.now()}`, role: 'user', content: text };
     setAiMessages((prev) => [...prev, userMsg]);
     setAiInput('');
@@ -1269,46 +1088,43 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
       let draft = res.draft?.target_amount ? res.draft : null;
       if (draft) {
         const match = images.find((im) => im.image_url === draft?.image_url) ?? images[0];
+        // The listing the price came from, in its own currency, so tracking compares like with like.
+        const listing = sources.find((src) => src.url === draft?.source_url && src.price && src.currency_code);
         draft = {
           ...draft,
           image_url: draft.image_url || match?.image_url,
           image_thumb_url: match?.thumb_url,
+          ...(listing && listing.currency_code?.toUpperCase() !== (draft.currency_code || currency).toUpperCase()
+            ? { source_price: listing.price, source_currency: listing.currency_code?.toUpperCase() }
+            : {}),
         };
       }
-      const explain = draft?.note || (draft ? 'Using the price from this conversation.' : '');
+      // Prices read from listings are not estimates: say so, and name the sites.
+      const priced = sources.filter((src) => src.price);
+      const fromPages = priced.length > 0 && draft?.note && !/estimate/i.test(draft.note);
+      const sites = [...new Set(priced.map((src) => src.site))].slice(0, 3).join(', ');
+      const explain = draft
+        ? [draft.note || 'Using the price from this conversation.', fromPages && sites ? `Listings: ${sites}.` : '']
+            .filter(Boolean)
+            .join(' ')
+        : '';
+      const estimateSource: NonNullable<AiInterview['estimateSource']> = fromPages ? 'market_scrape' : 'market_estimate';
       if (draft?.title || draft?.target_amount) {
         setAiDraft({ ...(aiDraft ?? {}), ...draft, currency_code: draft.currency_code || currency });
-        rememberEstimate(draft.target_amount ? 'market_estimate' : 'market_estimate', explain, draft);
+        rememberEstimate(estimateSource, explain, draft);
       }
       setAiInterview({
         phase: draft?.target_amount ? 'estimate' : 'gather',
         turns: aiInterview.turns + 1,
         itemHint: draft?.title || aiInterview.itemHint,
         details: [...aiInterview.details, text],
-        estimateSource: draft?.target_amount ? 'market_estimate' : aiInterview.estimateSource,
+        estimateSource: draft?.target_amount ? estimateSource : aiInterview.estimateSource,
         estimateExplain: explain || aiInterview.estimateExplain,
       });
 
-      let financeNote = '';
-      if (draft?.target_amount) {
-        try {
-          const cur = (draft.currency_code || currency).toUpperCase();
-          const ov = await api.insightsOverview(token, cur);
-          const income = Number(ov.overview?.income || 0);
-          const expense = Number(ov.overview?.expense || 0);
-          const net = income - expense;
-          const price = Number(draft.target_amount);
-          if (price > 0 && income > 0) {
-            const months = Math.max(1, Math.ceil(price / Math.max(net > 0 ? net : income * 0.15, 1)));
-            financeNote =
-              net > 0
-                ? `Based on this month’s cashflow (~${formatMoney(String(net), cur, user.locale)} net), you’d need about ${months} month(s) of similar surplus to fund it.`
-                : `This month’s spending is tight vs income — plan a dedicated savings streak for ${formatMoney(String(price), cur, user.locale)}.`;
-          }
-        } catch {
-          /* optional */
-        }
-      }
+      const financeNote = draft?.target_amount
+        ? await savingAdvice(token, Number(draft.target_amount), (draft.currency_code || currency).toUpperCase(), draft.target_date, user.locale)
+        : '';
 
       const reply = [res.reply || 'Tell me the one item you want to save for.', financeNote].filter(Boolean).join('\n\n');
       setAiMessages((prev) => [
@@ -1321,6 +1137,7 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
           draft: draft ?? undefined,
           images: images.length ? images : undefined,
           sources: sources.length ? sources : undefined,
+          options: res.options?.length ? res.options : undefined,
         },
       ]);
     } catch (e) {
@@ -1339,6 +1156,47 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
       setAiBusy(false);
       setAiStatus(null);
     }
+  }
+
+  /** Uses a picture from the chat as the plan's cover. */
+  function chooseAiImage(im: PlanAssistantImage) {
+    const patch = { image_url: im.image_url, image_thumb_url: im.thumb_url };
+    setAiDraft((prev) => ({ ...(prev ?? {}), ...patch }));
+    setAiMessages((prev) => prev.map((m) => (m.draft ? { ...m, draft: { ...m.draft, ...patch } } : m)));
+  }
+
+  /** Picks one listing: its title, price, picture and link become the plan. */
+  function chooseAiListing(src: PlanAssistantSource, base: GoalDraft | undefined) {
+    const cur = (base?.currency_code || currency).toUpperCase();
+    const srcCur = src.currency_code?.toUpperCase();
+    const price = src.price_local || (src.price && (!srcCur || srcCur === cur) ? src.price : undefined);
+    const draft: GoalDraft = {
+      ...(base ?? aiDraft ?? {}),
+      title: src.title || base?.title || aiDraft?.title,
+      currency_code: cur,
+      target_amount: price || base?.target_amount || aiDraft?.target_amount,
+      source_url: src.url,
+      image_url: src.image_url || base?.image_url || aiDraft?.image_url,
+      ...(src.price && srcCur && srcCur !== cur ? { source_price: src.price, source_currency: srcCur } : {}),
+      estimated: false,
+    };
+    setAiMessages((prev) => [
+      ...prev,
+      {
+        id: `u-${Date.now()}`,
+        role: 'user',
+        content: `I'll go with this one: ${src.title || src.site}${price ? ` (${formatMoney(price, cur, user.locale)})` : ''}`,
+      },
+    ]);
+    if (!draft.target_amount) {
+      setAiDraft(draft);
+      setAiMessages((prev) => [
+        ...prev,
+        { id: `a-${Date.now()}`, role: 'assistant', content: "That page didn't show a price. Type the price you expect and I'll use it." },
+      ]);
+      return;
+    }
+    onAiChipPress({ id: 'agree', label: '', kind: 'agree' }, draft);
   }
 
   function onAiChipPress(chip: AiChip, draftSnapshot: GoalDraft) {
@@ -1597,7 +1455,7 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
             ) : (
               <ScrollView
                 ref={aiChatScrollRef}
-                style={{ maxHeight: 360 }}
+                style={{ maxHeight: 520 }}
                 contentContainerStyle={{ gap: 10 }}
                 nestedScrollEnabled
                 keyboardShouldPersistTaps="handled"
@@ -1646,42 +1504,114 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
                           {m.content}
                         </Text>
                       </View>
-                      {!isUser && m.images && m.images.length > 0 ? (
-                        <ScrollView
-                          horizontal
-                          nestedScrollEnabled
-                          showsHorizontalScrollIndicator={false}
-                          contentContainerStyle={{ gap: 8 }}
-                        >
-                          {m.images.map((im, i) => (
+                      {!isUser && m.options && m.options.length > 0 && isLast ? (
+                        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                          {m.options.map((opt, i) => (
                             <Pressable
-                              key={`${m.id}-img-${i}`}
-                              onPress={() => void Linking.openURL(im.page_url || im.image_url).catch(() => {})}
+                              key={`${m.id}-opt-${i}`}
+                              onPress={() => void onAiSend(opt.label)}
+                              disabled={aiBusy}
+                              accessibilityRole="button"
+                              accessibilityLabel={opt.label}
                               style={{
-                                width: 150,
-                                borderRadius: radii.md,
+                                width: '48%',
+                                flexGrow: 1,
+                                borderRadius: radii.lg,
                                 overflow: 'hidden',
-                                backgroundColor: colors.surfaceMuted,
+                                backgroundColor: colors.surface,
                                 borderWidth: 1,
                                 borderColor: colors.border,
+                                opacity: aiBusy ? 0.5 : 1,
                               }}
                             >
-                              <Image
-                                source={{ uri: im.thumb_url || im.image_url }}
-                                style={{ width: 150, height: 104 }}
-                                resizeMode="cover"
-                              />
-                              {im.site ? (
-                                <Text
-                                  numberOfLines={1}
-                                  style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 11, paddingHorizontal: 8, paddingVertical: 5 }}
-                                >
-                                  {im.site}
-                                </Text>
-                              ) : null}
+                              {opt.thumb_url || opt.image_url ? (
+                                <Image
+                                  source={{ uri: opt.thumb_url || opt.image_url }}
+                                  style={{ width: '100%', height: 110, backgroundColor: colors.surfaceMuted }}
+                                  resizeMode="cover"
+                                />
+                              ) : (
+                                <View style={{ height: 110, backgroundColor: colors.surfaceMuted }} />
+                              )}
+                              <Text
+                                numberOfLines={2}
+                                style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 13, padding: 10 }}
+                              >
+                                {opt.label}
+                              </Text>
                             </Pressable>
                           ))}
-                        </ScrollView>
+                        </View>
+                      ) : null}
+                      {!isUser && m.images && m.images.length > 0 ? (
+                        <View style={{ gap: 6 }}>
+                          <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
+                            Tap a picture to use it for your plan.
+                          </Text>
+                          <ScrollView
+                            horizontal
+                            nestedScrollEnabled
+                            showsHorizontalScrollIndicator={false}
+                            contentContainerStyle={{ gap: 10 }}
+                          >
+                            {m.images.map((im, i) => {
+                              const chosen = Boolean(aiDraft?.image_url) && aiDraft?.image_url === im.image_url;
+                              return (
+                                <Pressable
+                                  key={`${m.id}-img-${i}`}
+                                  onPress={() => chooseAiImage(im)}
+                                  accessibilityRole="button"
+                                  accessibilityState={{ selected: chosen }}
+                                  style={{
+                                    width: 200,
+                                    borderRadius: radii.lg,
+                                    overflow: 'hidden',
+                                    backgroundColor: colors.surface,
+                                    borderWidth: chosen ? 2 : 1,
+                                    borderColor: chosen ? colors.primary : colors.border,
+                                  }}
+                                >
+                                  <Image
+                                    source={{ uri: im.thumb_url || im.image_url }}
+                                    style={{ width: '100%', height: 150, backgroundColor: colors.surfaceMuted }}
+                                    resizeMode="cover"
+                                  />
+                                  {chosen ? (
+                                    <View
+                                      style={{
+                                        position: 'absolute',
+                                        top: 8,
+                                        left: 8,
+                                        width: 26,
+                                        height: 26,
+                                        borderRadius: 13,
+                                        alignItems: 'center',
+                                        justifyContent: 'center',
+                                        backgroundColor: colors.primary,
+                                      }}
+                                    >
+                                      <Text style={{ color: colors.onPrimary, fontFamily: fonts.uiBold, fontSize: 14 }}>✓</Text>
+                                    </View>
+                                  ) : null}
+                                  <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 8, gap: 8 }}>
+                                    <Text numberOfLines={1} style={{ flex: 1, color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
+                                      {chosen ? 'Chosen' : im.site || 'Picture'}
+                                    </Text>
+                                    {im.page_url ? (
+                                      <Pressable
+                                        hitSlop={10}
+                                        onPress={() => void Linking.openURL(im.page_url!).catch(() => {})}
+                                        accessibilityLabel="Open the page"
+                                      >
+                                        <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 12 }}>Open ↗</Text>
+                                      </Pressable>
+                                    ) : null}
+                                  </View>
+                                </Pressable>
+                              );
+                            })}
+                          </ScrollView>
+                        </View>
                       ) : null}
                       {!isUser && m.sources && m.sources.length > 0 ? (
                         <View style={{ gap: 6, maxWidth: '92%' }}>
@@ -1698,7 +1628,10 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
                             return (
                               <Pressable
                                 key={`${m.id}-src-${i}`}
-                                onPress={() => void Linking.openURL(src.url).catch(() => {})}
+                                onPress={() => chooseAiListing(src, m.draft)}
+                                disabled={aiBusy}
+                                accessibilityRole="button"
+                                accessibilityLabel={`Choose ${src.title || src.site}`}
                                 style={{
                                   flexDirection: 'row',
                                   alignItems: 'center',
@@ -1713,7 +1646,7 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
                                 {src.image_url ? (
                                   <Image
                                     source={{ uri: src.image_url }}
-                                    style={{ width: 44, height: 44, borderRadius: 8, backgroundColor: colors.surfaceMuted }}
+                                    style={{ width: 64, height: 64, borderRadius: 10, backgroundColor: colors.surfaceMuted }}
                                     resizeMode="cover"
                                   />
                                 ) : null}
@@ -1725,7 +1658,21 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
                                     {priceLine ? `${src.site} · ${priceLine}` : src.site}
                                   </Text>
                                 </View>
-                                <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 12 }}>Open</Text>
+                                <View style={{ alignItems: 'flex-end', gap: 8 }}>
+                                  <View
+                                    style={{
+                                      paddingHorizontal: 10,
+                                      paddingVertical: 5,
+                                      borderRadius: radii.full,
+                                      backgroundColor: colors.primary,
+                                    }}
+                                  >
+                                    <Text style={{ color: colors.onPrimary, fontFamily: fonts.uiSemi, fontSize: 12 }}>Choose</Text>
+                                  </View>
+                                  <Pressable hitSlop={8} onPress={() => void Linking.openURL(src.url).catch(() => {})}>
+                                    <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 11 }}>Open ↗</Text>
+                                  </Pressable>
+                                </View>
                               </Pressable>
                             );
                           })}
@@ -2012,18 +1959,31 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
 
   return (
     <View style={{ gap: space.md }}>
-      <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>
+      <Text style={{ color: colors.text, fontFamily: fonts.uiBold, fontSize: 24 }}>
         {t(user.locale, 'plan.title')}
       </Text>
 
-      <PrimaryButton
-        label={t(user.locale, 'plan.new')}
-        onPress={() => {
-          resetForm();
-          setMode('create');
-          onDetailChange?.(true);
-        }}
-      />
+      {goals.length > 0
+        ? (() => {
+            const cur = (user.default_currency_code || goals[0]?.currency_code || 'USD').toUpperCase();
+            const mine = goals.filter((g) => (g.currency_code || cur).toUpperCase() === cur && g.status !== 'archived');
+            const saved = mine.reduce((sum, g) => sum + (Number(g.current_amount) || 0), 0);
+            const target = mine.reduce((sum, g) => sum + (Number(g.target_amount) || 0), 0);
+            const pct = target > 0 ? Math.round((saved / target) * 100) : 0;
+            return (
+              <HeroCard
+                label={t(user.locale, 'plan.title')}
+                value={formatMoney(saved.toFixed(2), cur, user.locale)}
+                sub={`${pct}% of ${formatMoney(target.toFixed(2), cur, user.locale)} saved`}
+                tiles={[
+                  { label: 'Plans', value: String(mine.length) },
+                  { label: 'Done', value: String(mine.filter((g) => g.status === 'completed').length) },
+                  { label: 'Still needed', value: formatMoney(Math.max(0, target - saved).toFixed(2), cur, user.locale) },
+                ]}
+              />
+            );
+          })()
+        : null}
 
       {showFilters && filterOptions.length > 1 ? (
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
@@ -2136,6 +2096,8 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
           })
         )}
       </Card>
+      {/* Room for the floating add button. */}
+      <View style={{ height: 72 }} />
     </View>
   );
 }

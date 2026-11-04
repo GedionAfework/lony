@@ -44,6 +44,7 @@ func main() {
 	defer pool.Close()
 
 	sqlStore := store.New(pool)
+	sqlStore.SetAccountNumberKey(cfg.BankKey)
 	loanSvc := loans.NewService(sqlStore, friends.NewService(sqlStore))
 	expensesSvc := expenses.NewService(expenses.SQLStoreAdapter{Inner: sqlStore})
 	notifySvc := notifications.NewService(sqlStore, notifications.NewPusher(cfg.ExpoAccessToken))

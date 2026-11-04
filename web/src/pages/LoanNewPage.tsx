@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
-import { api, type Friendship, type PeerTrust, type SearchHit } from '../lib/api';
+import { api, type Friendship, type MoneyAccount, type PeerTrust, type SearchHit } from '../lib/api';
 import { formatAmountCommas, parseAmountNumber, stripAmount } from '../lib/format';
 import { CURRENCIES } from '../lib/catalogs';
+import { computeCharged, INTEREST_CHARGES, type InterestCharge } from '../lib/interest';
 import { PageHeader } from '../components/PageHeader';
 import { Card } from '../components/Card';
 import { Field, SelectField } from '../components/Field';
@@ -89,7 +90,7 @@ export function LoanNewPage() {
 
   const [principal, setPrincipal] = useState('');
   const [interest, setInterest] = useState('');
-  const [interestPeriodMonths, setInterestPeriodMonths] = useState('');
+  const [interestCharge, setInterestCharge] = useState<InterestCharge>('once');
   const [installmentCount, setInstallmentCount] = useState('');
   const [currency, setCurrency] = useState((user?.default_currency_code || 'USD').toUpperCase());
   const [dueDate, setDueDate] = useState('');
@@ -132,17 +133,50 @@ export function LoanNewPage() {
   const principalNum = parseAmountNumber(principal);
   const interestNum = parseAmountNumber(interest);
   const months = Math.max(0, Math.floor(Number(stripAmount(installmentCount)) || 0));
-  const showInterestPeriod = loanKind === 'one_time' && interestNum > 0;
+  const showInterestCharge = loanKind === 'one_time' && interestNum > 0;
+  const charged =
+    showInterestCharge && principalNum > 0 && dueDate ? computeCharged(principalNum, interestNum, interestCharge, todayIso(), dueDate) : null;
   const schedule = loanKind === 'long_term' && months >= 2 && principalNum > 0 ? estimateLongTermSchedule(principalNum, interestNum, months) : { emi: 0, totalInterest: 0, totalPayable: 0 };
 
   const aloneOk = loanKind === 'long_term' ? Boolean(institutionOther.trim()) : true;
   const alone = loanKind === 'long_term' && partyMode === 'alone';
 
+  // A debt to an institution may already be inside one of the user's credit card
+  // balances. Ask, so it is counted once (see docs/net-worth-integrity.md).
+  const [cardMatches, setCardMatches] = useState<MoneyAccount[]>([]);
+  const [cardAnswer, setCardAnswer] = useState(''); // card id, 'separate', or '' (not answered)
+  useEffect(() => {
+    const institution = institutionOther.trim();
+    if (!token || !alone || institution.length < 2) {
+      setCardMatches([]);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      api
+        .debtCardMatches(token, institution, currency)
+        .then((r) => {
+          if (cancelled) return;
+          const cards = r.cards ?? [];
+          setCardMatches(cards);
+          setCardAnswer((prev) => (prev === 'separate' || cards.some((c) => c.id === prev) ? prev : ''));
+        })
+        .catch(() => {
+          if (!cancelled) setCardMatches([]);
+        });
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [token, alone, institutionOther, currency]);
+  const needsCardAnswer = alone && cardMatches.length > 0 && !cardAnswer;
+
   const canSubmit =
     Boolean(currency && principalNum > 0) &&
     (loanKind === 'long_term'
       ? months >= 2 && aloneOk && institutionType.trim().length > 0 && (partyMode === 'alone' || Boolean(peerId))
-      : Boolean(peerId) && Boolean(dueDate) && (!showInterestPeriod || Number(interestPeriodMonths) >= 1));
+      : Boolean(peerId) && Boolean(dueDate));
 
   async function onCreate() {
     if (!token || !canSubmit) return;
@@ -168,13 +202,18 @@ export function LoanNewPage() {
         due_at: loanKind === 'one_time' ? new Date(`${dueDate}T12:00:00.000Z`).toISOString() : undefined,
         note: note.trim() || undefined,
         title: title.trim() || undefined,
-        interest_period_months: showInterestPeriod ? Number(interestPeriodMonths) : undefined,
+        interest_charge: showInterestCharge ? interestCharge : undefined,
         installment_count: loanKind === 'long_term' ? months : undefined,
         institution_label: loanKind === 'long_term' ? institutionLabel : undefined,
         institution_type: loanKind === 'long_term' ? institutionType : undefined,
         start_at: loanKind === 'long_term' ? new Date(`${startDate}T12:00:00.000Z`).toISOString() : undefined,
+        linked_account_id: alone && cardMatches.length > 0 && cardAnswer && cardAnswer !== 'separate' ? cardAnswer : undefined,
       };
       const res = await api.createLoan(token, body);
+      if (alone && cardMatches.length > 0 && cardAnswer === 'separate') {
+        // Remember the answer so the "may be counted twice" check does not ask again.
+        await api.setLoanAccountLink(token, res.loan.id, { dismiss: true }).catch(() => undefined);
+      }
       navigate(`/loans/${res.loan.id}`);
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Could not create loan');
@@ -206,6 +245,19 @@ export function LoanNewPage() {
             placeholder="Bank, SACCO, person…"
           />
           <Field label={institutionType === 'person' ? 'Person name' : 'Institution name'} value={institutionOther} onChange={setInstitutionOther} placeholder="Type the name" />
+          {alone && cardMatches.length > 0 ? (
+            <SelectField
+              label="Is this already on a credit card?"
+              value={cardAnswer}
+              onChange={setCardAnswer}
+              placeholder="Choose one"
+              options={[
+                ...cardMatches.map((c) => ({ id: c.id, label: `Yes, part of ${c.name}` })),
+                { id: 'separate', label: 'No, a separate debt' },
+              ]}
+              hint="Card purchases and installment plans are already counted in the card balance. Linking keeps them from being counted twice."
+            />
+          ) : null}
 
           <div className="section-label">Parties</div>
           <Segmented value={partyMode} onChange={(v) => setPartyMode(v as 'alone' | 'shared')} options={[{ id: 'alone', label: 'Alone' }, { id: 'shared', label: 'With someone' }]} />
@@ -263,7 +315,12 @@ export function LoanNewPage() {
           <SelectField label="Currency" value={currency} onChange={setCurrency} options={CURRENCIES} />
         </div>
         <Field label={loanKind === 'long_term' ? 'Annual interest %' : 'Flat interest %'} value={interest} onChange={(v) => setInterest(formatAmountCommas(v))} />
-        {showInterestPeriod ? <Field label="Interest period (months)" value={interestPeriodMonths} onChange={setInterestPeriodMonths} placeholder="How long this rate applies" /> : null}
+        {showInterestCharge ? (
+          <>
+            <div className="section-label">Charged</div>
+            <Segmented value={interestCharge} onChange={(v) => setInterestCharge(v as InterestCharge)} options={INTEREST_CHARGES} />
+          </>
+        ) : null}
         {loanKind === 'one_time' ? (
           <Field
             label="Due date"
@@ -273,9 +330,14 @@ export function LoanNewPage() {
             min={startDate && startDate > todayIso() ? startDate : todayIso()}
           />
         ) : null}
+        {charged ? (
+          <div className="muted" style={{ fontSize: 13 }}>
+            Interest {formatAmountCommas(charged.interest.toFixed(2))} ({charged.label}) · Total {formatAmountCommas(charged.total.toFixed(2))} {currency}
+          </div>
+        ) : null}
         <Field label="Title" value={title} onChange={setTitle} />
         <Field label="Note" value={note} onChange={setNote} />
-        <Button onClick={onCreate} disabled={!canSubmit} busy={busy} block>
+        <Button onClick={onCreate} disabled={!canSubmit || needsCardAnswer} busy={busy} block>
           {busy ? 'Working…' : alone ? 'Save debt schedule' : 'Send for acceptance'}
         </Button>
       </Card>

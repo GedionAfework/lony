@@ -87,6 +87,11 @@ func (s *SQLStore) SoftDeleteUser(ctx context.Context, userID uuid.UUID) error {
 	_ = s.DeleteAIRuns(ctx, userID)
 	_ = s.DeleteAIUsage(ctx, userID)
 	_, _ = s.pool.Exec(ctx, `DELETE FROM bank_link_connections WHERE user_id=$1`, userID)
+	// Bank SMS text and the phone's push address are personal: nothing may reach a
+	// deleted account, and its messages are not kept.
+	_, _ = s.pool.Exec(ctx, `DELETE FROM sms_ingest_log WHERE user_id=$1`, userID)
+	_, _ = s.pool.Exec(ctx, `DELETE FROM device_tokens WHERE user_id=$1`, userID)
+	_, _ = s.pool.Exec(ctx, `DELETE FROM ai_capture_monthly WHERE user_id=$1`, userID)
 	return nil
 }
 
@@ -161,6 +166,10 @@ func (s *SQLStore) BuildUserExport(ctx context.Context, userID uuid.UUID) (priva
 		FROM ai_insights WHERE user_id=$1 ORDER BY created_at DESC LIMIT 500
 	`, userID)
 	out.AIConversations, _ = s.ListAIConversationsExport(ctx, userID)
+	out.SMSImports, _ = s.scanMaps(ctx, `
+		SELECT raw_excerpt, parsed, cashflow_id, created_at
+		FROM sms_ingest_log WHERE user_id=$1 ORDER BY created_at DESC LIMIT 5000
+	`, userID)
 
 	var grade string
 	var points float64

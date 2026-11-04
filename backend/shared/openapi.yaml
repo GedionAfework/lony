@@ -872,7 +872,10 @@ paths:
               $ref: "#/components/schemas/ClaimRepaymentRequest"
       responses:
         "201":
-          description: Claim created; loan becomes repayment_pending
+          description: >
+            Claim created; loan becomes repayment_pending. On a self-recorded (alone)
+            debt the claim is confirmed at once. With pay_from_account_id the expense,
+            balance change and claim are saved in one transaction.
           content:
             application/json:
               schema:
@@ -892,6 +895,11 @@ paths:
           name: id
           required: true
           schema: { type: string, format: uuid }
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfirmRepaymentRequest"
       responses:
         "200":
           description: Confirmed; loan completed when outstanding is zero
@@ -931,6 +939,196 @@ paths:
           description: Not the lender
         "409":
           description: Not pending
+  /repayments/{id}/resolve:
+    post:
+      summary: Borrower settles a rejected payment whose expense is still recorded
+      description: >
+        undo_expense deletes the linked expense and reverses its balance change;
+        keep_expense unlinks it so it stays an ordinary expense. To send the payment
+        again, claim with paid_entry_id instead.
+      operationId: resolveRepayment
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: { type: string, enum: [undo_expense, keep_expense] }
+      responses:
+        "200":
+          description: Resolved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RepaymentResponse"
+        "403":
+          description: Not the borrower
+        "409":
+          description: Not a rejected payment with a linked expense
+  /loans/{id}/account-link:
+    post:
+      summary: Link a self-recorded debt to the credit card whose balance already includes it
+      description: >
+        A linked debt is left out of net worth while the card is active, so the same
+        money is subtracted once. dismiss=true records that it is a separate debt.
+      operationId: setLoanAccountLink
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                account_id: { type: string, format: uuid, nullable: true, description: The user's credit card in the loan currency; null unlinks }
+                dismiss: { type: boolean }
+      responses:
+        "200":
+          description: Updated loan
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoanResponse"
+        "409":
+          description: Not a self-recorded debt of the caller
+        "422":
+          description: Not the caller's active credit card in the loan currency
+  /loans/possible-duplicates:
+    get:
+      summary: Open self-recorded debts that may already be inside a credit card balance
+      operationId: listPossibleDuplicateDebts
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Debts to ask the user about
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [duplicates]
+                properties:
+                  duplicates:
+                    type: array
+                    items:
+                      type: object
+                      required: [loan_id, loan_title, outstanding, currency_code, cards]
+                      properties:
+                        loan_id: { type: string, format: uuid }
+                        loan_title: { type: string }
+                        outstanding: { type: string }
+                        currency_code: { type: string }
+                        cards:
+                          type: array
+                          items: { type: object, additionalProperties: true }
+  /cashflow/declined-shares:
+    get:
+      summary: Friends' shares of your expenses that they declined and you have not answered
+      operationId: listDeclinedShares
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Declined shares
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [declined_shares]
+                properties:
+                  declined_shares:
+                    type: array
+                    items:
+                      type: object
+                      required: [loan_id, entry_id, entry_title, friend, amount, currency_code]
+                      properties:
+                        loan_id: { type: string, format: uuid }
+                        entry_id: { type: string, format: uuid }
+                        entry_title: { type: string }
+                        friend: { $ref: "#/components/schemas/LoanParty" }
+                        amount: { type: string }
+                        currency_code: { type: string }
+  /cashflow/declined-shares/{loanId}:
+    post:
+      summary: Answer a declined share - ask the same friend again, or keep the full cost
+      operationId: resolveDeclinedShare
+      security:
+        - bearerAuth: []
+      parameters:
+        - { in: path, name: loanId, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action: { type: string, enum: [ask_again, keep_cost] }
+      responses:
+        "200":
+          description: Answered; loan is the new share request when asking again
+        "409":
+          description: Not a declined share waiting for an answer
+  /ai/capture-allowance:
+    get:
+      summary: Voice/receipt captures left this month (free plan allowance; Premium unlimited)
+      operationId: getCaptureAllowance
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Allowance
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [allowance]
+                properties:
+                  allowance:
+                    type: object
+                    required: [used, limit, unlimited, resets_at]
+                    properties:
+                      used: { type: integer }
+                      limit: { type: integer }
+                      unlimited: { type: boolean }
+                      resets_at: { type: string, format: date-time }
+  /accounts/debt-matches:
+    get:
+      summary: The user's credit cards that match an institution (for the new-debt form)
+      operationId: listDebtCardMatches
+      security:
+        - bearerAuth: []
+      parameters:
+        - { in: query, name: institution, required: true, schema: { type: string } }
+        - { in: query, name: currency, schema: { type: string } }
+      responses:
+        "200":
+          description: Matching active credit cards
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [cards]
+                properties:
+                  cards:
+                    type: array
+                    items: { type: object, additionalProperties: true }
   /notifications:
     get:
       summary: In-app notification inbox
@@ -2130,6 +2328,9 @@ components:
         interest_rate_percent: { type: string, nullable: true }
         interest_amount: { type: string, nullable: true }
         expected_total: { type: string, nullable: true }
+        outstanding_amount: { type: string, nullable: true, description: Still owed after confirmed repayments and paid installments }
+        interest_charge: { type: string, enum: [once, per_month, per_year], description: "One-time loans: rate charged once, per started month, or per year (by days). Simple interest." }
+        linked_account_id: { type: string, format: uuid, nullable: true, description: Credit card whose balance already includes this self-recorded debt }
         due_at: { type: string, format: date-time, nullable: true }
         note: { type: string, nullable: true }
         terms_version: { type: integer, nullable: true }
@@ -2297,6 +2498,16 @@ components:
         proof_filename: { type: string }
         proof_mime: { type: string }
         proof_base64: { type: string, description: Optional receipt / proof upload }
+        pay_from_account_id: { type: string, format: uuid, description: Also record the payment as an expense from this account, atomically }
+        title: { type: string, maxLength: 120, description: Title of that expense }
+        category_id: { type: string, format: uuid }
+        occurred_at: { type: string, format: date-time }
+        paid_entry_id: { type: string, format: uuid, description: Link an expense already recorded (e.g. resubmitting a rejected payment) }
+    ConfirmRepaymentRequest:
+      type: object
+      properties:
+        received_account_id: { type: string, format: uuid, description: Record the money as income into this account, atomically }
+        received_entry_id: { type: string, format: uuid, description: Link income the lender already recorded so it is not added twice }
     RejectRepaymentRequest:
       type: object
       required: [reason]
@@ -2322,6 +2533,9 @@ components:
         can_reject: { type: boolean }
         proof_url: { type: string, nullable: true }
         proof_name: { type: string, nullable: true }
+        paid_entry_id: { type: string, format: uuid, nullable: true, description: Borrower's expense that paid this claim }
+        received_entry_id: { type: string, format: uuid, nullable: true, description: Lender's income that received it }
+        needs_resolution: { type: boolean, description: Rejected while the borrower's expense is still recorded }
     RepaymentResponse:
       type: object
       required: [repayment]

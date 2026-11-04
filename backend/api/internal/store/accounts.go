@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"equilend/api/internal/accounts"
+	"equilend/api/internal/banks"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -15,7 +16,7 @@ import (
 const moneyAccountSelect = `
 	id, user_id, name, account_type, currency_code, balance::text, balance_as_of,
 	interest_rate_percent::text, compounding, institution_label, bank_profile_id,
-	credit_limit::text, statement_day, due_day,
+	credit_limit::text, statement_day, due_day, account_number_enc,
 	archived_at, created_at, updated_at
 `
 
@@ -35,12 +36,12 @@ func (s *SQLStore) InsertMoneyAccount(ctx context.Context, rec accounts.Account,
 			user_id, name, account_type, currency_code, balance, balance_as_of,
 			interest_rate_percent, compounding, institution_label, bank_profile_id,
 			credit_limit, statement_day, due_day,
-			created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+			created_at, updated_at, account_number_enc
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
 		RETURNING `+moneyAccountSelect+`
 	`, rec.UserID, rec.Name, rec.AccountType, rec.CurrencyCode, rec.Balance.StringFixed(accounts.Scale), rec.BalanceAsOf,
-		rate, rec.Compounding, rec.InstitutionLabel, rec.BankProfileID, creditLimitArg(rec), rec.StatementDay, rec.DueDay, rec.CreatedAt, rec.UpdatedAt)
-	saved, err := scanMoneyAccount(row)
+		rate, rec.Compounding, rec.InstitutionLabel, rec.BankProfileID, creditLimitArg(rec), rec.StatementDay, rec.DueDay, rec.CreatedAt, rec.UpdatedAt, s.sealAccountNumber(rec.AccountNumber))
+	saved, err := s.scanMoneyAccount(row)
 	if err != nil {
 		return accounts.Account{}, err
 	}
@@ -60,7 +61,7 @@ func (s *SQLStore) GetMoneyAccount(ctx context.Context, userID, id uuid.UUID) (a
 	row := s.pool.QueryRow(ctx, `
 		SELECT `+moneyAccountSelect+` FROM money_accounts WHERE id = $1 AND user_id = $2 AND archived_at IS NULL
 	`, id, userID)
-	return scanMoneyAccount(row)
+	return s.scanMoneyAccount(row)
 }
 
 func (s *SQLStore) ListMoneyAccounts(ctx context.Context, userID uuid.UUID, includeArchived bool) ([]accounts.Account, error) {
@@ -76,7 +77,7 @@ func (s *SQLStore) ListMoneyAccounts(ctx context.Context, userID uuid.UUID, incl
 	defer rows.Close()
 	var out []accounts.Account
 	for rows.Next() {
-		rec, err := scanMoneyAccount(rows)
+		rec, err := s.scanMoneyAccount(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -95,12 +96,13 @@ func (s *SQLStore) UpdateMoneyAccount(ctx context.Context, rec accounts.Account)
 			name = $3, account_type = $4, currency_code = $5,
 			interest_rate_percent = $6, compounding = $7, institution_label = $8,
 			bank_profile_id = $9, credit_limit = $10, statement_day = $11, due_day = $12,
-			updated_at = $13
+			updated_at = $13,
+			account_number_enc = CASE WHEN $15 THEN $14 ELSE account_number_enc END
 		WHERE id = $1 AND user_id = $2 AND archived_at IS NULL
 		RETURNING `+moneyAccountSelect+`
 	`, rec.ID, rec.UserID, rec.Name, rec.AccountType, rec.CurrencyCode,
-		rate, rec.Compounding, rec.InstitutionLabel, rec.BankProfileID, creditLimitArg(rec), rec.StatementDay, rec.DueDay, rec.UpdatedAt)
-	return scanMoneyAccount(row)
+		rate, rec.Compounding, rec.InstitutionLabel, rec.BankProfileID, creditLimitArg(rec), rec.StatementDay, rec.DueDay, rec.UpdatedAt, s.sealAccountNumber(rec.AccountNumber), s.accountKey != nil)
+	return s.scanMoneyAccount(row)
 }
 
 func (s *SQLStore) SetMoneyAccountBalance(ctx context.Context, rec accounts.Account, event accounts.BalanceEvent) (accounts.Account, error) {
@@ -114,7 +116,7 @@ func (s *SQLStore) SetMoneyAccountBalance(ctx context.Context, rec accounts.Acco
 		WHERE id = $1 AND user_id = $2 AND archived_at IS NULL
 		RETURNING `+moneyAccountSelect+`
 	`, rec.ID, rec.UserID, rec.Balance.StringFixed(accounts.Scale), rec.BalanceAsOf, rec.UpdatedAt)
-	saved, err := scanMoneyAccount(row)
+	saved, err := s.scanMoneyAccount(row)
 	if err != nil {
 		return accounts.Account{}, err
 	}
@@ -239,7 +241,7 @@ func (s *SQLStore) AdjustMoneyAccountBalance(ctx context.Context, userID, accoun
 		WHERE id = $1 AND user_id = $2 AND archived_at IS NULL
 		RETURNING `+moneyAccountSelect+`
 	`, accountID, userID, delta.StringFixed(accounts.Scale), at)
-	saved, err := scanMoneyAccount(row)
+	saved, err := s.scanMoneyAccount(row)
 	if err != nil {
 		return accounts.Account{}, err
 	}
@@ -403,15 +405,16 @@ func creditLimitArg(rec accounts.Account) any {
 	return rec.CreditLimit.StringFixed(accounts.Scale)
 }
 
-func scanMoneyAccount(row moneyScannable) (accounts.Account, error) {
+func (s *SQLStore) scanMoneyAccount(row moneyScannable) (accounts.Account, error) {
 	var rec accounts.Account
+	var numberEnc []byte
 	var bal string
 	var rate *string
 	var limit *string
 	if err := row.Scan(
 		&rec.ID, &rec.UserID, &rec.Name, &rec.AccountType, &rec.CurrencyCode, &bal, &rec.BalanceAsOf,
 		&rate, &rec.Compounding, &rec.InstitutionLabel, &rec.BankProfileID,
-		&limit, &rec.StatementDay, &rec.DueDay,
+		&limit, &rec.StatementDay, &rec.DueDay, &numberEnc,
 		&rec.ArchivedAt, &rec.CreatedAt, &rec.UpdatedAt,
 	); err != nil {
 		return accounts.Account{}, err
@@ -425,5 +428,23 @@ func scanMoneyAccount(row moneyScannable) (accounts.Account, error) {
 		d := mustDec(*limit)
 		rec.CreditLimit = &d
 	}
+	if len(numberEnc) > 0 && s.accountKey != nil {
+		// A number that cannot be decrypted is left out rather than failing the whole list.
+		if plain, err := banks.Decrypt(s.accountKey, numberEnc); err == nil && plain != "" {
+			rec.AccountNumber = &plain
+		}
+	}
 	return rec, nil
+}
+
+// sealAccountNumber encrypts a number for storage. Nil when there is no number or no key.
+func (s *SQLStore) sealAccountNumber(number *string) []byte {
+	if number == nil || *number == "" || s.accountKey == nil {
+		return nil
+	}
+	blob, err := banks.Encrypt(s.accountKey, *number)
+	if err != nil {
+		return nil
+	}
+	return blob
 }

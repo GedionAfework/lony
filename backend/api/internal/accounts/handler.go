@@ -28,6 +28,7 @@ type createBody struct {
 	InterestRatePercent *string    `json:"interest_rate_percent"`
 	Compounding         *string    `json:"compounding"`
 	InstitutionLabel    *string    `json:"institution_label"`
+	AccountNumber       *string    `json:"account_number"`
 	BankProfileID       *uuid.UUID `json:"bank_profile_id"`
 	CreditLimit         *string    `json:"credit_limit"`
 	StatementDay        *int       `json:"statement_day"`
@@ -41,6 +42,7 @@ type updateBody struct {
 	InterestRatePercent *string    `json:"interest_rate_percent"`
 	Compounding         *string    `json:"compounding"`
 	InstitutionLabel    *string    `json:"institution_label"`
+	AccountNumber       *string    `json:"account_number"`
 	BankProfileID       *uuid.UUID `json:"bank_profile_id"`
 	ClearInterest       bool       `json:"clear_interest"`
 	CreditLimit         *string    `json:"credit_limit"`
@@ -181,6 +183,25 @@ func (h *Handler) Wealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"wealth": out})
+}
+
+func (h *Handler) DebtMatches(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	out, err := h.svc.DebtMatches(r.Context(), auth.UserIDFrom(r.Context()), q.Get("institution"), q.Get("currency"))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"cards": out})
+}
+
+func (h *Handler) PossibleDuplicates(w http.ResponseWriter, r *http.Request) {
+	out, err := h.svc.PossibleDuplicates(r.Context(), auth.UserIDFrom(r.Context()))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"duplicates": out})
 }
 
 func (h *Handler) Transfer(w http.ResponseWriter, r *http.Request) {

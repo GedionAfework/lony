@@ -2,9 +2,11 @@ import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Landmark } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
-import { api, type BankProfile, type Loan, type Repayment } from '../lib/api';
+import { api, type BankProfile, type CashflowEntry, type Loan, type MoneyAccount, type Repayment } from '../lib/api';
 import { formatMoney } from '../lib/format';
 import { CURRENCIES } from '../lib/catalogs';
+import { chargeLabel, INTEREST_CHARGES, type InterestCharge } from '../lib/interest';
+import { Segmented } from '../components/Segmented';
 import { PageHeader } from '../components/PageHeader';
 import { Card } from '../components/Card';
 import { Money } from '../components/Money';
@@ -32,6 +34,10 @@ const EVENT_LABELS: Record<string, string> = {
   cancelled: 'Cancelled',
   marked_overdue: 'Marked overdue',
   installment_paid: 'Installment paid',
+  repayment_claimed: 'Payment recorded',
+  repayment_confirmed: 'Payment confirmed',
+  repayment_rejected: 'Payment rejected',
+  account_linked: 'Card link updated',
 };
 
 function nextInstallmentDue(loan: Loan): string | null {
@@ -57,12 +63,19 @@ export function LoanDetailPage() {
 
   const [principal, setPrincipal] = useState('');
   const [interest, setInterest] = useState('');
+  const [interestCharge, setInterestCharge] = useState<InterestCharge>('once');
   const [currency, setCurrency] = useState('');
   const [dueDate, setDueDate] = useState('');
   const [note, setNote] = useState('');
   const [rejectReason, setRejectReason] = useState<Record<string, string>>({});
   const [claimAmount, setClaimAmount] = useState('');
   const [claimNote, setClaimNote] = useState('');
+  // Accounts in the loan currency: where a payment came from or went to.
+  const [accounts, setAccounts] = useState<MoneyAccount[]>([]);
+  const [incomeEntries, setIncomeEntries] = useState<CashflowEntry[]>([]);
+  const [claimFrom, setClaimFrom] = useState('');
+  // Per repayment: '' (not recorded), 'acct:<id>' (add income there) or 'entry:<id>' (already recorded).
+  const [receiveInto, setReceiveInto] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     if (!token || !loanId) return;
@@ -72,6 +85,7 @@ export function LoanDetailPage() {
       setLoan(res.loan);
       setPrincipal(res.loan.principal || '');
       setInterest(res.loan.interest_rate_percent || '');
+      setInterestCharge(res.loan.interest_charge || 'once');
       setCurrency((res.loan.currency_code || user?.default_currency_code || 'USD').toUpperCase());
       setDueDate(res.loan.due_at ? res.loan.due_at.slice(0, 10) : '');
       try {
@@ -79,6 +93,17 @@ export function LoanDetailPage() {
         setRepayments(repay.repayments ?? []);
       } catch {
         setRepayments([]);
+      }
+      const loanCurrency = (res.loan.currency_code || '').toUpperCase();
+      api
+        .listAccounts(token)
+        .then((r) => setAccounts((r.accounts ?? []).filter((a) => a.currency_code.toUpperCase() === loanCurrency)))
+        .catch(() => setAccounts([]));
+      if (res.loan.your_role === 'lender' && res.loan.borrower.id !== res.loan.lender.id) {
+        api
+          .listCashflow(token, { kind: 'income', currency: loanCurrency, limit: 50 })
+          .then((r) => setIncomeEntries((r.entries ?? []).filter((e) => !e.is_template && (e.status ?? 'confirmed') === 'confirmed')))
+          .catch(() => setIncomeEntries([]));
       }
       if (res.loan.your_role === 'borrower') {
         try {
@@ -125,6 +150,7 @@ export function LoanDetailPage() {
         principal: principal.trim(),
         currency_code: currency.trim().toUpperCase(),
         interest_rate_percent: interest.trim() || '0',
+        interest_charge: interestCharge,
         due_at: new Date(`${dueDate}T12:00:00.000Z`).toISOString(),
         note: note.trim() || undefined,
       });
@@ -140,12 +166,15 @@ export function LoanDetailPage() {
     if (!token || !loan) return;
     setBusy(true);
     try {
-      await api.claimRepayment(token, loan.id, { amount: claimAmount.trim() || undefined, note: claimNote.trim() || undefined });
-      const [loanRes, repayRes] = await Promise.all([api.getLoan(token, loan.id), api.listRepayments(token, loan.id)]);
-      setLoan(loanRes.loan);
-      setRepayments(repayRes.repayments ?? []);
+      await api.claimRepayment(token, loan.id, {
+        amount: claimAmount.trim() ? claimAmount.replace(/,/g, '').trim() : undefined,
+        note: claimNote.trim() || undefined,
+        pay_from_account_id: claimFrom || undefined,
+      });
+      await reloadRepayments();
       setClaimAmount('');
       setClaimNote('');
+      setClaimFrom('');
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Could not claim repayment');
     } finally {
@@ -153,14 +182,23 @@ export function LoanDetailPage() {
     }
   }
 
+  async function reloadRepayments() {
+    if (!token || !loan) return;
+    const [loanRes, repayRes] = await Promise.all([api.getLoan(token, loan.id), api.listRepayments(token, loan.id)]);
+    setLoan(loanRes.loan);
+    setRepayments(repayRes.repayments ?? []);
+  }
+
   async function onConfirmRepayment(id: string) {
     if (!token || !loan) return;
+    const choice = receiveInto[id] || '';
     setBusy(true);
     try {
-      await api.confirmRepayment(token, id);
-      const [loanRes, repayRes] = await Promise.all([api.getLoan(token, loan.id), api.listRepayments(token, loan.id)]);
-      setLoan(loanRes.loan);
-      setRepayments(repayRes.repayments ?? []);
+      await api.confirmRepayment(token, id, {
+        received_account_id: choice.startsWith('acct:') ? choice.slice(5) : undefined,
+        received_entry_id: choice.startsWith('entry:') ? choice.slice(6) : undefined,
+      });
+      await reloadRepayments();
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Could not confirm repayment');
     } finally {
@@ -179,6 +217,26 @@ export function LoanDetailPage() {
       setRepayments(repayRes.repayments ?? []);
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Could not reject repayment');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // A rejected payment whose expense is still recorded: send it again, undo the expense
+  // (balance restored), or keep it as an ordinary expense.
+  async function onResolvePayment(rep: Repayment, action: 'resubmit' | 'undo_expense' | 'keep_expense') {
+    if (!token || !loan) return;
+    setBusy(true);
+    try {
+      if (action === 'resubmit') {
+        await api.claimRepayment(token, loan.id, { amount: rep.amount, note: rep.note || undefined, paid_entry_id: rep.paid_entry_id || undefined });
+      } else {
+        await api.resolveRepayment(token, rep.id, action);
+      }
+      await reloadRepayments();
+      show(action === 'undo_expense' ? 'Expense removed and balance restored' : action === 'keep_expense' ? 'Kept as an expense' : 'Payment sent again');
+    } catch (e) {
+      showError(e instanceof Error ? e.message : 'Could not update the payment');
     } finally {
       setBusy(false);
     }
@@ -246,7 +304,12 @@ export function LoanDetailPage() {
             {formatMoney(loan.installment_amount, loan.currency_code, locale)}/mo{loan.installment_count ? ` · ${loan.installment_count} months` : ''}
           </div>
         ) : null}
-        {loan.interest_period_months && loan.loan_kind !== 'long_term' ? <div className="muted">Interest period · {loan.interest_period_months} mo</div> : null}
+        {loan.loan_kind !== 'long_term' && Number(loan.interest_rate_percent || 0) > 0 ? (
+          <div className="muted">
+            Interest {Number(loan.interest_rate_percent)}% {chargeLabel(loan.interest_charge)}
+            {loan.interest_charge === 'per_month' && loan.interest_period_months ? ` · ${loan.interest_period_months} months` : ''}
+          </div>
+        ) : null}
         <StatusPill status={loan.status} />
       </Card>
 
@@ -302,6 +365,12 @@ export function LoanDetailPage() {
             <SelectField label="Currency" value={currency} onChange={setCurrency} options={CURRENCIES} />
             <Field label="Due date" type="date" value={dueDate} onChange={setDueDate} />
           </div>
+          {Number(interest || 0) > 0 ? (
+            <>
+              <div className="section-label">Interest charged</div>
+              <Segmented value={interestCharge} onChange={(v) => setInterestCharge(v as InterestCharge)} options={INTEREST_CHARGES} />
+            </>
+          ) : null}
           <Field label="Note" value={note} onChange={setNote} />
           <Button onClick={onProposeTerms} busy={busy} block>
             {busy ? 'Working…' : 'Send terms'}
@@ -329,10 +398,18 @@ export function LoanDetailPage() {
       {loan.your_role === 'borrower' && ['active', 'overdue'].includes(loan.status) && !(loan.installments && loan.installments.length > 0) ? (
         <Card>
           <div className="section-label">Mark as paid</div>
-          <Field label="Amount (optional)" value={claimAmount} onChange={setClaimAmount} money placeholder={loan.expected_total || ''} />
+          <Field label="Amount (optional)" value={claimAmount} onChange={setClaimAmount} money placeholder={loan.outstanding_amount || loan.expected_total || ''} />
+          <SelectField
+            label="Paid from"
+            value={claimFrom}
+            onChange={setClaimFrom}
+            placeholder="Not recorded in an account"
+            options={accounts.map((a) => ({ id: a.id, label: `${a.name} · ${formatMoney(a.balance, a.currency_code, locale)}` }))}
+            hint={claimFrom ? 'Also records the expense, so your balance and what you owe stay in step.' : undefined}
+          />
           <Field label="Note (optional)" value={claimNote} onChange={setClaimNote} />
           <Button onClick={onClaimRepayment} busy={busy} block>
-            {busy ? 'Working…' : 'I paid'}
+            {busy ? 'Working…' : isSelfDebt ? 'Record payment' : 'I paid'}
           </Button>
         </Card>
       ) : null}
@@ -346,10 +423,50 @@ export function LoanDetailPage() {
                 {formatMoney(rep.amount, loan.currency_code, locale)} · <StatusPill status={rep.status} />
               </div>
               {rep.note ? <div className="muted">{rep.note}</div> : null}
+              {rep.needs_resolution ? (
+                <div className="flex-col" style={{ gap: 6, padding: 10, borderRadius: 10, border: '1px solid var(--warning)' }}>
+                  <div style={{ fontWeight: 700, color: 'var(--warning)' }}>Payment rejected</div>
+                  <div className="muted" style={{ fontSize: 13 }}>
+                    {rep.rejection_reason ? `“${rep.rejection_reason}”. ` : ''}
+                    The {formatMoney(rep.amount, loan.currency_code, locale)} expense is still recorded in your account. Choose what to do with it.
+                  </div>
+                  <div className="flex-row" style={{ gap: 8, flexWrap: 'wrap' }}>
+                    <Button size="sm" onClick={() => onResolvePayment(rep, 'resubmit')} disabled={busy || loan.status === 'repayment_pending'}>
+                      Send again
+                    </Button>
+                    <Button size="sm" variant="secondary" onClick={() => onResolvePayment(rep, 'undo_expense')} disabled={busy}>
+                      Undo expense
+                    </Button>
+                    <Button size="sm" variant="secondary" onClick={() => onResolvePayment(rep, 'keep_expense')} disabled={busy}>
+                      Keep as expense
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
               {rep.can_confirm ? (
-                <Button size="sm" onClick={() => onConfirmRepayment(rep.id)} disabled={busy}>
-                  Confirm received
-                </Button>
+                <>
+                  {!isSelfDebt ? (
+                    <SelectField
+                      label="Record it in"
+                      value={receiveInto[rep.id] || ''}
+                      onChange={(v) => setReceiveInto((prev) => ({ ...prev, [rep.id]: v }))}
+                      placeholder="Don't record in an account"
+                      options={[
+                        ...accounts.map((a) => ({ id: `acct:${a.id}`, label: `Add to ${a.name}` })),
+                        ...incomeEntries
+                          .filter((e) => Number(e.amount) >= Number(rep.amount))
+                          .map((e) => ({
+                            id: `entry:${e.id}`,
+                            label: `Already recorded: ${e.title} · ${formatMoney(e.amount, e.currency_code, locale)} · ${e.occurred_at.slice(0, 10)}`,
+                          })),
+                      ]}
+                      hint="If you already typed this income in by hand, pick it so it isn't counted twice."
+                    />
+                  ) : null}
+                  <Button size="sm" onClick={() => onConfirmRepayment(rep.id)} disabled={busy}>
+                    Confirm received
+                  </Button>
+                </>
               ) : null}
               {rep.can_reject ? (
                 <>

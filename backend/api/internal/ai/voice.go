@@ -28,7 +28,7 @@ Prefer expense unless they clearly said income, salary, refund, or got paid.
 JSON only.`
 
 func (s *Service) TranscribeAudio(ctx context.Context, userID uuid.UUID, mime string, data []byte) (string, error) {
-	if err := s.ensureAICoreAvailable(ctx, userID); err != nil {
+	if err := s.ensureCaptureReady(ctx); err != nil {
 		return "", err
 	}
 	if err := s.allowLLM(ctx, userID); err != nil {
@@ -42,10 +42,7 @@ func (s *Service) TranscribeAudio(ctx context.Context, userID uuid.UUID, mime st
 }
 
 func (s *Service) ParseVoiceText(ctx context.Context, userID uuid.UUID, transcript string, categories []string) (expenses.VoiceExtract, error) {
-	if err := s.ensureAIEnabled(ctx, userID); err != nil {
-		return expenses.VoiceExtract{}, err
-	}
-	if s.llm == nil || !s.llm.Available() {
+	if err := s.ensureCaptureReady(ctx); err != nil {
 		return expenses.ParseVoiceFallback(transcript), nil
 	}
 	if err := s.allowLLM(ctx, userID); err != nil {

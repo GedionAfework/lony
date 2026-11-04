@@ -1,17 +1,19 @@
 :root {
-  --bg: #f4f7f8;
+  --bg: #f4f6fb;
   --bg-elev: #ffffff;
   --surface: #ffffff;
-  --surface-muted: #eef3f4;
-  --line: rgba(15, 40, 45, 0.1);
-  --line-strong: rgba(15, 40, 45, 0.18);
-  --text: #122026;
-  --muted: #5b6f78;
-  --primary: #1fa8a8;
-  --primary-soft: rgba(31, 168, 168, 0.12);
+  --surface-muted: #eff2f8;
+  --surface-hover: #f6f8fc;
+  --line: rgba(15, 23, 42, 0.08);
+  --line-strong: rgba(15, 23, 42, 0.15);
+  --text: #0f172a;
+  --muted: #64748b;
+  --primary: #14a3a3;
+  --primary-strong: #0b8383;
+  --primary-soft: rgba(20, 163, 163, 0.12);
   --on-primary: #ffffff;
   --secondary: #0d9488;
-  --accent: #a3e635;
+  --accent: #84cc16;
   --success: #059669;
   --success-soft: rgba(5, 150, 105, 0.12);
   --warning: #d97706;
@@ -19,14 +21,54 @@
   --error: #dc2626;
   --error-soft: rgba(220, 38, 38, 0.1);
   --nav: #ffffff;
-  --radius: 16px;
+  --glass: rgba(255, 255, 255, 0.78);
+  --glow-a: rgba(20, 163, 163, 0.14);
+  --glow-b: rgba(132, 204, 22, 0.1);
+  --ring: 0 0 0 3px rgba(20, 163, 163, 0.22);
+  --radius: 18px;
   --radius-sm: 12px;
-  --shadow: 0 1px 2px rgba(15, 40, 45, 0.04), 0 8px 24px rgba(15, 40, 45, 0.06);
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow: 0 1px 2px rgba(15, 23, 42, 0.04), 0 10px 30px -12px rgba(15, 23, 42, 0.12);
+  --shadow-lg: 0 24px 60px -20px rgba(15, 23, 42, 0.35);
   font-family: 'DM Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
   color: var(--text);
   background: var(--bg);
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  --bg: #0a0f1c;
+  --bg-elev: #0e1526;
+  --surface: #111a2d;
+  --surface-muted: #172238;
+  --surface-hover: #1a2640;
+  --line: rgba(148, 163, 184, 0.13);
+  --line-strong: rgba(148, 163, 184, 0.24);
+  --text: #e7edf6;
+  --muted: #8b9bb3;
+  --primary: #2cc5c5;
+  --primary-strong: #19a6a6;
+  --primary-soft: rgba(44, 197, 197, 0.16);
+  --on-primary: #04211f;
+  --secondary: #2dd4bf;
+  --accent: #a3e635;
+  --success: #34d399;
+  --success-soft: rgba(52, 211, 153, 0.14);
+  --warning: #fbbf24;
+  --warning-soft: rgba(251, 191, 36, 0.14);
+  --error: #f87171;
+  --error-soft: rgba(248, 113, 113, 0.14);
+  --nav: #0e1526;
+  --glass: rgba(14, 21, 38, 0.72);
+  --glow-a: rgba(44, 197, 197, 0.12);
+  --glow-b: rgba(163, 230, 53, 0.06);
+  --ring: 0 0 0 3px rgba(44, 197, 197, 0.28);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 12px 32px -14px rgba(0, 0, 0, 0.6);
+  --shadow-lg: 0 30px 70px -20px rgba(0, 0, 0, 0.75);
+  color-scheme: dark;
 }
 
 * {
@@ -289,8 +331,8 @@ code {
   gap: 12px;
   padding: 12px 28px;
   border-bottom: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.82);
-  backdrop-filter: blur(8px);
+  background: var(--glass);
+  backdrop-filter: blur(12px) saturate(140%);
   position: sticky;
   top: 0;
   z-index: 15;
@@ -1990,3 +2032,502 @@ textarea:focus {
   }
 }
 
+
+
+/* =====================================================================
+   Design v2: one layer on top of the base styles. Every colour is a
+   token, so light and dark mode both come from the variables above.
+   ===================================================================== */
+
+html,
+body,
+.shell,
+.shell-sidebar,
+.shell-topbar,
+.card,
+.lt-table-card,
+.stat-card,
+.modal-panel,
+.btn,
+input,
+select,
+textarea {
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease, box-shadow 0.2s ease;
+}
+
+body {
+  background:
+    radial-gradient(900px 480px at 100% -10%, var(--glow-a), transparent 60%),
+    radial-gradient(700px 420px at -10% 110%, var(--glow-b), transparent 60%),
+    var(--bg);
+  background-attachment: fixed;
+}
+
+.shell {
+  background: transparent;
+}
+
+::selection {
+  background: var(--primary-soft);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
+
+/* ---------- Sidebar ---------- */
+
+.shell-sidebar {
+  background: var(--bg-elev);
+  border-right: 1px solid var(--line);
+  gap: 22px;
+  padding: 18px 14px;
+}
+
+.shell-brand-text {
+  font-size: 18px;
+}
+
+.shell-nav {
+  gap: 2px;
+}
+
+.shell-nav-group {
+  margin: 14px 12px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  opacity: 0.8;
+}
+
+.shell-nav > div:first-child .shell-nav-group {
+  margin-top: 0;
+}
+
+.shell.shell-collapsed .shell-nav-group {
+  height: 1px;
+  margin: 10px 8px;
+  background: var(--line);
+  font-size: 0;
+}
+
+.shell-nav-link {
+  position: relative;
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-weight: 500;
+}
+
+.shell-nav-link svg {
+  flex-shrink: 0;
+}
+
+.shell-nav-link:hover {
+  background: var(--surface-hover);
+}
+
+.shell-nav-link.active {
+  background: linear-gradient(90deg, var(--primary-soft), transparent 140%);
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.shell-nav-link.active::before {
+  content: '';
+  position: absolute;
+  left: -14px;
+  top: 8px;
+  bottom: 8px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--primary);
+}
+
+.shell.shell-collapsed .shell-nav-link.active::before {
+  left: -8px;
+}
+
+.shell-sidebar-foot {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+
+/* ---------- Top bar ---------- */
+
+.shell-topbar {
+  padding: 12px 32px;
+  gap: 14px;
+}
+
+.shell-topbar-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.shell-topbar-title small {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.shell-topbar-title strong {
+  font-size: 15px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.theme-toggle {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 999px;
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+}
+
+.theme-toggle button {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.theme-toggle button:hover {
+  color: var(--text);
+}
+
+.theme-toggle button.active {
+  background: var(--surface);
+  color: var(--primary);
+  box-shadow: var(--shadow-sm);
+}
+
+.shell-account-btn {
+  background: var(--surface);
+  border-color: var(--line);
+}
+
+.shell-user-avatar {
+  background: linear-gradient(135deg, var(--primary), var(--primary-strong));
+  color: var(--on-primary);
+}
+
+.shell-account-menu {
+  box-shadow: var(--shadow-lg);
+  animation: pop-in 0.14s ease-out;
+}
+
+.shell-canvas {
+  padding: 28px 32px 72px;
+  max-width: 1240px;
+}
+
+/* ---------- Page header ---------- */
+
+.page-header {
+  margin-bottom: 22px;
+}
+
+.page-header-title h1 {
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.page-header-icon {
+  background: linear-gradient(135deg, var(--primary), var(--primary-strong));
+  color: var(--on-primary);
+  box-shadow: 0 8px 20px -8px var(--primary);
+  border-radius: 14px;
+}
+
+/* ---------- Cards and tables ---------- */
+
+.card,
+.lt-table-card,
+.stat-card,
+.chart-card,
+.theme-card,
+.role-editor,
+.role-list,
+.theme-editor {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+.stat-card {
+  padding: 18px;
+  transition: transform 0.18s ease, box-shadow 0.18s ease;
+}
+
+.stat-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lg);
+}
+
+.stat-card-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+.stat-card-label {
+  font-size: 13px;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+.stat-card-value {
+  font-family: 'DM Sans', system-ui, sans-serif;
+  font-size: clamp(20px, 2.1vw, 28px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.lt-table-head {
+  border-bottom: 1px solid var(--line);
+}
+
+.lt-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-muted);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  border-bottom: 1px solid var(--line);
+}
+
+.lt-table tbody td {
+  border-bottom: 1px solid var(--line);
+}
+
+.lt-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.lt-table tbody tr.lt-clickable:hover td,
+.lt-table tbody tr:hover td {
+  background: var(--surface-hover);
+}
+
+.lt-table tbody tr.lt-row-active td {
+  background: var(--primary-soft);
+}
+
+.lt-skel,
+.skeleton {
+  background: linear-gradient(90deg, var(--surface-muted), var(--surface-hover), var(--surface-muted));
+  background-size: 200% 100%;
+  animation: shimmer 1.2s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+/* ---------- Buttons ---------- */
+
+.btn {
+  border-radius: 12px;
+  font-weight: 600;
+}
+
+.btn-primary {
+  background: linear-gradient(180deg, var(--primary), var(--primary-strong));
+  color: var(--on-primary);
+  border: 1px solid var(--primary-strong);
+  box-shadow: 0 6px 16px -8px var(--primary);
+}
+
+.btn-primary:hover:not(:disabled) {
+  filter: brightness(1.06);
+  box-shadow: 0 10px 22px -10px var(--primary);
+}
+
+.btn-secondary {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--line-strong);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+.btn-danger {
+  background: var(--error-soft);
+  color: var(--error);
+  border: 1px solid color-mix(in srgb, var(--error) 30%, transparent);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: var(--error);
+  color: #fff;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+/* ---------- Inputs ---------- */
+
+.field input,
+.field select,
+.field textarea,
+.toolbar-search,
+.lt-table-toolbar select,
+.inline-select,
+.toolbar select {
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--text);
+}
+
+.field input:focus,
+.field select:focus,
+.field textarea:focus,
+.toolbar-search:focus,
+.lt-table-toolbar select:focus,
+.inline-select:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: var(--ring);
+  background: var(--surface);
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+  opacity: 0.8;
+}
+
+/* ---------- Badges, segmented ---------- */
+
+.badge {
+  border-radius: 999px;
+  font-weight: 600;
+  padding: 3px 10px;
+}
+
+.segmented {
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px;
+}
+
+.segmented-btn {
+  border-radius: 999px;
+  color: var(--muted);
+}
+
+.segmented-btn.active {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ---------- Modals ---------- */
+
+.modal-backdrop {
+  background: rgba(2, 6, 23, 0.5);
+  backdrop-filter: blur(6px);
+  animation: fade-in 0.15s ease-out;
+}
+
+.modal-panel {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  box-shadow: var(--shadow-lg);
+  animation: pop-in 0.18s ease-out;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* ---------- Overview hero ---------- */
+
+.overview-users {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+/* ---------- Login (form side follows the theme; brand side stays dark) ---------- */
+
+.login-form-panel {
+  background: var(--bg-elev);
+}
+
+/* Inputs with an icon: the wrapper is the field, the input inside stays plain. */
+.input-with-icon {
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.input-with-icon:focus-within {
+  border-color: var(--primary);
+  box-shadow: var(--ring);
+  background: var(--surface);
+}
+
+.field .input-with-icon input,
+.input-with-icon input,
+.input-with-icon input:focus {
+  background: transparent;
+  border: none;
+  box-shadow: none;
+}

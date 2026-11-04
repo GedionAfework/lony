@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { api, setTokenRefresher, type User } from '../lib/api';
+import { api, isAuthRejected, setTokenRefresher, type User } from '../lib/api';
 import { applyDocumentDirection, parseLocaleMessages, setActivePack } from '../i18n';
 
 export const TOKEN_KEY = 'lony_web_token';
@@ -96,8 +96,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setToken(res.access_token);
         setUser(res.user);
         return res.access_token;
-      } catch {
-        clearSession();
+      } catch (e) {
+        // Rate limits, outages and lost signal are not a logout: keep the session.
+        if (isAuthRejected(e)) clearSession();
         return null;
       }
     });
@@ -127,8 +128,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .then((res) => {
         if (!cancelled) setUser(res.user);
       })
-      .catch(() => {
-        if (!cancelled) clearSession();
+      .catch((e) => {
+        // Only a rejected login signs out; an outage keeps the session for a retry.
+        if (!cancelled && isAuthRejected(e)) clearSession();
       })
       .finally(() => {
         if (!cancelled) setLoading(false);

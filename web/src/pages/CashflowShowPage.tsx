@@ -167,7 +167,16 @@ export function CashflowShowPage() {
         )}
       </Card>
 
-      {entry.linked_loan_id ? (
+      {entry.shared_with?.length ? (
+        <Card>
+          <div className="section-label">Shared with</div>
+          {entry.shared_with.map((sh) => (
+            <Button key={sh.loan_id} variant="secondary" onClick={() => navigate(`/loans/${sh.loan_id}`)} block>
+              {sh.friend_name} · {formatMoney(sh.amount, sh.currency_code, locale)} · {({ pending: 'waiting for them', active: 'accepted', overdue: 'overdue', repayment_pending: 'paid, to confirm', completed: 'paid back', rejected: 'declined', cancelled: 'cancelled' } as Record<string, string>)[sh.status] || sh.status}
+            </Button>
+          ))}
+        </Card>
+      ) : entry.linked_loan_id ? (
         <Card>
           <Button variant="secondary" onClick={() => navigate(`/loans/${entry.linked_loan_id}`)} block>
             Open linked loan

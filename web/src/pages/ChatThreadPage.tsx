@@ -4,6 +4,7 @@ import { Banknote, Paperclip, Send, Smile, User as UserIcon } from 'lucide-react
 import { useAuth } from '../auth/AuthContext';
 import { api, type ChatMessage, type Conversation, type ConversationMoney } from '../lib/api';
 import { formatMoney } from '../lib/format';
+import { markRead, mergeMessages } from '../lib/chatSync';
 import { Button } from '../components/Button';
 import { useToast } from '../components/Toast';
 import { Avatar } from '../components/Avatar';
@@ -56,7 +57,14 @@ export function ChatThreadPage() {
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(true);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const lastCreated = useRef<string | undefined>(undefined);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  // Server cursor for "what changed since". Only fetches move it, never our own sends,
+  // so a message the other person sent a moment earlier is never skipped.
+  const cursor = useRef<string | undefined>(undefined);
+  const peerReadAt = useRef<string | null>(null);
+  const openConvId = useRef<string | undefined>(undefined);
+  const [hasOlder, setHasOlder] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const isSelfChat = peerId === user?.id;
@@ -66,10 +74,13 @@ export function ChatThreadPage() {
     setLoading(true);
     try {
       const res = await api.openConversation(token, { peer_id: peerId });
+      const page = await api.listMessages(token, res.conversation.id);
+      cursor.current = page.cursor;
+      peerReadAt.current = page.peer_read_at ?? null;
+      openConvId.current = res.conversation.id;
       setConversation(res.conversation);
-      const msgs = await api.listMessages(token, res.conversation.id);
-      setMessages(msgs.messages ?? []);
-      lastCreated.current = msgs.messages?.length ? msgs.messages[msgs.messages.length - 1].created_at : undefined;
+      setMessages(mergeMessages([], page.messages ?? [], page.peer_read_at));
+      setHasOlder(page.has_more);
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Could not open chat');
     } finally {
@@ -83,27 +94,39 @@ export function ChatThreadPage() {
 
   const refresh = useCallback(async () => {
     if (!token || !conversation) return;
+    const convId = conversation.id;
     try {
-      const res = await api.listMessages(token, conversation.id, lastCreated.current);
-      const incoming = res.messages ?? [];
-      if (!incoming.length) return;
-      setMessages((prev) => {
-        const seen = new Set(prev.map((m) => m.id));
-        const merged = [...prev];
-        for (const m of incoming) {
-          if (!seen.has(m.id)) merged.push(m);
-          else {
-            const idx = merged.findIndex((x) => x.id === m.id);
-            if (idx >= 0) merged[idx] = m;
-          }
-        }
-        return merged;
-      });
-      lastCreated.current = incoming[incoming.length - 1]?.created_at ?? lastCreated.current;
-    } catch {
-      /* ignore poll errors */
+      const page = await api.listMessages(token, convId, { since: cursor.current });
+      if (openConvId.current !== convId) return; // another thread was opened meanwhile
+      cursor.current = page.cursor;
+      peerReadAt.current = page.peer_read_at ?? peerReadAt.current;
+      setMessages((prev) => mergeMessages(prev, page.messages ?? [], peerReadAt.current));
+    } catch (e) {
+      // The thread was merged into another one (e.g. a loan chat): reopen it by person.
+      if (e instanceof Error && /conversation not found/i.test(e.message)) void openThread();
     }
-  }, [token, conversation]);
+  }, [token, conversation, openThread]);
+
+  async function loadOlder() {
+    if (!token || !conversation || loadingOlder || messages.length === 0) return;
+    const first = messages[0];
+    const el = scrollRef.current;
+    const fromBottom = el ? el.scrollHeight - el.scrollTop : 0;
+    setLoadingOlder(true);
+    try {
+      const page = await api.listMessages(token, conversation.id, { before: first.created_at, beforeId: first.id });
+      setMessages((prev) => mergeMessages(prev, page.messages ?? [], peerReadAt.current));
+      setHasOlder(page.has_more);
+      // Keep the view where it was instead of jumping.
+      requestAnimationFrame(() => {
+        if (el) el.scrollTop = el.scrollHeight - fromBottom;
+      });
+    } catch (e) {
+      showError(e instanceof Error ? e.message : 'Could not load earlier messages');
+    } finally {
+      setLoadingOlder(false);
+    }
+  }
 
   useEffect(() => {
     if (!conversation) return;
@@ -111,9 +134,11 @@ export function ChatThreadPage() {
     return () => clearInterval(t);
   }, [conversation, refresh]);
 
+  // Follow the conversation only when a newer message arrives, not when older ones load.
+  const newestId = messages.length ? messages[messages.length - 1].id : '';
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages.length]);
+  }, [newestId]);
 
   async function sendText() {
     if (!token || !conversation) return;
@@ -125,8 +150,7 @@ export function ChatThreadPage() {
       setDraft('');
       setReplyTo(null);
       setShowEmoji(false);
-      setMessages((prev) => [...prev, res.message]);
-      lastCreated.current = res.message.created_at;
+      setMessages((prev) => markRead(mergeMessages(prev, [res.message]), peerReadAt.current));
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Could not send');
     } finally {
@@ -157,8 +181,7 @@ export function ChatThreadPage() {
         attachment_base64: b64,
       });
       setReplyTo(null);
-      setMessages((prev) => [...prev, res.message]);
-      lastCreated.current = res.message.created_at;
+      setMessages((prev) => markRead(mergeMessages(prev, [res.message]), peerReadAt.current));
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Could not send file');
     } finally {
@@ -171,7 +194,7 @@ export function ChatThreadPage() {
     try {
       const remove = msg.reactions.some((r) => r.emoji === emoji && r.mine);
       const res = await api.reactMessage(token, msg.id, emoji, remove);
-      setMessages((prev) => prev.map((m) => (m.id === msg.id ? res.message : m)));
+      setMessages((prev) => mergeMessages(prev, [res.message], peerReadAt.current));
       setReactFor(null);
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Could not react');
@@ -226,7 +249,14 @@ export function ChatThreadPage() {
         </div>
       ) : null}
 
-      <div className="thread-scroll">
+      <div className="thread-scroll" ref={scrollRef}>
+        {hasOlder ? (
+          <div style={{ textAlign: 'center', padding: 8 }}>
+            <Button size="sm" variant="secondary" onClick={() => void loadOlder()} busy={loadingOlder}>
+              Load earlier messages
+            </Button>
+          </div>
+        ) : null}
         {messages.map((msg) => (
           <div key={msg.id} className={`bubble-wrap ${msg.mine ? 'mine' : 'theirs'}`} onDoubleClick={() => setReactFor(msg.id)}>
             {msg.reply_to ? <div className="reply-box">{msg.reply_to.body || attachmentLabel(msg.reply_to)}</div> : null}

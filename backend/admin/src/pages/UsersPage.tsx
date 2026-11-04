@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   AlertTriangle,
   ChevronLeft,
@@ -11,6 +11,7 @@ import {
 import { api, type AdminRole, type AdminUser } from '../api';
 import { useAuth } from '../auth';
 import { Button } from '../components/Button';
+import { Modal } from '../components/Modal';
 import { ButtonGroup } from '../components/ButtonGroup';
 import { PageHeader } from '../components/PageHeader';
 import { PermissionGate } from '../components/PermissionGate';
@@ -73,6 +74,30 @@ function UsersPanel() {
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [roles, setRoles] = useState<AdminRole[]>([]);
+  // A change that needs a second click: suspending, unsuspending, or switching plan.
+  const [confirm, setConfirm] = useState<{ kind: 'suspend' | 'plan'; user: AdminUser } | null>(null);
+  // The user whose details are open, loaded fresh from the server.
+  const [detail, setDetail] = useState<AdminUser | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+
+  async function openDetail(user: AdminUser) {
+    if (!token) return;
+    setDetail(user);
+    setDetailLoading(true);
+    try {
+      const res = await api.getUser(token, user.id);
+      setDetail((cur) => (cur && cur.id === user.id ? { ...user, ...res.user } : cur));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not load user');
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  function applyUser(next: Partial<AdminUser> & { id: string }) {
+    setUsers((prev) => prev.map((u) => (u.id === next.id ? { ...u, ...next } : u)));
+    setDetail((cur) => (cur && cur.id === next.id ? { ...cur, ...next } : cur));
+  }
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -111,7 +136,7 @@ function UsersPanel() {
     setError(null);
     try {
       const res = user.status === 'suspended' ? await api.unsuspend(token, user.id) : await api.suspend(token, user.id);
-      setUsers((prev) => prev.map((u) => (u.id === res.user.id ? { ...u, status: res.user.status } : u)));
+      applyUser({ id: res.user.id, status: res.user.status });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Action failed');
     } finally {
@@ -126,7 +151,7 @@ function UsersPanel() {
     setError(null);
     try {
       const res = await api.setPlanTier(token, user.id, next);
-      setUsers((prev) => prev.map((u) => (u.id === res.user.id ? { ...u, plan_tier: res.user.plan_tier } : u)));
+      applyUser({ id: res.user.id, plan_tier: res.user.plan_tier });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not update plan');
     } finally {
@@ -227,7 +252,7 @@ function UsersPanel() {
                 disabled={busyId === u.id}
                 onClick={(e) => {
                   e.stopPropagation();
-                  void togglePlan(u);
+                  setConfirm({ kind: 'plan', user: u });
                 }}
               >
                 {(u.plan_tier || 'free') === 'premium' ? 'Downgrade' : 'Upgrade'}
@@ -246,7 +271,7 @@ function UsersPanel() {
                 }
                 onClick={(e) => {
                   e.stopPropagation();
-                  void toggleSuspend(u);
+                  setConfirm({ kind: 'suspend', user: u });
                 }}
               >
                 {u.status === 'suspended' ? 'Unsuspend' : 'Suspend'}
@@ -294,6 +319,8 @@ function UsersPanel() {
         columns={columns}
         rows={users}
         rowKey={(u) => u.id}
+        onRowClick={(u) => void openDetail(u)}
+        isRowActive={(u) => detail?.id === u.id}
         loading={loading}
         emptyIcon={UsersIcon}
         emptyMessage={loading ? 'Loading users…' : 'No users match your filters.'}
@@ -324,6 +351,148 @@ function UsersPanel() {
           </div>
         }
       />
+
+      <Modal
+        open={Boolean(detail)}
+        title={detail?.display_name || 'User'}
+        subtitle={detail?.email}
+        onClose={() => setDetail(null)}
+        width={560}
+        footer={
+          detail && hasPerm('users.write') ? (
+            <ButtonGroup>
+              <Button size="sm" variant="secondary" disabled={busyId === detail.id} onClick={() => setConfirm({ kind: 'plan', user: detail })}>
+                {(detail.plan_tier || 'free') === 'premium' ? 'Downgrade to Free' : 'Upgrade to Premium'}
+              </Button>
+              <Button
+                size="sm"
+                variant={detail.status === 'suspended' ? 'primary' : 'danger'}
+                disabled={busyId === detail.id || detail.role === 'admin'}
+                title={detail.role === 'admin' ? 'Cannot suspend an admin' : undefined}
+                onClick={() => setConfirm({ kind: 'suspend', user: detail })}
+              >
+                {detail.status === 'suspended' ? 'Unsuspend' : 'Suspend'}
+              </Button>
+            </ButtonGroup>
+          ) : null
+        }
+      >
+        {detail ? <UserDetail user={detail} loading={detailLoading} /> : null}
+      </Modal>
+
+      <ConfirmModal
+        confirm={confirm}
+        busy={Boolean(confirm && busyId === confirm.user.id)}
+        onCancel={() => setConfirm(null)}
+        onConfirm={async () => {
+          if (!confirm) return;
+          if (confirm.kind === 'suspend') await toggleSuspend(confirm.user);
+          else await togglePlan(confirm.user);
+          setConfirm(null);
+        }}
+      />
     </>
+  );
+}
+
+function ConfirmModal({
+  confirm,
+  busy,
+  onCancel,
+  onConfirm,
+}: {
+  confirm: { kind: 'suspend' | 'plan'; user: AdminUser } | null;
+  busy: boolean;
+  onCancel: () => void;
+  onConfirm: () => void | Promise<void>;
+}) {
+  if (!confirm) return null;
+  const u = confirm.user;
+  const suspending = confirm.kind === 'suspend' && u.status !== 'suspended';
+  const toPremium = confirm.kind === 'plan' && (u.plan_tier || 'free') !== 'premium';
+  const title =
+    confirm.kind === 'suspend'
+      ? suspending
+        ? `Suspend ${u.display_name}?`
+        : `Unsuspend ${u.display_name}?`
+      : toPremium
+        ? `Upgrade ${u.display_name} to Premium?`
+        : `Downgrade ${u.display_name} to Free?`;
+  const body =
+    confirm.kind === 'suspend'
+      ? suspending
+        ? 'They are signed out and cannot use Lony until you unsuspend them. Their data stays.'
+        : 'They can sign in and use Lony again.'
+      : toPremium
+        ? 'They get Premium features (AI, voice, receipt scan, reports) right away.'
+        : 'They lose Premium features right away. Their data stays.';
+  return (
+    <Modal
+      open
+      title={title}
+      subtitle={u.email}
+      onClose={onCancel}
+      footer={
+        <ButtonGroup>
+          <Button size="sm" variant="secondary" onClick={onCancel} disabled={busy}>
+            Cancel
+          </Button>
+          <Button size="sm" variant={suspending ? 'danger' : 'primary'} onClick={() => void onConfirm()} disabled={busy}>
+            {busy ? 'Working…' : confirm.kind === 'suspend' ? (suspending ? 'Suspend' : 'Unsuspend') : toPremium ? 'Upgrade' : 'Downgrade'}
+          </Button>
+        </ButtonGroup>
+      }
+    >
+      <p style={{ margin: 0 }}>{body}</p>
+    </Modal>
+  );
+}
+
+function UserDetail({ user: u, loading }: { user: AdminUser; loading: boolean }) {
+  const fmtDate = (v?: string | null) => (v ? new Date(v).toLocaleString() : '—');
+  const rows: [string, ReactNode][] = [
+    ['Status', <span className={`badge badge-${u.status === 'active' ? 'success' : 'warning'}`}>{u.status}</span>],
+    ['Plan', u.plan_tier || 'free'],
+    ['Role', u.admin_role_name || u.role],
+    ['Username', u.username ? `@${u.username}` : '—'],
+    ['Phone', u.phone_e164 || '—'],
+    ['Email verified', u.email_verified == null ? '—' : u.email_verified ? 'Yes' : 'No'],
+    ['Country', u.country_code || '—'],
+    ['Currency', u.default_currency_code || '—'],
+    ['Language / timezone', [u.locale, u.timezone].filter(Boolean).join(' · ') || '—'],
+    ['Joined', fmtDate(u.created_at)],
+    ['Last active', fmtDate(u.last_active_at)],
+  ];
+  const stats: [string, ReactNode][] = [
+    ['Trust grade', u.trust_grade ? `${u.trust_grade}${u.trust_band ? ` · ${u.trust_band}` : ''}${u.trust_thin_history ? ' (thin history)' : ''}` : '—'],
+    ['Loans as borrower', u.loans_as_borrower ?? '—'],
+    ['Loans as lender', u.loans_as_lender ?? '—'],
+    ['Open loans', u.open_loans ?? '—'],
+    ['Overdue loans', u.overdue_loans ?? '—'],
+    ['Entries (30 days)', u.cashflow_entries_30d ?? '—'],
+    ['Money moved (30 days)', u.cashflow_volume_30d ?? '—'],
+    ['Friends', u.friends_count ?? '—'],
+  ];
+  const grid = (items: [string, ReactNode][]) => (
+    <div style={{ display: 'grid', gridTemplateColumns: '180px 1fr', gap: '8px 16px', alignItems: 'center' }}>
+      {items.map(([k, v]) => (
+        <Fragment key={k}>
+          <span className="muted">{k}</span>
+          <span>{v}</span>
+        </Fragment>
+      ))}
+    </div>
+  );
+  return (
+    <div style={{ display: 'grid', gap: 18, opacity: loading ? 0.6 : 1 }}>
+      <section>
+        <h4 style={{ margin: '0 0 8px' }}>Account</h4>
+        {grid(rows)}
+      </section>
+      <section>
+        <h4 style={{ margin: '0 0 8px' }}>Activity{loading ? ' · loading…' : ''}</h4>
+        {grid(stats)}
+      </section>
+    </div>
   );
 }

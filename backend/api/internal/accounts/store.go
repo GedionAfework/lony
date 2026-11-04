@@ -34,6 +34,7 @@ type Account struct {
 	InterestRatePercent *decimal.Decimal
 	Compounding         *string
 	InstitutionLabel    *string
+	AccountNumber       *string
 	BankProfileID       *uuid.UUID
 	CreditLimit         *decimal.Decimal
 	StatementDay        *int
@@ -53,6 +54,7 @@ type AccountDTO struct {
 	InterestRatePercent *string    `json:"interest_rate_percent,omitempty"`
 	Compounding         *string    `json:"compounding,omitempty"`
 	InstitutionLabel    *string    `json:"institution_label,omitempty"`
+	AccountNumber       *string    `json:"account_number,omitempty"`
 	BankProfileID       *uuid.UUID `json:"bank_profile_id,omitempty"`
 	CreditLimit         *string    `json:"credit_limit,omitempty"`
 	StatementDay        *int       `json:"statement_day,omitempty"`
@@ -84,6 +86,7 @@ type CreateInput struct {
 	InterestRatePercent *string
 	Compounding         *string
 	InstitutionLabel    *string
+	AccountNumber       *string
 	BankProfileID       *uuid.UUID
 	CreditLimit         *string
 	StatementDay        *int
@@ -97,6 +100,7 @@ type UpdateInput struct {
 	InterestRatePercent *string
 	Compounding         *string
 	InstitutionLabel    *string
+	AccountNumber       *string
 	BankProfileID       *uuid.UUID
 	ClearInterest       bool
 	CreditLimit         *string
@@ -119,15 +123,19 @@ type CurrencySlice struct {
 }
 
 type WealthSummary struct {
-	PreferredCurrency string          `json:"preferred_currency,omitempty"`
-	CashOnHand        string          `json:"cash_on_hand"`
-	Receivables       string          `json:"receivables"`
-	Payables          string          `json:"payables"`
-	NetWorth          string          `json:"net_worth"`
-	LiveNetWorth      string          `json:"live_net_worth,omitempty"`
-	NetWorthManual    bool            `json:"net_worth_manual"`
-	ByCurrency        []CurrencySlice `json:"by_currency"`
-	Accounts          []AccountDTO    `json:"accounts"`
+	PreferredCurrency string `json:"preferred_currency,omitempty"`
+	CashOnHand        string `json:"cash_on_hand"`
+	Receivables       string `json:"receivables"`
+	Payables          string `json:"payables"`
+	NetWorth          string `json:"net_worth"`
+	LiveNetWorth      string `json:"live_net_worth,omitempty"`
+	NetWorthManual    bool   `json:"net_worth_manual"`
+	// Converted: the totals above add every currency, converted to PreferredCurrency at
+	// today's rate. MissingRates lists currencies left out because no rate was available.
+	Converted    bool            `json:"converted"`
+	MissingRates []string        `json:"missing_rates,omitempty"`
+	ByCurrency   []CurrencySlice `json:"by_currency"`
+	Accounts     []AccountDTO    `json:"accounts"`
 }
 
 type TransferInput struct {
@@ -256,6 +264,7 @@ func toDTO(rec Account) AccountDTO {
 		BalanceAsOf:      rec.BalanceAsOf,
 		Compounding:      rec.Compounding,
 		InstitutionLabel: rec.InstitutionLabel,
+		AccountNumber:    rec.AccountNumber,
 		BankProfileID:    rec.BankProfileID,
 		CreatedAt:        rec.CreatedAt,
 		UpdatedAt:        rec.UpdatedAt,

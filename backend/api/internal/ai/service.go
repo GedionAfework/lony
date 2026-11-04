@@ -123,6 +123,9 @@ type Service struct {
 	fx         *fx.Client
 	dailyCap   int
 	now        func() time.Time
+	// Voice/receipt capture allowance for free users (see capture.go).
+	captures     CaptureCounter
+	freeCaptures int
 }
 
 func NewService(store Store) *Service {

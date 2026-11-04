@@ -18,6 +18,58 @@ var (
 	zero    = decimal.Zero
 )
 
+// How the flat rate of a one-time loan is charged. All are simple interest (never
+// interest on interest), so the "flat %, not APR" wording stays true.
+const (
+	InterestOnce     = "once"      // rate × principal, whatever the length
+	InterestPerMonth = "per_month" // rate × principal × months from start to due (part month counts)
+	InterestPerYear  = "per_year"  // rate × principal × days / 365
+)
+
+func ValidInterestCharge(c string) bool {
+	return c == InterestOnce || c == InterestPerMonth || c == InterestPerYear
+}
+
+// ComputeCharged returns interest and total for a one-time loan, and for per_month the
+// number of months charged.
+func ComputeCharged(principal, ratePercent decimal.Decimal, charge string, start, due time.Time) (interest, total decimal.Decimal, months int32) {
+	base := principal.Mul(ratePercent).Div(hundred)
+	switch charge {
+	case InterestPerMonth:
+		months = MonthsCharged(start, due)
+		interest = base.Mul(decimal.NewFromInt(int64(months)))
+	case InterestPerYear:
+		days := int64(calendarDay(due).Sub(calendarDay(start)).Hours() / 24)
+		if days < 1 {
+			days = 1
+		}
+		interest = base.Mul(decimal.NewFromInt(days)).Div(decimal.NewFromInt(365))
+	default:
+		interest = base
+	}
+	interest = interest.Round(Scale)
+	return interest, principal.Add(interest), months
+}
+
+// MonthsCharged counts calendar months from start to due; a started month counts as a
+// whole one, and there is always at least one.
+func MonthsCharged(start, due time.Time) int32 {
+	s, d := calendarDay(start), calendarDay(due)
+	months := int32((d.Year()-s.Year())*12 + int(d.Month()-s.Month()))
+	if d.Day() > s.Day() {
+		months++
+	}
+	if months < 1 {
+		months = 1
+	}
+	return months
+}
+
+func calendarDay(t time.Time) time.Time {
+	y, m, d := t.UTC().Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, time.UTC)
+}
+
 func ComputeExpected(principal, ratePercent decimal.Decimal) (interest, total decimal.Decimal) {
 	interest = principal.Mul(ratePercent).Div(hundred).Round(Scale)
 	total = principal.Add(interest)

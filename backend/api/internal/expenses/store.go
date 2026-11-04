@@ -60,34 +60,37 @@ type Entry struct {
 	AccountID        *uuid.UUID
 	SplitGroupID     *uuid.UUID
 	TripID           *uuid.UUID
-	Status           string
-	Paused           bool
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	// SharedWith: every friend's share of this expense (one loan each).
+	SharedWith []ExpenseShare
+	Status     string
+	Paused     bool
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 }
 
 type EntryDTO struct {
-	ID               uuid.UUID  `json:"id"`
-	Kind             string     `json:"kind"`
-	Title            string     `json:"title"`
-	Amount           string     `json:"amount"`
-	CurrencyCode     string     `json:"currency_code"`
-	Category         string     `json:"category"`
-	CategoryID       *uuid.UUID `json:"category_id,omitempty"`
-	Note             *string    `json:"note,omitempty"`
-	OccurredAt       time.Time  `json:"occurred_at"`
-	IsTemplate       bool       `json:"is_template"`
-	Recurrence       *string    `json:"recurrence,omitempty"`
-	NextOccurrenceAt *time.Time `json:"next_occurrence_at,omitempty"`
-	TemplateID       *uuid.UUID `json:"template_id,omitempty"`
-	LinkedLoanID     *uuid.UUID `json:"linked_loan_id,omitempty"`
-	AccountID        *uuid.UUID `json:"account_id,omitempty"`
-	SplitGroupID     *uuid.UUID `json:"split_group_id,omitempty"`
-	TripID           *uuid.UUID `json:"trip_id,omitempty"`
-	Status           string     `json:"status"`
-	Paused           bool       `json:"paused"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	ID               uuid.UUID      `json:"id"`
+	Kind             string         `json:"kind"`
+	Title            string         `json:"title"`
+	Amount           string         `json:"amount"`
+	CurrencyCode     string         `json:"currency_code"`
+	Category         string         `json:"category"`
+	CategoryID       *uuid.UUID     `json:"category_id,omitempty"`
+	Note             *string        `json:"note,omitempty"`
+	OccurredAt       time.Time      `json:"occurred_at"`
+	IsTemplate       bool           `json:"is_template"`
+	Recurrence       *string        `json:"recurrence,omitempty"`
+	NextOccurrenceAt *time.Time     `json:"next_occurrence_at,omitempty"`
+	TemplateID       *uuid.UUID     `json:"template_id,omitempty"`
+	LinkedLoanID     *uuid.UUID     `json:"linked_loan_id,omitempty"`
+	SharedWith       []ExpenseShare `json:"shared_with,omitempty"`
+	AccountID        *uuid.UUID     `json:"account_id,omitempty"`
+	SplitGroupID     *uuid.UUID     `json:"split_group_id,omitempty"`
+	TripID           *uuid.UUID     `json:"trip_id,omitempty"`
+	Status           string         `json:"status"`
+	Paused           bool           `json:"paused"`
+	CreatedAt        time.Time      `json:"created_at"`
+	UpdatedAt        time.Time      `json:"updated_at"`
 }
 
 type SummarySlice struct {
@@ -314,6 +317,15 @@ type TripInput struct {
 	Note         *string
 }
 
+// BalanceLedger keeps an entry and its account balance change in one transaction and
+// records when the change was applied, so it happens once and can be undone exactly.
+// The SQL store implements it; without it the service falls back to separate writes.
+type BalanceLedger interface {
+	ApplyEntryBalance(ctx context.Context, userID, entryID uuid.UUID, accountID *uuid.UUID) error
+	UpdateEntryWithBalance(ctx context.Context, rec Entry) (Entry, error)
+	DeleteEntryWithBalance(ctx context.Context, userID, entryID uuid.UUID) error
+}
+
 type Store interface {
 	Insert(ctx context.Context, rec Entry) (Entry, error)
 	Get(ctx context.Context, userID, id uuid.UUID) (Entry, error)
@@ -363,6 +375,7 @@ func toDTO(rec Entry) EntryDTO {
 		NextOccurrenceAt: rec.NextOccurrenceAt,
 		TemplateID:       rec.TemplateID,
 		LinkedLoanID:     rec.LinkedLoanID,
+		SharedWith:       rec.SharedWith,
 		AccountID:        rec.AccountID,
 		SplitGroupID:     rec.SplitGroupID,
 		TripID:           rec.TripID,
@@ -382,4 +395,13 @@ func toCategoryDTO(c Category) CategoryDTO {
 		IsSystem: c.IsSystem,
 		Active:   c.Active,
 	}
+}
+
+// ExpenseShare is one friend's share of a split expense.
+type ExpenseShare struct {
+	LoanID       uuid.UUID `json:"loan_id"`
+	FriendName   string    `json:"friend_name"`
+	Amount       string    `json:"amount"`
+	CurrencyCode string    `json:"currency_code"`
+	Status       string    `json:"status"`
 }

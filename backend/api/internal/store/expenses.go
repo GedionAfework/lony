@@ -93,7 +93,45 @@ func (s *SQLStore) ListCashflow(ctx context.Context, userID uuid.UUID, q expense
 		}
 		out = append(out, rec)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, s.attachShares(ctx, out)
+}
+
+// attachShares adds every friend's share loan to split expenses, in one query.
+func (s *SQLStore) attachShares(ctx context.Context, rows []expenses.Entry) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	ids := make([]uuid.UUID, 0, len(rows))
+	at := map[uuid.UUID]int{}
+	for i, r := range rows {
+		ids = append(ids, r.ID)
+		at[r.ID] = i
+	}
+	res, err := s.pool.Query(ctx, `
+		SELECT l.source_entry_id, l.id, COALESCE(u.display_name, ''), COALESCE(l.principal_amount::text, '0'),
+		       COALESCE(l.currency_code, ''), l.status
+		FROM loans l JOIN users u ON u.id = l.borrower_id
+		WHERE l.source_entry_id = ANY($1::uuid[])
+		ORDER BY l.created_at
+	`, ids)
+	if err != nil {
+		return err
+	}
+	defer res.Close()
+	for res.Next() {
+		var entryID uuid.UUID
+		var sh expenses.ExpenseShare
+		if err := res.Scan(&entryID, &sh.LoanID, &sh.FriendName, &sh.Amount, &sh.CurrencyCode, &sh.Status); err != nil {
+			return err
+		}
+		if i, ok := at[entryID]; ok {
+			rows[i].SharedWith = append(rows[i].SharedWith, sh)
+		}
+	}
+	return res.Err()
 }
 
 func (s *SQLStore) UpdateCashflow(ctx context.Context, rec expenses.Entry) (expenses.Entry, error) {
@@ -437,6 +475,21 @@ func (s *SQLStore) GetSMSIngest(ctx context.Context, userID uuid.UUID, fingerpri
 		return nil, err
 	}
 	return &expenses.SMSIngestRow{ID: id, CashflowID: cashflowID}, nil
+}
+
+func (s *SQLStore) EntryBacksRepayment(ctx context.Context, entryID uuid.UUID) (bool, error) {
+	var n int
+	err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*)::int FROM repayments
+		WHERE (paid_entry_id = $1 OR received_entry_id = $1) AND status IN ('pending', 'confirmed')
+	`, entryID).Scan(&n)
+	return n > 0, err
+}
+
+func (s *SQLStore) SMSLinkedToEntry(ctx context.Context, userID, entryID uuid.UUID) (bool, error) {
+	var n int
+	err := s.pool.QueryRow(ctx, `SELECT COUNT(*)::int FROM sms_ingest_log WHERE user_id = $1 AND cashflow_id = $2`, userID, entryID).Scan(&n)
+	return n > 0, err
 }
 
 func (s *SQLStore) InsertSMSIngest(ctx context.Context, userID uuid.UUID, fingerprint, excerpt string, parsed expenses.ParsedSMS, cashflowID *uuid.UUID) error {

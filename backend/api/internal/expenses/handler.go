@@ -266,6 +266,36 @@ func (h *Handler) Share(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusCreated, map[string]any{"entry": entry, "loan": loan})
 }
 
+func (h *Handler) DeclinedShares(w http.ResponseWriter, r *http.Request) {
+	out, err := h.svc.DeclinedShares(r.Context(), auth.UserIDFrom(r.Context()))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"declined_shares": out})
+}
+
+func (h *Handler) ResolveDeclinedShare(w http.ResponseWriter, r *http.Request) {
+	loanID, err := uuid.Parse(chi.URLParam(r, "loanId"))
+	if err != nil {
+		httpx.Error(w, httpx.E(http.StatusBadRequest, "BAD_REQUEST", "invalid id"))
+		return
+	}
+	var body struct {
+		Action string `json:"action"`
+	}
+	if err := httpx.Decode(r, &body); err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	loan, err := h.svc.ResolveDeclinedShare(r.Context(), auth.UserIDFrom(r.Context()), loanID, body.Action)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"loan": loan})
+}
+
 func (h *Handler) Receive(w http.ResponseWriter, r *http.Request) {
 	id, err := parseEntryID(r)
 	if err != nil {
@@ -550,6 +580,8 @@ type smsIngestBody struct {
 	Note          string     `json:"note"`
 	StatedBalance string     `json:"stated_balance"`
 	OccurredAt    *time.Time `json:"occurred_at"`
+	SMSDateMs     *int64     `json:"sms_date"`
+	Confirmed     bool       `json:"confirmed"`
 }
 
 func (h *Handler) IngestSMS(w http.ResponseWriter, r *http.Request) {
@@ -571,6 +603,8 @@ func (h *Handler) IngestSMS(w http.ResponseWriter, r *http.Request) {
 		Note:          body.Note,
 		StatedBalance: body.StatedBalance,
 		OccurredAt:    body.OccurredAt,
+		SMSDateMs:     body.SMSDateMs,
+		Confirmed:     body.Confirmed,
 	})
 	if err != nil {
 		httpx.Error(w, err)

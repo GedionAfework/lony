@@ -29,6 +29,15 @@ type reportBody struct {
 	Months       int    `json:"months"`
 }
 
+func (h *Handler) CaptureAllowance(w http.ResponseWriter, r *http.Request) {
+	out, err := h.svc.CaptureAllowance(r.Context(), auth.UserIDFrom(r.Context()))
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"allowance": out})
+}
+
 func (h *Handler) ListInsights(w http.ResponseWriter, r *http.Request) {
 	out, err := h.svc.ListInsights(r.Context(), auth.UserIDFrom(r.Context()))
 	if err != nil {

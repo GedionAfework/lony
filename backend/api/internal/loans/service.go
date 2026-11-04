@@ -29,6 +29,11 @@ type Hooks interface {
 	AfterAccept(ctx context.Context, loan Record) error
 }
 
+// RejectHook is an optional part of Hooks, told when a loan request is turned down.
+type RejectHook interface {
+	AfterReject(ctx context.Context, loan Record, actor uuid.UUID) error
+}
+
 type BondHook interface {
 	OnLoanAccepted(ctx context.Context, borrowerID, lenderID uuid.UUID) error
 }
@@ -38,7 +43,17 @@ type Service struct {
 	gate  FriendshipGate
 	hooks Hooks
 	bond  BondHook
+	cards CardChecker
 	now   func() time.Time
+}
+
+// CardChecker confirms an account is the user's active credit card in currency.
+type CardChecker interface {
+	CheckCardForDebt(ctx context.Context, userID, accountID uuid.UUID, currency string) error
+}
+
+func (s *Service) SetCards(c CardChecker) {
+	s.cards = c
 }
 
 func NewService(store Store, gate FriendshipGate) *Service {
@@ -162,6 +177,7 @@ func (s *Service) Create(ctx context.Context, actor uuid.UUID, in CreateInput) (
 			InstallmentCount:     in.InstallmentCount,
 			InstitutionLabel:     rec.InstitutionLabel,
 			StartAt:              in.StartAt,
+			InterestCharge:       strVal(in.InterestCharge),
 		})
 		if err != nil {
 			return LoanDTO{}, err
@@ -186,6 +202,19 @@ func (s *Service) Create(ctx context.Context, actor uuid.UUID, in CreateInput) (
 		t := institution
 		rec.Title = &t
 	}
+
+	if in.LinkedAccountID != nil {
+		if !alone {
+			return LoanDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+				"linked_account_id": "only a self-recorded debt can belong to a card",
+			})
+		}
+		if err := s.checkCard(ctx, actor, *in.LinkedAccountID, rec.CurrencyCode); err != nil {
+			return LoanDTO{}, err
+		}
+		rec.LinkedAccountID = in.LinkedAccountID
+	}
+	rec.SourceEntryID = in.SourceEntryID
 
 	payload, _ := json.Marshal(map[string]any{"role": role, "loan_kind": kind, "party_mode": partyMode})
 	events := []Event{{ActorID: &actor, Type: EventCreated, Payload: payload}}
@@ -319,7 +348,75 @@ func (s *Service) Reject(ctx context.Context, actor, loanID uuid.UUID) (LoanDTO,
 	if err != nil {
 		return LoanDTO{}, err
 	}
+	copyLinks(&updated, rec)
+	if h, ok := s.hooks.(RejectHook); ok {
+		_ = h.AfterReject(ctx, updated, actor)
+	}
 	return s.toDTO(ctx, actor, updated, true)
+}
+
+func copyLinks(dst *Record, src Record) {
+	if dst.SourceEntryID == nil {
+		dst.SourceEntryID = src.SourceEntryID
+	}
+	if dst.Title == nil {
+		dst.Title = src.Title
+	}
+}
+
+// DeclinedShares lists the actor's expense shares that friends turned down and the
+// actor has not dealt with yet.
+func (s *Service) DeclinedShares(ctx context.Context, actor uuid.UUID) ([]DeclinedShare, error) {
+	rows, err := s.AllForUser(ctx, actor)
+	if err != nil {
+		return nil, err
+	}
+	out := []DeclinedShare{}
+	for _, row := range rows {
+		if row.Status != StatusRejected || row.SourceEntryID == nil || row.DeclineHandled || row.LenderID != actor {
+			continue
+		}
+		friend, err := s.store.GetParty(ctx, row.BorrowerID)
+		if err != nil {
+			return nil, err
+		}
+		title := ""
+		if row.Title != nil {
+			title = *row.Title
+		}
+		out = append(out, DeclinedShare{
+			LoanID:       row.ID,
+			EntryID:      *row.SourceEntryID,
+			EntryTitle:   title,
+			Friend:       friend,
+			Amount:       decStrOr(row.Principal),
+			CurrencyCode: strVal(row.CurrencyCode),
+		})
+	}
+	return out, nil
+}
+
+// DeclinedShare returns one declined, unhandled share of the actor's.
+func (s *Service) DeclinedShare(ctx context.Context, actor, loanID uuid.UUID) (Record, error) {
+	rec, err := s.mustGet(ctx, actor, loanID)
+	if err != nil {
+		return Record{}, err
+	}
+	if rec.Status != StatusRejected || rec.SourceEntryID == nil || rec.LenderID != actor || rec.DeclineHandled {
+		return Record{}, httpx.E(http.StatusConflict, "INVALID_STATE", "this is not a declined share waiting for an answer")
+	}
+	return rec, nil
+}
+
+func (s *Service) MarkDeclineHandled(ctx context.Context, loanID uuid.UUID) error {
+	return s.store.MarkDeclineHandled(ctx, loanID)
+}
+
+func decStrOr(d *decimal.Decimal) string {
+	if d == nil {
+		return "0"
+	}
+	return d.StringFixed(Scale)
 }
 
 func (s *Service) Cancel(ctx context.Context, actor, loanID uuid.UUID) (LoanDTO, error) {
@@ -564,6 +661,48 @@ func (s *Service) MarkOverdue(ctx context.Context) (int, error) {
 	return s.store.MarkOverdue(ctx, s.now().UTC())
 }
 
+// SetAccountLink records that a self-recorded debt is part of a credit card's balance
+// (so it is not counted twice), removes that link, or notes that it is a separate debt.
+func (s *Service) SetAccountLink(ctx context.Context, actor, loanID uuid.UUID, accountID *uuid.UUID, dismiss bool) (LoanDTO, error) {
+	rec, err := s.mustGet(ctx, actor, loanID)
+	if err != nil {
+		return LoanDTO{}, err
+	}
+	if !rec.IsInstitutional() || rec.BorrowerID != actor {
+		return LoanDTO{}, httpx.E(http.StatusConflict, "INVALID_STATE", "only a self-recorded debt can belong to a card")
+	}
+	if accountID != nil && dismiss {
+		return LoanDTO{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"account_id": "choose a card or mark it separate, not both",
+		})
+	}
+	if accountID != nil {
+		if err := s.checkCard(ctx, actor, *accountID, rec.CurrencyCode); err != nil {
+			return LoanDTO{}, err
+		}
+	}
+	rec.LinkedAccountID = accountID
+	rec.AccountLinkDismissed = dismiss
+	payload, _ := json.Marshal(map[string]any{"account_id": accountID, "separate": dismiss})
+	saved, err := s.store.SetAccountLink(ctx, rec, Event{ActorID: &actor, Type: EventAccountLinked, Payload: payload})
+	if err != nil {
+		return LoanDTO{}, err
+	}
+	return s.toDTO(ctx, actor, saved, true)
+}
+
+func (s *Service) checkCard(ctx context.Context, actor, accountID uuid.UUID, currency *string) error {
+	if s.cards == nil {
+		return httpx.E(http.StatusServiceUnavailable, "UNAVAILABLE", "accounts are not available")
+	}
+	if currency == nil || strings.TrimSpace(*currency) == "" {
+		return httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"currency_code": "required to link a card",
+		})
+	}
+	return s.cards.CheckCardForDebt(ctx, actor, accountID, *currency)
+}
+
 func (s *Service) mustGet(ctx context.Context, actor, id uuid.UUID) (Record, error) {
 	row, err := s.store.GetLoan(ctx, id)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -683,8 +822,21 @@ func (s *Service) parseTerms(in TermsInput) (Terms, error) {
 	if len(fields) > 0 {
 		return Terms{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", fields)
 	}
-	interest, total := ComputeExpected(principal, rate)
+	charge := strings.TrimSpace(in.InterestCharge)
+	if charge == "" {
+		charge = InterestOnce
+	}
+	if !ValidInterestCharge(charge) {
+		return Terms{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"interest_charge": "must be once, per_month or per_year",
+		})
+	}
+	interest, total, chargedMonths := ComputeCharged(principal, rate, charge, start, dueAt)
+	if chargedMonths > 0 {
+		in.InterestPeriodMonths = &chargedMonths
+	}
 	return Terms{
+		InterestCharge:       charge,
 		Principal:            principal,
 		CurrencyCode:         currency,
 		InterestRatePercent:  rate,
@@ -766,12 +918,15 @@ func (s *Service) toDTO(ctx context.Context, actor uuid.UUID, rec Record, detail
 		Lender:               lender,
 		YourRole:             rec.RoleOf(actor),
 		InterestBasis:        basis,
+		InterestCharge:       chargeOf(kind, rec.InterestCharge),
 		LoanKind:             kind,
 		Principal:            decStr(rec.Principal),
 		CurrencyCode:         rec.CurrencyCode,
 		InterestRatePercent:  decStr(rec.InterestRatePercent),
 		InterestAmount:       decStr(rec.InterestAmount),
 		ExpectedTotal:        decStr(rec.ExpectedTotal),
+		OutstandingAmount:    decStr(rec.Remaining()),
+		LinkedAccountID:      rec.LinkedAccountID,
 		DueAt:                rec.DueAt,
 		Note:                 rec.Note,
 		Title:                rec.Title,
@@ -835,6 +990,7 @@ func (s *Service) toDTO(ctx context.Context, actor uuid.UUID, rec Record, detail
 			Version:              term.Version,
 			Status:               term.Status,
 			InterestBasis:        termBasis,
+			InterestCharge:       chargeOf(termKind, term.InterestCharge),
 			LoanKind:             termKind,
 			Principal:            term.Principal.StringFixed(Scale),
 			CurrencyCode:         term.CurrencyCode,
@@ -886,6 +1042,18 @@ func (s *Service) toDTO(ctx context.Context, actor uuid.UUID, rec Record, detail
 	return dto, nil
 }
 
+// chargeOf is the interest charge shown for a loan: long-term loans use reducing
+// balance instead, and loans saved before the choice existed were charged once.
+func chargeOf(kind, charge string) string {
+	if kind == KindLongTerm {
+		return ""
+	}
+	if charge == "" {
+		return InterestOnce
+	}
+	return charge
+}
+
 func applyTerms(rec *Record, terms Terms) {
 	rec.Principal = &terms.Principal
 	rec.CurrencyCode = &terms.CurrencyCode
@@ -902,6 +1070,7 @@ func applyTerms(rec *Record, terms Terms) {
 		rec.LoanKind = KindOneTime
 	}
 	rec.InterestPeriodMonths = terms.InterestPeriodMonths
+	rec.InterestCharge = terms.InterestCharge
 	rec.InstallmentCount = terms.InstallmentCount
 	rec.InstallmentAmount = terms.InstallmentAmount
 	if terms.InstitutionLabel != nil {
@@ -1104,6 +1273,7 @@ func termsSnapshot(rec Record) map[string]any {
 		"principal":              decStr(rec.Principal),
 		"currency_code":          rec.CurrencyCode,
 		"interest_basis":         InterestBasis,
+		"interest_charge":        chargeOf(rec.LoanKind, rec.InterestCharge),
 		"interest_rate_percent":  decStr(rec.InterestRatePercent),
 		"interest_amount":        decStr(rec.InterestAmount),
 		"expected_total":         decStr(rec.ExpectedTotal),

@@ -195,7 +195,31 @@ func applyLaterMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	if err := applyMigration(ctx, pool, "00047", "migrations/00047_trips.sql"); err != nil {
 		return err
 	}
-	return applyMigration(ctx, pool, "00048", "migrations/00048_free_default_plan.sql")
+	if err := applyMigration(ctx, pool, "00048", "migrations/00048_free_default_plan.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00049", "migrations/00049_net_worth_links.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00050", "migrations/00050_cashflow_balance_applied.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00051", "migrations/00051_interest_charge.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00052", "migrations/00052_declined_shares.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00053", "migrations/00053_capture_allowance.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00054", "migrations/00054_message_updated_at.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00055", "migrations/00055_goal_source_currency.sql"); err != nil {
+		return err
+	}
+	return applyMigration(ctx, pool, "00056", "migrations/00056_account_number.sql")
 }
 
 func applyMigration(ctx context.Context, pool *pgxpool.Pool, version, path string) error {

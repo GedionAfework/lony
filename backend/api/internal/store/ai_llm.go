@@ -96,6 +96,25 @@ func (s *SQLStore) InsertAIRun(ctx context.Context, r ai.Run) (ai.Run, error) {
 	return r, err
 }
 
+// CaptureCount is the user's successful voice/receipt captures in the month starting at month.
+func (s *SQLStore) CaptureCount(ctx context.Context, userID uuid.UUID, month time.Time) (int, error) {
+	var n int
+	err := s.pool.QueryRow(ctx, `
+		SELECT COALESCE((SELECT capture_count FROM ai_capture_monthly WHERE user_id = $1 AND month = $2::date), 0)
+	`, userID, month).Scan(&n)
+	return n, err
+}
+
+func (s *SQLStore) IncrementCapture(ctx context.Context, userID uuid.UUID, month time.Time) (int, error) {
+	var n int
+	err := s.pool.QueryRow(ctx, `
+		INSERT INTO ai_capture_monthly (user_id, month, capture_count) VALUES ($1, $2::date, 1)
+		ON CONFLICT (user_id, month) DO UPDATE SET capture_count = ai_capture_monthly.capture_count + 1
+		RETURNING capture_count
+	`, userID, month).Scan(&n)
+	return n, err
+}
+
 func (s *SQLStore) IncrementAIUsage(ctx context.Context, userID uuid.UUID, day time.Time, cap int) (int, bool, error) {
 	d := time.Date(day.UTC().Year(), day.UTC().Month(), day.UTC().Day(), 0, 0, 0, 0, time.UTC)
 	var count int

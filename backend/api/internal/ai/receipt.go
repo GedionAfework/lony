@@ -32,7 +32,7 @@ JSON only — no markdown.`
 
 // ExtractReceipt implements expenses.ReceiptExtractor.
 func (s *Service) ExtractReceipt(ctx context.Context, userID uuid.UUID, mime, b64 string) (expenses.ReceiptExtract, error) {
-	if err := s.ensureAICoreAvailable(ctx, userID); err != nil {
+	if err := s.ensureCaptureReady(ctx); err != nil {
 		return expenses.ReceiptExtract{}, err
 	}
 	if err := s.allowLLM(ctx, userID); err != nil {

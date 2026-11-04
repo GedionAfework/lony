@@ -88,13 +88,13 @@ func (s *Service) Overview(ctx context.Context, userID uuid.UUID, currency strin
 			return Overview{}, err
 		}
 		for _, row := range rows {
-			if !openLoan(row) || row.CurrencyCode == nil || row.ExpectedTotal == nil {
+			if !openLoan(row) || row.CurrencyCode == nil || row.RemainingFor(userID) == nil {
 				continue
 			}
 			if !strings.EqualFold(*row.CurrencyCode, currency) {
 				continue
 			}
-			amt := *row.ExpectedTotal
+			amt := *row.RemainingFor(userID)
 			if row.LenderID == userID && row.BorrowerID != userID {
 				recv = recv.Add(amt)
 			} else if row.BorrowerID == userID {
@@ -245,11 +245,11 @@ func (s *Service) Debts(ctx context.Context, userID uuid.UUID, preferred string)
 		payMap := map[string]decimal.Decimal{}
 		countMap := map[string]int{}
 		for _, row := range rows {
-			if !openLoan(row) || row.CurrencyCode == nil || row.ExpectedTotal == nil {
+			if !openLoan(row) || row.CurrencyCode == nil || row.RemainingFor(userID) == nil {
 				continue
 			}
 			code := strings.ToUpper(*row.CurrencyCode)
-			amt := *row.ExpectedTotal
+			amt := *row.RemainingFor(userID)
 			countMap[code]++
 			if row.LenderID == userID && row.BorrowerID != userID {
 				recvMap[code] = recvMap[code].Add(amt)

@@ -40,6 +40,7 @@ type createBody struct {
 	SourceURL          *string    `json:"source_url"`
 	LastSeenPrice      *string    `json:"last_seen_price"`
 	LastPriceCheckedAt *time.Time `json:"last_price_checked_at"`
+	SourceCurrency     *string    `json:"source_currency"`
 }
 
 type updateBody struct {

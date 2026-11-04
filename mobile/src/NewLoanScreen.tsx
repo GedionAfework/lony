@@ -9,7 +9,7 @@ import {
   UIManager,
   View,
 } from 'react-native';
-import type { Friendship, PeerTrust, SearchHit } from './api';
+import type { Friendship, MoneyAccount, PeerTrust, SearchHit } from './api';
 import { api } from './api';
 import { formatAmountCommas, parseAmountNumber, stripAmount } from './amountFormat';
 import { CURRENCIES } from './catalogs';
@@ -22,6 +22,7 @@ import {
   resolveInstitutionLabel,
 } from './institutions';
 import { dialForCountry, toE164 } from './phone';
+import { computeCharged, INTEREST_CHARGES, type InterestCharge } from './interest';
 import { SearchSelect } from './SearchSelect';
 import { fonts, radii, space, useTheme } from './theme';
 import { Card, EmptyState, Field, PrimaryButton, SectionLabel } from './ui';
@@ -41,7 +42,7 @@ type Props = {
   interest: string;
   currency: string;
   dueDate: string;
-  interestPeriodMonths: string;
+  interestCharge: InterestCharge;
   installmentCount: string;
   institutionType: string;
   institutionId: string;
@@ -61,7 +62,7 @@ type Props = {
   onInterest: (v: string) => void;
   onCurrency: (v: string) => void;
   onDueDate: (v: string) => void;
-  onInterestPeriodMonths: (v: string) => void;
+  onInterestCharge: (v: InterestCharge) => void;
   onInstallmentCount: (v: string) => void;
   onInstitutionType: (v: string) => void;
   onInstitutionId: (v: string) => void;
@@ -70,7 +71,8 @@ type Props = {
   onNote: (v: string) => void;
   onLoanTitle: (v: string) => void;
   onBack: () => void;
-  onCreate: () => void;
+  /** cardChoice: a credit card id the debt is part of, 'separate', or undefined (not asked). */
+  onCreate: (cardChoice?: string) => void;
   onLookupPhone: (e164: string) => Promise<'selected' | 'invited' | 'pending' | 'error'>;
   onError: (message: string) => void;
   onFieldFocus?: (y: number) => void;
@@ -129,7 +131,7 @@ export function NewLoanScreen({
   interest,
   currency,
   dueDate,
-  interestPeriodMonths,
+  interestCharge,
   installmentCount,
   institutionType,
   institutionId,
@@ -149,7 +151,7 @@ export function NewLoanScreen({
   onInterest,
   onCurrency,
   onDueDate,
-  onInterestPeriodMonths,
+  onInterestCharge,
   onInstallmentCount,
   onInstitutionType,
   onInstitutionId,
@@ -196,7 +198,7 @@ export function NewLoanScreen({
   }, [counterpartyId, loanRole, loanKind, token]);
 
   const interestNum = parseAmountNumber(interest);
-  const showInterestPeriod = loanKind === 'one_time' && interestNum > 0;
+  const showInterestCharge = loanKind === 'one_time' && interestNum > 0;
   const months = Math.max(0, Math.floor(Number(stripAmount(installmentCount)) || 0));
   const principalNum = parseAmountNumber(principal);
   const schedule =
@@ -215,6 +217,38 @@ export function NewLoanScreen({
     institutionType === 'other' ||
     institutionType === 'person';
   const aloneOk = Boolean(resolvedInstitution.trim());
+
+  // A debt to an institution may already be inside one of the user's credit card
+  // balances. Ask, so it is counted once (see docs/net-worth-integrity.md).
+  const aloneDebt = loanKind === 'long_term' && partyMode === 'alone';
+  const [cardMatches, setCardMatches] = useState<MoneyAccount[]>([]);
+  const [cardAnswer, setCardAnswer] = useState(''); // card id, 'separate', or '' (not answered)
+  useEffect(() => {
+    const institution = resolvedInstitution.trim();
+    if (!aloneDebt || institution.length < 2 || !currency) {
+      setCardMatches([]);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      api
+        .debtCardMatches(token, institution, currency)
+        .then((r) => {
+          if (cancelled) return;
+          const cards = r.cards ?? [];
+          setCardMatches(cards);
+          setCardAnswer((prev) => (prev === 'separate' || cards.some((c) => c.id === prev) ? prev : ''));
+        })
+        .catch(() => {
+          if (!cancelled) setCardMatches([]);
+        });
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [token, aloneDebt, resolvedInstitution, currency]);
+  const needsCardAnswer = aloneDebt && cardMatches.length > 0 && !cardAnswer;
   const sharedLenders = lockedPeer ? [lockedPeer.id] : lenderIds;
   const sharedOk = sharedLenders.length >= 1;
 
@@ -326,7 +360,20 @@ export function NewLoanScreen({
         (partyMode === 'alone' ? true : sharedOk)
       : Boolean(loanFriendId) &&
         Boolean(dueDate) &&
-        (!showInterestPeriod || Number(interestPeriodMonths) >= 1));
+        true);
+
+  // Says what is still missing, so a disabled button never leaves the user guessing.
+  const missing = [
+    loanKind === 'one_time' && !loanFriendId ? 'choose who it is with' : null,
+    principalNum > 0 ? null : 'enter the amount',
+    currency ? null : 'pick a currency',
+    loanKind === 'one_time' && !dueDate ? 'set the due date' : null,
+    loanKind === 'long_term' && !institutionType.trim() ? 'choose the lender type' : null,
+    loanKind === 'long_term' && institutionType.trim() && !aloneOk ? 'finish the lender details' : null,
+    loanKind === 'long_term' && months < 2 ? 'enter how many months (2 or more)' : null,
+    loanKind === 'long_term' && partyMode === 'shared' && !sharedOk ? 'add who you share it with' : null,
+    needsCardAnswer ? 'answer the credit card question' : null,
+  ].filter(Boolean) as string[];
 
   const peerPicker = (
     <PeerPicker
@@ -372,11 +419,25 @@ export function NewLoanScreen({
       </View>
 
       <Card>
-        <SectionLabel>Loan type</SectionLabel>
+        <SectionLabel>What kind of loan?</SectionLabel>
         <View style={{ flexDirection: 'row', gap: 8 }}>
-          <RoleChip label="One-time" active={loanKind === 'one_time'} onPress={() => onLoanKind('one_time')} />
-          <RoleChip label="Long term" active={loanKind === 'long_term'} onPress={() => onLoanKind('long_term')} />
+          <RoleChip label="With a person" active={loanKind === 'one_time'} onPress={() => onLoanKind('one_time')} />
+          <RoleChip label="Bank / long term" active={loanKind === 'long_term'} onPress={() => onLoanKind('long_term')} />
         </View>
+        <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
+          {loanKind === 'one_time'
+            ? 'Money between you and someone, paid back by a date.'
+            : 'A loan paid back monthly, like a bank, SACCO or car loan.'}
+        </Text>
+        {!(loanKind === 'long_term' && partyMode === 'alone') ? (
+          <>
+            <SectionLabel>Are you borrowing or lending?</SectionLabel>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <RoleChip label="I borrow" active={loanRole === 'borrower'} onPress={() => onRole('borrower')} />
+              <RoleChip label="I lend" active={loanRole === 'lender'} onPress={() => onRole('lender')} />
+            </View>
+          </>
+        ) : null}
       </Card>
 
       {loanKind === 'one_time' && !lockedPeer ? (
@@ -445,6 +506,22 @@ export function NewLoanScreen({
             />
           ) : null}
 
+          {aloneDebt && cardMatches.length > 0 ? (
+            <>
+              <SearchSelect
+                label="Is this already on a credit card?"
+                value={cardAnswer}
+                onChange={setCardAnswer}
+                options={[
+                  ...cardMatches.map((c) => ({ id: c.id, label: `Yes, part of ${c.name}` })),
+                  { id: 'separate', label: 'No, a separate debt' },
+                ]}
+                placeholder="Choose one"
+                showId={false}
+              />
+            </>
+          ) : null}
+
           <SectionLabel>Parties</SectionLabel>
           <View style={{ flexDirection: 'row', gap: 8 }}>
             <RoleChip
@@ -461,7 +538,7 @@ export function NewLoanScreen({
           {partyMode === 'shared' && !lockedPeer ? peerPicker : null}
 
           <Field
-            label="Term (months)"
+            label="How many months to pay back?"
             value={installmentCount}
             onChange={(v) => onInstallmentCount(stripAmount(v).replace(/\./g, ''))}
             keyboardType="number-pad"
@@ -494,39 +571,38 @@ export function NewLoanScreen({
       ) : null}
 
       <Card>
-        {!(loanKind === 'long_term' && partyMode === 'alone') ? (
-          <>
-            <SectionLabel>Your role</SectionLabel>
-            <View style={{ flexDirection: 'row', gap: 8 }}>
-              <RoleChip label="I borrow" active={loanRole === 'borrower'} onPress={() => onRole('borrower')} />
-              <RoleChip label="I lend" active={loanRole === 'lender'} onPress={() => onRole('lender')} />
-            </View>
-          </>
-        ) : null}
-        <SectionLabel>Terms</SectionLabel>
+        <SectionLabel>Amount and interest</SectionLabel>
         <Field
-          label="Principal"
+          label="Amount"
           value={principal}
           onChange={(v) => onPrincipal(formatAmountCommas(v))}
           keyboardType="decimal-pad"
           onFocus={reportFocus}
         />
         <Field
-          label={loanKind === 'long_term' ? 'Annual interest %' : 'Flat interest %'}
+          label={loanKind === 'long_term' ? 'Interest per year (%)' : 'Interest (%), leave empty for none'}
           value={interest}
           onChange={(v) => onInterest(formatAmountCommas(v))}
           keyboardType="decimal-pad"
           onFocus={reportFocus}
         />
-        {showInterestPeriod ? (
-          <Field
-            label="Interest period (months)"
-            value={interestPeriodMonths}
-            onChange={onInterestPeriodMonths}
-            keyboardType="number-pad"
-            placeholder="How long this rate applies"
-            onFocus={reportFocus}
-          />
+        {showInterestCharge ? (
+          <>
+            <SectionLabel>How is interest charged?</SectionLabel>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              {INTEREST_CHARGES.map((c) => (
+                <RoleChip key={c.id} label={c.label} active={interestCharge === c.id} onPress={() => onInterestCharge(c.id)} />
+              ))}
+            </View>
+            {principalNum > 0 && dueDate ? (
+              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
+                {(() => {
+                  const c = computeCharged(principalNum, interestNum, interestCharge, isoToday(), dueDate);
+                  return `Interest ${formatAmountCommas(c.interest.toFixed(2))} (${c.label}) · Total ${formatAmountCommas(c.total.toFixed(2))} ${currency}`;
+                })()}
+              </Text>
+            ) : null}
+          </>
         ) : null}
         <SearchSelect
           label="Currency"
@@ -543,8 +619,19 @@ export function NewLoanScreen({
             minDate={startDate && startDate > isoToday() ? startDate : isoToday()}
           />
         ) : null}
-        <Field label="Title" value={loanTitle} onChange={onLoanTitle} onFocus={reportFocus} />
-        <Field label="Note" value={note} onChange={onNote} onFocus={reportFocus} />
+        <Field
+          label="Name (optional)"
+          value={loanTitle}
+          onChange={onLoanTitle}
+          onFocus={reportFocus}
+          placeholder="e.g. Rent help, Car loan"
+        />
+        <Field label="Note (optional)" value={note} onChange={onNote} onFocus={reportFocus} />
+        {missing.length && !busy ? (
+          <Text style={{ color: colors.warning, fontFamily: fonts.ui, fontSize: 13 }}>
+            To continue, {missing.join(', ')}.
+          </Text>
+        ) : null}
         <PrimaryButton
           label={
             busy
@@ -553,8 +640,8 @@ export function NewLoanScreen({
                 ? 'Save debt schedule'
                 : 'Send for acceptance'
           }
-          onPress={onCreate}
-          disabled={busy || !canSubmit}
+          onPress={() => onCreate(aloneDebt && cardMatches.length > 0 ? cardAnswer : undefined)}
+          disabled={busy || !canSubmit || needsCardAnswer}
         />
       </Card>
     </View>

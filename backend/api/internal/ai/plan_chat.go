@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -44,11 +45,20 @@ type PlanChatResult struct {
 	ImageURL string           `json:"image_url,omitempty"`
 	Images   []goals.WebImage `json:"images,omitempty"`
 	Sources  []PlanSource     `json:"sources,omitempty"`
+	// Options are tappable answers to the assistant's question, each with a picture when one was found.
+	Options []PlanOption `json:"options,omitempty"`
+}
+
+// PlanOption is one choice the user can tap instead of typing.
+type PlanOption struct {
+	Label    string `json:"label"`
+	ImageURL string `json:"image_url,omitempty"`
+	ThumbURL string `json:"thumb_url,omitempty"`
 }
 
 const planDecidePrompt = `You are Lony's shopping and planning assistant. The user wants to buy or save for something: anything from headphones or a sofa to a car, a house, land, a yacht, or a trip.
 You can search the web. Decide the next step and return ONLY JSON with keys:
-action, reply, query, alt_query, title, goal_type, target_date, user_amount, user_currency.
+action, reply, query, alt_query, title, goal_type, target_date, user_amount, user_currency, options.
 
 action:
 - "search" when you know enough to look the item up. This is the normal case.
@@ -67,7 +77,8 @@ alt_query: a second query that finds a different kind of page (official product 
 title: the item, max 80 characters. Price only the latest item. Never join two products into one title.
 goal_type: travel, purchase, savings, debt_payoff, or custom.
 target_date: YYYY-MM-DD only if they named a date.
-user_amount and user_currency: only if the user stated their own budget or price; digits only.`
+user_amount and user_currency: only if the user stated their own budget or price; digits only.
+options: only for "ask". 2 to 4 short, concrete answers the user can tap, each one a specific thing that can be pictured and searched, current models first. Examples: ["Toyota RAV4 2025", "Toyota Corolla 2025", "Toyota Land Cruiser 2025"], ["Small sailing yacht", "40 ft motor yacht", "Superyacht"]. Empty for "search" and "reply".`
 
 const planAnswerPrompt = `You are Lony's shopping and planning assistant. You just searched the web for the user's item.
 Below are the pages found, numbered. Prices were read from the pages; "≈" is converted to the user's currency at today's rate.
@@ -91,6 +102,8 @@ type planDecision struct {
 	TargetDate   string `json:"target_date"`
 	UserAmount   string `json:"user_amount"`
 	UserCurrency string `json:"user_currency"`
+	// Options is loose so a malformed list never spoils the rest of the decision.
+	Options any `json:"options"`
 }
 
 type planAnswer struct {
@@ -156,7 +169,11 @@ func (s *Service) PlanChat(ctx context.Context, userID uuid.UUID, currency strin
 		if reply == "" || asksUserForPrice(reply) {
 			reply = "What would you like to buy or save for?"
 		}
-		return PlanChatResult{Reply: reply}, nil
+		out := PlanChatResult{Reply: reply}
+		if dec.Action == "ask" {
+			out.Options = pictureOptions(ctx, asStrings(dec.Options))
+		}
+		return out, nil
 	}
 	if dec.Query == "" {
 		dec.Query = lastUserText(turns)
@@ -189,6 +206,58 @@ func (s *Service) PlanChat(ctx context.Context, userID uuid.UUID, currency strin
 		}
 	}
 	return out, nil
+}
+
+// pictureOptions finds one picture for each choice, in parallel. A choice keeps its place even without a picture.
+// asStrings reads a JSON list of strings, or a single string, as a list.
+func asStrings(v any) []string {
+	switch x := v.(type) {
+	case string:
+		return []string{x}
+	case []any:
+		var out []string
+		for _, e := range x {
+			if t, ok := e.(string); ok {
+				out = append(out, t)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
+func pictureOptions(ctx context.Context, labels []string) []PlanOption {
+	var opts []PlanOption
+	seen := map[string]bool{}
+	for _, l := range labels {
+		l = trimRunes(strings.TrimSpace(l), 60)
+		if l == "" || seen[strings.ToLower(l)] {
+			continue
+		}
+		seen[strings.ToLower(l)] = true
+		opts = append(opts, PlanOption{Label: l})
+		if len(opts) >= 4 {
+			break
+		}
+	}
+	if len(opts) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	var wg sync.WaitGroup
+	for i := range opts {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			if imgs := goals.SearchImages(ctx, opts[i].Label, 1); len(imgs) > 0 {
+				opts[i].ImageURL = imgs[0].ImageURL
+				opts[i].ThumbURL = imgs[0].ThumbURL
+			}
+		}(i)
+	}
+	wg.Wait()
+	return opts
 }
 
 func formatImages(imgs []goals.WebImage) string {
@@ -384,24 +453,40 @@ func buildPlanResult(dec planDecision, ans planAnswer, cands []planCandidate, cu
 	if utf8.RuneCountInString(title) > 80 {
 		title = string([]rune(title)[:80])
 	}
-	amount := cleanAmount(ans.TargetAmount)
-	if amount == "" {
-		var priced []planCandidate
-		for _, n := range append(append([]int{}, ans.PriceFrom...), ans.Sources...) {
-			if c, ok := pick(n); ok {
+	// Listing prices the model said it used (or, failing that, the pages it cited).
+	var priced []planCandidate
+	for _, n := range ans.PriceFrom {
+		if c, ok := pick(n); ok && c.PriceLocal != "" {
+			priced = append(priced, c)
+		}
+	}
+	if len(priced) == 0 {
+		for _, n := range ans.Sources {
+			if c, ok := pick(n); ok && c.PriceLocal != "" {
 				priced = append(priced, c)
 			}
 		}
-		amount = cleanAmount(medianLocal(priced))
+	}
+	listed := cleanAmount(medianLocal(priced))
+	amount := cleanAmount(ans.TargetAmount)
+	note := strings.TrimSpace(ans.Note)
+	// The listings win when the model's figure is far from what they actually say.
+	if listed != "" && (amount == "" || farApart(amount, listed, 0.4)) {
+		amount = listed
+		note = "Typical price of the listings found."
+	}
+	estimated := listed == ""
+	if estimated && amount != "" && !strings.Contains(strings.ToLower(note), "estimate") {
+		note = strings.TrimSpace("Estimate — no listing with a price was found. " + note)
 	}
 	cur := currency
-	note := strings.TrimSpace(ans.Note)
 	if ua := cleanAmount(dec.UserAmount); ua != "" {
 		amount = ua
 		if c := strings.ToUpper(strings.TrimSpace(dec.UserCurrency)); len(c) == 3 {
 			cur = c
 		}
 		note = "Using the amount you gave."
+		estimated = false
 	}
 
 	reply := strings.TrimSpace(ans.Reply)
@@ -422,8 +507,19 @@ func buildPlanResult(dec planDecision, ans planAnswer, cands []planCandidate, cu
 		Note:         note,
 		SourceURL:    sourceURL,
 		ImageURL:     image,
+		Estimated:    estimated && amount != "",
 	}
 	return PlanChatResult{Reply: reply, Draft: draft, ImageURL: image, Sources: sources}
+}
+
+// farApart reports whether a and b differ by more than frac of b.
+func farApart(a, b string, frac float64) bool {
+	x, err1 := decimal.NewFromString(a)
+	y, err2 := decimal.NewFromString(b)
+	if err1 != nil || err2 != nil || !y.GreaterThan(decimal.Zero) {
+		return false
+	}
+	return x.Sub(y).Abs().Div(y).GreaterThan(decimal.NewFromFloat(frac))
 }
 
 func parseDecision(raw string) planDecision {

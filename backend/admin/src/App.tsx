@@ -1,16 +1,30 @@
-import type { ReactNode } from 'react';
+import { lazy, Suspense, type ReactNode } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { Loader2 } from 'lucide-react';
 import { AuthProvider, useAuth } from './auth';
 import { AppShell } from './components/AppShell';
 import { LoginPage } from './pages/LoginPage';
-import { OverviewPage } from './pages/OverviewPage';
-import { UsersPage } from './pages/UsersPage';
-import { CategoriesPage } from './pages/CategoriesPage';
-import { ThemesPage } from './pages/ThemesPage';
-import { AuditPage } from './pages/AuditPage';
-import { SettingsPage } from './pages/SettingsPage';
-import { LocalizationPage } from './pages/LocalizationPage';
+
+// Each page loads only when opened, so the first screen (login) is small and fast.
+const OverviewPage = lazy(() => import('./pages/OverviewPage').then((m) => ({ default: m.OverviewPage })));
+const UsersPage = lazy(() => import('./pages/UsersPage').then((m) => ({ default: m.UsersPage })));
+const CategoriesPage = lazy(() => import('./pages/CategoriesPage').then((m) => ({ default: m.CategoriesPage })));
+const ThemesPage = lazy(() => import('./pages/ThemesPage').then((m) => ({ default: m.ThemesPage })));
+const AuditPage = lazy(() => import('./pages/AuditPage').then((m) => ({ default: m.AuditPage })));
+const SettingsPage = lazy(() => import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })));
+const LocalizationPage = lazy(() => import('./pages/LocalizationPage').then((m) => ({ default: m.LocalizationPage })));
+
+function PageLoader() {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}>
+      <Loader2 size={22} strokeWidth={2} className="spin" />
+    </div>
+  );
+}
+
+function page(el: ReactNode) {
+  return <Suspense fallback={<PageLoader />}>{el}</Suspense>;
+}
 
 function FullScreenLoader() {
   return (
@@ -42,14 +56,14 @@ function AppRoutes() {
           </RequireAuth>
         }
       >
-        <Route index element={<OverviewPage />} />
-        <Route path="users" element={<UsersPage />} />
-        <Route path="categories" element={<CategoriesPage />} />
-        <Route path="themes" element={<ThemesPage />} />
-        <Route path="audit" element={<AuditPage />} />
-        <Route path="settings" element={<SettingsPage />} />
+        <Route index element={page(<OverviewPage />)} />
+        <Route path="users" element={page(<UsersPage />)} />
+        <Route path="categories" element={page(<CategoriesPage />)} />
+        <Route path="themes" element={page(<ThemesPage />)} />
+        <Route path="audit" element={page(<AuditPage />)} />
+        <Route path="settings" element={page(<SettingsPage />)} />
         <Route path="roles" element={<Navigate to="/users?tab=roles" replace />} />
-        <Route path="localization" element={<LocalizationPage />} />
+        <Route path="localization" element={page(<LocalizationPage />)} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

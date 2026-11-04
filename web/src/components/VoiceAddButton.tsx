@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Mic } from 'lucide-react';
 import { api } from '../lib/api';
 import { Button } from './Button';
@@ -42,6 +42,14 @@ export function VoiceAddButton({ token, disabled, onDraft, onError }: Props) {
   const [recording, setRecording] = useState(false);
   const recRef = useRef<MediaRecorder | null>(null);
   const chunks = useRef<Blob[]>([]);
+  // Free users: captures left this month (null = unlimited or unknown).
+  const [left, setLeft] = useState<number | null>(null);
+  useEffect(() => {
+    api
+      .captureAllowance(token)
+      .then((r) => setLeft(r.allowance.unlimited ? null : Math.max(0, r.allowance.limit - r.allowance.used)))
+      .catch(() => setLeft(null));
+  }, [token, busy]);
 
   async function toggle() {
     if (disabled || busy) return;
@@ -106,6 +114,7 @@ export function VoiceAddButton({ token, disabled, onDraft, onError }: Props) {
     <Button variant="secondary" size="sm" onClick={() => void toggle()} disabled={disabled || busy}>
       <Mic size={14} />
       {busy ? 'Listening…' : recording ? 'Stop' : 'Say it'}
+      {left !== null && !busy && !recording ? <span className="muted" style={{ fontSize: 11 }}>· {left} left</span> : null}
     </Button>
   );
 }

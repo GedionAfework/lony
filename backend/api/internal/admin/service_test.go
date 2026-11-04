@@ -10,6 +10,8 @@ import (
 )
 
 type memStore struct {
+	// Store covers role-management methods these tests never call.
+	Store
 	role   string
 	users  map[uuid.UUID]UserDetail
 	audits []AuditEntry
@@ -126,3 +128,6 @@ func TestCannotSuspendAdmin(t *testing.T) {
 		t.Fatal("expected forbid suspending admin")
 	}
 }
+
+// CountSuperAdmins: the tests never remove the last super admin, so one is enough.
+func (m *memStore) CountSuperAdmins(context.Context) (int, error) { return 1, nil }

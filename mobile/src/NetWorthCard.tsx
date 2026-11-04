@@ -19,104 +19,216 @@ type Props = {
   onOpenAccounts?: () => void;
 };
 
-function Sparkline({ points, color }: { points: number[]; color: string; fill?: string }) {
+/**
+ * A smooth, continuous line through the points, with a soft fill under it. Drawn with plain
+ * Views: the curve is sampled (Catmull-Rom), each piece is a bar exactly as long as the gap
+ * between two samples, and round joints sit on every sample so neighbouring pieces meet.
+ */
+function Sparkline({
+  points,
+  color,
+  describe,
+}: {
+  points: number[];
+  color: string;
+  /** Text for a tapped point, e.g. "Oct 2026 · +ETB 1,200". */
+  describe?: (index: number) => string;
+}) {
   const h = 56;
+  const stroke = 3;
+  const [w, setW] = useState(0);
+  const [active, setActive] = useState<number | null>(null);
   if (points.length < 2) return <View style={{ height: h }} />;
+  const indexAt = (x: number) => Math.max(0, Math.min(points.length - 1, Math.round((x / Math.max(w, 1)) * (points.length - 1))));
   const min = Math.min(...points);
   const max = Math.max(...points);
   const span = Math.max(max - min, 1);
-  const ys = points.map((p) => h - 6 - ((p - min) / span) * (h - 12));
+  const pad = 6;
+  const raw = points.map((p, i) => ({
+    x: (i / (points.length - 1)) * w,
+    y: h - pad - ((p - min) / span) * (h - pad * 2),
+  }));
+  // Catmull-Rom through the points, clamped so the curve never leaves the chart.
+  const steps = 12;
+  const pts: { x: number; y: number }[] = [];
+  for (let i = 0; i < raw.length - 1; i++) {
+    const p0 = raw[i - 1] ?? raw[i];
+    const p1 = raw[i];
+    const p2 = raw[i + 1];
+    const p3 = raw[i + 2] ?? p2;
+    for (let k = 0; k < steps; k++) {
+      const t = k / steps;
+      const t2 = t * t;
+      const t3 = t2 * t;
+      const x = 0.5 * (2 * p1.x + (-p0.x + p2.x) * t + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3);
+      const y = 0.5 * (2 * p1.y + (-p0.y + p2.y) * t + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3);
+      pts.push({ x, y: Math.min(h - 2, Math.max(2, y)) });
+    }
+  }
+  pts.push(raw[raw.length - 1]);
+  const last = pts[pts.length - 1];
+  const sel = active != null ? raw[active] : null;
   return (
-    <View style={{ height: h, marginTop: 4, marginBottom: 4, overflow: 'hidden' }}>
-      {/* Soft fill under the line */}
-      <View style={{ position: 'absolute', left: 0, right: 0, bottom: 0, top: 0, flexDirection: 'row' }}>
-        {ys.map((y, i) => (
-          <View key={`f-${i}`} style={{ flex: 1, justifyContent: 'flex-end' }}>
+    <View style={{ gap: 6 }}>
+      <Text
+        numberOfLines={2}
+        style={{ color, opacity: active != null ? 1 : 0.75, fontFamily: active != null ? fonts.uiSemi : fonts.ui, fontSize: 12, minHeight: 16 }}
+      >
+        {active != null && describe ? describe(active) : 'Net per month · tap the line'}
+      </Text>
+    <View
+      style={{ height: h, marginVertical: 4 }}
+      onLayout={(e) => setW(e.nativeEvent.layout.width)}
+      onStartShouldSetResponder={() => true}
+      onMoveShouldSetResponder={() => true}
+      onResponderTerminationRequest={() => false}
+      onResponderGrant={(e) => setActive(indexAt(e.nativeEvent.locationX))}
+      onResponderMove={(e) => setActive(indexAt(e.nativeEvent.locationX))}
+      accessibilityRole="adjustable"
+      accessibilityLabel="Monthly net graph"
+      accessibilityValue={active != null && describe ? { text: describe(active) } : undefined}
+      onAccessibilityAction={(e) => {
+        const cur = active ?? points.length - 1;
+        if (e.nativeEvent.actionName === 'increment') setActive(Math.min(points.length - 1, cur + 1));
+        if (e.nativeEvent.actionName === 'decrement') setActive(Math.max(0, cur - 1));
+      }}
+      accessibilityActions={[{ name: 'increment' }, { name: 'decrement' }]}
+    >
+      {w > 0 ? (
+        <>
+          {/* Soft fill: thin columns that follow the curve */}
+          {pts.slice(0, -1).map((p, i) => {
+            const next = pts[i + 1];
+            return (
+              <View
+                key={`f-${i}`}
+                style={{
+                  position: 'absolute',
+                  left: p.x,
+                  width: Math.max(1, next.x - p.x + 0.5),
+                  top: (p.y + next.y) / 2,
+                  bottom: 0,
+                  backgroundColor: color,
+                  opacity: 0.12,
+                }}
+              />
+            );
+          })}
+          {/* The line: one bar per piece, rotated about its own centre */}
+          {pts.slice(0, -1).map((p, i) => {
+            const next = pts[i + 1];
+            const dx = next.x - p.x;
+            const dy = next.y - p.y;
+            const len = Math.hypot(dx, dy);
+            return (
+              <View
+                key={`s-${i}`}
+                style={{
+                  position: 'absolute',
+                  left: (p.x + next.x) / 2 - len / 2,
+                  top: (p.y + next.y) / 2 - stroke / 2,
+                  width: len + 0.5,
+                  height: stroke,
+                  backgroundColor: color,
+                  transform: [{ rotate: `${Math.atan2(dy, dx)}rad` }],
+                }}
+              />
+            );
+          })}
+          {/* Round joints so the pieces read as one line */}
+          {pts.map((p, i) => (
             <View
-              style={{
-                height: Math.max(4, h - y),
-                backgroundColor: color,
-                opacity: 0.08 + (i / Math.max(ys.length - 1, 1)) * 0.12,
-              }}
-            />
-          </View>
-        ))}
-      </View>
-      {/* Segmented polyline */}
-      <View style={{ position: 'absolute', left: 0, right: 0, top: 0, bottom: 0 }}>
-        {ys.slice(0, -1).map((y, i) => {
-          const y2 = ys[i + 1] ?? y;
-          const midY = (y + y2) / 2;
-          const dy = y2 - y;
-          const angle = (Math.atan2(dy, 100 / Math.max(points.length - 1, 1)) * 180) / Math.PI;
-          return (
-            <View
-              key={`s-${i}`}
+              key={`j-${i}`}
               style={{
                 position: 'absolute',
-                left: `${(i / Math.max(points.length - 1, 1)) * 100}%`,
-                width: `${100 / Math.max(points.length - 1, 1)}%`,
-                top: midY - 1.5,
-                height: 3,
+                left: p.x - stroke / 2,
+                top: p.y - stroke / 2,
+                width: stroke,
+                height: stroke,
+                borderRadius: stroke / 2,
                 backgroundColor: color,
-                borderRadius: 2,
-                transform: [{ rotate: `${angle * 0.35}deg` }],
-                opacity: 0.85 + (i / Math.max(points.length - 2, 1)) * 0.15,
               }}
             />
-          );
-        })}
-        {/* End dot */}
-        <View
-          style={{
-            position: 'absolute',
-            right: 0,
-            top: (ys[ys.length - 1] ?? h / 2) - 4,
-            width: 8,
-            height: 8,
-            borderRadius: 4,
-            backgroundColor: color,
-          }}
-        />
-      </View>
+          ))}
+          {sel ? (
+            <>
+              <View
+                pointerEvents="none"
+                style={{ position: 'absolute', left: sel.x - 0.75, top: 0, bottom: 0, width: 1.5, backgroundColor: color, opacity: 0.5 }}
+              />
+              <View
+                pointerEvents="none"
+                style={{
+                  position: 'absolute',
+                  left: sel.x - 7,
+                  top: sel.y - 7,
+                  width: 14,
+                  height: 14,
+                  borderRadius: 7,
+                  backgroundColor: color,
+                  borderWidth: 3,
+                  borderColor: 'rgba(255,255,255,0.35)',
+                }}
+              />
+            </>
+          ) : (
+            <View
+              style={{
+                position: 'absolute',
+                left: last.x - 5,
+                top: last.y - 5,
+                width: 10,
+                height: 10,
+                borderRadius: 5,
+                backgroundColor: color,
+              }}
+            />
+          )}
+        </>
+      ) : null}
+    </View>
     </View>
   );
 }
 
-function MiniStat({
-  label,
-  value,
-  onPress,
-  tone,
-}: {
-  label: string;
-  value: string;
-  onPress: () => void;
-  tone?: 'positive' | 'negative';
-}) {
+/** "2026-10" or "2026-10-01" → "Oct 2026". */
+function monthLabel(raw: string, locale?: string | null): string {
+  const m = /^(\d{4})-(\d{2})/.exec(raw || '');
+  if (!m) return raw;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, 1);
+  try {
+    return d.toLocaleDateString(locale || undefined, { month: 'short', year: 'numeric' });
+  } catch {
+    return `${m[2]}/${m[1]}`;
+  }
+}
+
+/** A tappable figure on the hero card: label over value, on a translucent tile. */
+function MiniStat({ label, value, onPress }: { label: string; value: string; onPress: () => void }) {
   const { colors } = useTheme();
-  const fg = tone === 'positive' ? colors.success : tone === 'negative' ? colors.warning : colors.text;
   return (
     <Pressable
       onPress={onPress}
       style={{
-        flexGrow: 1,
-        minWidth: '30%',
-        backgroundColor: colors.surfaceMuted,
+        flex: 1,
+        backgroundColor: HERO_TILE,
         borderRadius: radii.md,
-        padding: 12,
-        gap: 4,
-        borderWidth: 1,
-        borderColor: colors.border,
+        paddingVertical: 10,
+        paddingHorizontal: 10,
+        gap: 3,
       }}
     >
-      <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 11 }}>{label}</Text>
-      <Text style={{ color: fg, fontFamily: fonts.uiSemi, fontSize: 14 }} numberOfLines={1}>
+      <Text style={{ color: colors.onPrimary, opacity: 0.8, fontFamily: fonts.ui, fontSize: 11 }} numberOfLines={1}>
+        {label}
+      </Text>
+      <Text style={{ color: colors.onPrimary, fontFamily: fonts.uiSemi, fontSize: 13 }} numberOfLines={1} adjustsFontSizeToFit>
         {value}
       </Text>
     </Pressable>
   );
 }
+
+const HERO_TILE = 'rgba(255,255,255,0.16)';
 
 export function NetWorthCard({ token, wealth, currency, locale, formatMoney, onOpenAccounts }: Props) {
   const { colors } = useTheme();
@@ -125,7 +237,10 @@ export function NetWorthCard({ token, wealth, currency, locale, formatMoney, onO
   const [series, setSeries] = useState<InsightsMonthPoint[]>([]);
 
   const accounts = wealth?.accounts ?? [];
-  const slice = wealth?.by_currency?.find((s) => s.currency_code.toUpperCase() === currency.toUpperCase());
+  // With several currencies the server adds them all up in the preferred currency; use that
+  // total rather than the slice of one currency.
+  const useTotal = Boolean(wealth?.converted) && (wealth?.preferred_currency || '').toUpperCase() === currency.toUpperCase();
+  const slice = useTotal ? undefined : wealth?.by_currency?.find((s) => s.currency_code.toUpperCase() === currency.toUpperCase());
   const net = slice?.net_worth ?? wealth?.live_net_worth ?? wealth?.net_worth ?? '0';
   const cash = slice?.cash_on_hand ?? wealth?.cash_on_hand ?? '0';
   const recv = slice?.receivables ?? wealth?.receivables ?? '0';
@@ -178,29 +293,29 @@ export function NetWorthCard({ token, wealth, currency, locale, formatMoney, onO
     <>
       <View
         style={{
-          backgroundColor: colors.surface,
-          borderRadius: radii.xl,
+          backgroundColor: colors.primary,
+          borderRadius: 24,
           padding: space.lg,
           gap: 12,
-          borderWidth: 1,
-          borderColor: colors.border,
-          shadowColor: '#000',
-          shadowOpacity: 0.06,
-          shadowRadius: 16,
-          shadowOffset: { width: 0, height: 6 },
-          elevation: 3,
+          overflow: 'hidden',
+          shadowColor: colors.primary,
+          shadowOpacity: 0.3,
+          shadowRadius: 18,
+          shadowOffset: { width: 0, height: 8 },
+          elevation: 6,
         }}
       >
+        {/* Soft decorative circles */}
+        <View
+          pointerEvents="none"
+          style={{ position: 'absolute', width: 220, height: 220, borderRadius: 110, right: -70, top: -90, backgroundColor: 'rgba(255,255,255,0.10)' }}
+        />
+        <View
+          pointerEvents="none"
+          style={{ position: 'absolute', width: 140, height: 140, borderRadius: 70, left: -50, bottom: -60, backgroundColor: 'rgba(255,255,255,0.07)' }}
+        />
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-          <Text
-            style={{
-              color: colors.muted,
-              fontFamily: fonts.uiSemi,
-              fontSize: 12,
-              letterSpacing: 1,
-              textTransform: 'uppercase',
-            }}
-          >
+          <Text style={{ color: colors.onPrimary, opacity: 0.85, fontFamily: fonts.uiSemi, fontSize: 14 }}>
             {t(locale, 'wealth.totalBalance')}
           </Text>
           <Pressable
@@ -213,21 +328,31 @@ export function NetWorthCard({ token, wealth, currency, locale, formatMoney, onO
               borderRadius: 18,
               alignItems: 'center',
               justifyContent: 'center',
-              backgroundColor: colors.surfaceMuted,
+              backgroundColor: HERO_TILE,
             }}
           >
-            <FontAwesome name={hidden ? 'eye-slash' : 'eye'} size={16} color={colors.muted} />
+            <FontAwesome name={hidden ? 'eye-slash' : 'eye'} size={16} color={colors.onPrimary} />
           </Pressable>
         </View>
 
         <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
-          <Text style={{ color: colors.success, fontFamily: fonts.uiBold, fontSize: 22 }}>
+          <Text style={{ color: colors.onPrimary, opacity: 0.8, fontFamily: fonts.uiSemi, fontSize: 18 }}>
             {(currency || 'USD').toUpperCase()}
           </Text>
-          <Text style={{ color: colors.text, fontFamily: fonts.uiBold, fontSize: 32 }} numberOfLines={1}>
+          <Text
+            style={{ color: colors.onPrimary, fontFamily: fonts.uiBold, fontSize: 36, letterSpacing: -0.5, flexShrink: 1 }}
+            numberOfLines={1}
+            adjustsFontSizeToFit
+          >
             {hidden ? '••••••' : formatMoneyAmount(net, locale ?? 'en')}
           </Text>
         </View>
+        {useTotal ? (
+          <Text style={{ color: colors.onPrimary, opacity: 0.75, fontFamily: fonts.ui, fontSize: 12 }}>
+            All currencies at today's rate
+            {wealth?.missing_rates?.length ? ` · not included (no rate): ${wealth.missing_rates.join(', ')}` : ''}
+          </Text>
+        ) : null}
 
         {momPct != null && Number.isFinite(momPct) ? (
           <View
@@ -239,17 +364,13 @@ export function NetWorthCard({ token, wealth, currency, locale, formatMoney, onO
               paddingHorizontal: 10,
               paddingVertical: 5,
               borderRadius: radii.full,
-              backgroundColor: momPct >= 0 ? colors.successSoft : colors.warningSoft,
+              backgroundColor: HERO_TILE,
             }}
           >
-            <FontAwesome
-              name={momPct >= 0 ? 'arrow-up' : 'arrow-down'}
-              size={11}
-              color={momPct >= 0 ? colors.success : colors.warning}
-            />
+            <FontAwesome name={momPct >= 0 ? 'arrow-up' : 'arrow-down'} size={11} color={colors.onPrimary} />
             <Text
               style={{
-                color: momPct >= 0 ? colors.success : colors.warning,
+                color: colors.onPrimary,
                 fontFamily: fonts.uiSemi,
                 fontSize: 12,
               }}
@@ -261,26 +382,34 @@ export function NetWorthCard({ token, wealth, currency, locale, formatMoney, onO
         ) : null}
 
         {nets.length > 1 ? (
-          <Sparkline points={nets} color={colors.success} fill={colors.warning} />
-        ) : (
-          <View style={{ height: 24 }} />
-        )}
+          <Sparkline
+            points={nets}
+            color={colors.onPrimary}
+            describe={(i) => {
+              const pt = series[i];
+              if (!pt) return '';
+              const net = nets[i] ?? 0;
+              const fmt = (v: string | number) => mask(formatMoney(String(v), currency, locale ?? undefined));
+              return `${monthLabel(pt.month, locale)} · ${net >= 0 ? '+' : ''}${fmt(net.toFixed(2))} · in ${fmt(pt.income)} · out ${fmt(pt.expense)}`;
+            }}
+          />
+        ) : null}
 
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
-          <MiniStat label={t(locale, 'wealth.cash')} value={money(cash)} tone="positive" onPress={() => setModal('cash')} />
-          <MiniStat label={t(locale, 'wealth.owedToYou')} value={money(recv)} tone="positive" onPress={() => setModal('recv')} />
-          <MiniStat label={t(locale, 'wealth.youOwe')} value={money(pay)} tone="negative" onPress={() => setModal('pay')} />
+        <View style={{ flexDirection: 'row', gap: 8 }}>
+          <MiniStat label={t(locale, 'wealth.cash')} value={money(cash)} onPress={() => setModal('cash')} />
+          <MiniStat label={t(locale, 'wealth.owedToYou')} value={money(recv)} onPress={() => setModal('recv')} />
+          <MiniStat label={t(locale, 'wealth.youOwe')} value={money(pay)} onPress={() => setModal('pay')} />
         </View>
 
         <Pressable
           onPress={() => setModal('institutions')}
           style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 2 }}
         >
-          <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
+          <Text style={{ color: colors.onPrimary, opacity: 0.8, fontFamily: fonts.ui, fontSize: 13 }}>
             {institutions.length} {t(locale, 'wealth.institutions')} · {accounts.length} {t(locale, 'wealth.accounts')}
           </Text>
-          <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 13 }}>
-            {t(locale, 'wealth.details')}
+          <Text style={{ color: colors.onPrimary, fontFamily: fonts.uiSemi, fontSize: 13 }}>
+            {t(locale, 'wealth.details')} ›
           </Text>
         </Pressable>
       </View>

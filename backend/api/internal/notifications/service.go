@@ -110,6 +110,17 @@ func (s *Service) Notify(ctx context.Context, userID uuid.UUID, typ string, loan
 	return err
 }
 
+// Push sends a phone notification without adding it to the in-app inbox (chat messages
+// already have their own list).
+func (s *Service) Push(ctx context.Context, userID uuid.UUID, title, body string, payload map[string]any) error {
+	tokens, err := s.store.ListEnabledTokens(ctx, userID)
+	if err != nil || len(tokens) == 0 {
+		return err
+	}
+	s.push.Send(ctx, tokens, PushMessage{Title: title, Body: body, Data: stringMap(payload)})
+	return nil
+}
+
 func (s *Service) ScheduleLoanReminders(ctx context.Context, loan loans.Record) error {
 	if loan.LoanKind == loans.KindLongTerm {
 		return s.scheduleInstallmentReminders(ctx, loan)

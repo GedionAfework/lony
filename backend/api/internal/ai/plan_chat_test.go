@@ -81,3 +81,18 @@ func TestLastAssistantAsked(t *testing.T) {
 		t.Fatal("should notice the previous question")
 	}
 }
+
+func TestParseDecision_Options(t *testing.T) {
+	d := parseDecision(`{"action":"ask","reply":"Which Toyota?","query":"Toyota 2025 price","options":["Toyota RAV4 2025","Toyota Corolla 2025"]}`)
+	if d.Action != "ask" {
+		t.Fatalf("action = %q", d.Action)
+	}
+	if got := asStrings(d.Options); len(got) != 2 || got[0] != "Toyota RAV4 2025" {
+		t.Fatalf("options = %v", got)
+	}
+	// A single string instead of a list still counts, and never breaks the decision.
+	d = parseDecision(`{"action":"ask","reply":"Which one?","options":"Small yacht"}`)
+	if d.Action != "ask" || len(asStrings(d.Options)) != 1 {
+		t.Fatalf("loose options: action=%q options=%v", d.Action, asStrings(d.Options))
+	}
+}

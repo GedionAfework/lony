@@ -165,7 +165,8 @@ func (s *SQLStore) GetMemberLastRead(ctx context.Context, conversationID, userID
 }
 
 func (s *SQLStore) MoveMessages(ctx context.Context, fromID, toID uuid.UUID) error {
-	_, err := s.pool.Exec(ctx, `UPDATE messages SET conversation_id=$2 WHERE conversation_id=$1`, fromID, toID)
+	// updated_at moves so open threads pick the moved messages up on their next poll.
+	_, err := s.pool.Exec(ctx, `UPDATE messages SET conversation_id=$2, updated_at=now() WHERE conversation_id=$1`, fromID, toID)
 	return err
 }
 
@@ -227,7 +228,7 @@ func (s *SQLStore) InsertMessage(ctx context.Context, msg chat.Message) (chat.Me
 	) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 	RETURNING id, conversation_id, sender_id, body, reply_to_message_id,
 		attachment_kind, attachment_name, attachment_mime, attachment_size,
-		attachment_object_key, voice_duration_ms, created_at`
+		attachment_object_key, voice_duration_ms, created_at, updated_at`
 	var out chat.Message
 	err := s.pool.QueryRow(ctx, q,
 		msg.ConversationID, msg.SenderID, msg.Body, msg.ReplyToMessageID,
@@ -236,7 +237,7 @@ func (s *SQLStore) InsertMessage(ctx context.Context, msg chat.Message) (chat.Me
 	).Scan(
 		&out.ID, &out.ConversationID, &out.SenderID, &out.Body, &out.ReplyToMessageID,
 		&out.AttachmentKind, &out.AttachmentName, &out.AttachmentMIME, &out.AttachmentSize,
-		&out.AttachmentObjectKey, &out.VoiceDurationMs, &out.CreatedAt,
+		&out.AttachmentObjectKey, &out.VoiceDurationMs, &out.CreatedAt, &out.UpdatedAt,
 	)
 	return out, err
 }
@@ -244,27 +245,57 @@ func (s *SQLStore) InsertMessage(ctx context.Context, msg chat.Message) (chat.Me
 func (s *SQLStore) GetMessage(ctx context.Context, id uuid.UUID) (chat.Message, error) {
 	const q = `SELECT id, conversation_id, sender_id, body, reply_to_message_id,
 		attachment_kind, attachment_name, attachment_mime, attachment_size,
-		attachment_object_key, voice_duration_ms, created_at
+		attachment_object_key, voice_duration_ms, created_at, updated_at
 		FROM messages WHERE id=$1 AND deleted_at IS NULL`
 	var out chat.Message
 	err := s.pool.QueryRow(ctx, q, id).Scan(
 		&out.ID, &out.ConversationID, &out.SenderID, &out.Body, &out.ReplyToMessageID,
 		&out.AttachmentKind, &out.AttachmentName, &out.AttachmentMIME, &out.AttachmentSize,
-		&out.AttachmentObjectKey, &out.VoiceDurationMs, &out.CreatedAt,
+		&out.AttachmentObjectKey, &out.VoiceDurationMs, &out.CreatedAt, &out.UpdatedAt,
 	)
 	return out, err
 }
 
-func (s *SQLStore) ListMessages(ctx context.Context, conversationID uuid.UUID, after *time.Time, limit int32) ([]chat.Message, error) {
-	const q = `SELECT id, conversation_id, sender_id, body, reply_to_message_id,
+func (s *SQLStore) ListMessages(ctx context.Context, conversationID uuid.UUID, mq chat.MessageQuery) ([]chat.Message, time.Time, error) {
+	const cols = `id, conversation_id, sender_id, body, reply_to_message_id,
 		attachment_kind, attachment_name, attachment_mime, attachment_size,
-		attachment_object_key, voice_duration_ms, created_at
-		FROM messages
-		WHERE conversation_id=$1 AND deleted_at IS NULL AND ($2::timestamptz IS NULL OR created_at > $2)
-		ORDER BY created_at ASC LIMIT $3`
-	rows, err := s.pool.Query(ctx, q, conversationID, after, limit)
+		attachment_object_key, voice_duration_ms, created_at, updated_at, deleted_at`
+	var q string
+	var args []any
+	newestFirst := false
+	switch {
+	case mq.Since != nil:
+		// Everything that changed, deleted rows included so the app can remove them.
+		q = `SELECT ` + cols + ` FROM messages
+			WHERE conversation_id=$1 AND updated_at > $2
+			ORDER BY updated_at ASC, id ASC LIMIT $3`
+		args = []any{conversationID, mq.Since.Add(-chat.SinceOverlap), mq.Limit}
+	case mq.After != nil:
+		q = `SELECT ` + cols + ` FROM messages
+			WHERE conversation_id=$1 AND deleted_at IS NULL AND created_at > $2
+			ORDER BY created_at ASC, id ASC LIMIT $3`
+		args = []any{conversationID, *mq.After, mq.Limit}
+	case mq.Before != nil:
+		newestFirst = true
+		q = `SELECT ` + cols + ` FROM messages
+			WHERE conversation_id=$1 AND deleted_at IS NULL
+			  AND (created_at < $2 OR (created_at = $2 AND $3::uuid IS NOT NULL AND id < $3))
+			ORDER BY created_at DESC, id DESC LIMIT $4`
+		args = []any{conversationID, *mq.Before, mq.BeforeID, mq.Limit}
+	default:
+		newestFirst = true
+		q = `SELECT ` + cols + ` FROM messages
+			WHERE conversation_id=$1 AND deleted_at IS NULL
+			ORDER BY created_at DESC, id DESC LIMIT $2`
+		args = []any{conversationID, mq.Limit}
+	}
+	var dbNow time.Time
+	if err := s.pool.QueryRow(ctx, `SELECT now()`).Scan(&dbNow); err != nil {
+		return nil, time.Time{}, err
+	}
+	rows, err := s.pool.Query(ctx, q, args...)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	defer rows.Close()
 	out := []chat.Message{}
@@ -273,25 +304,33 @@ func (s *SQLStore) ListMessages(ctx context.Context, conversationID uuid.UUID, a
 		if err := rows.Scan(
 			&m.ID, &m.ConversationID, &m.SenderID, &m.Body, &m.ReplyToMessageID,
 			&m.AttachmentKind, &m.AttachmentName, &m.AttachmentMIME, &m.AttachmentSize,
-			&m.AttachmentObjectKey, &m.VoiceDurationMs, &m.CreatedAt,
+			&m.AttachmentObjectKey, &m.VoiceDurationMs, &m.CreatedAt, &m.UpdatedAt, &m.DeletedAt,
 		); err != nil {
-			return nil, err
+			return nil, time.Time{}, err
 		}
 		out = append(out, m)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, time.Time{}, err
+	}
+	if newestFirst {
+		for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+			out[i], out[j] = out[j], out[i]
+		}
+	}
+	return out, dbNow, nil
 }
 
 func (s *SQLStore) SoftDeleteMessage(ctx context.Context, id, senderID uuid.UUID) (chat.Message, error) {
-	const q = `UPDATE messages SET deleted_at=now() WHERE id=$1 AND sender_id=$2 AND deleted_at IS NULL
+	const q = `UPDATE messages SET deleted_at=now(), updated_at=now() WHERE id=$1 AND sender_id=$2 AND deleted_at IS NULL
 		RETURNING id, conversation_id, sender_id, body, reply_to_message_id,
 		attachment_kind, attachment_name, attachment_mime, attachment_size,
-		attachment_object_key, voice_duration_ms, created_at`
+		attachment_object_key, voice_duration_ms, created_at, updated_at`
 	var out chat.Message
 	err := s.pool.QueryRow(ctx, q, id, senderID).Scan(
 		&out.ID, &out.ConversationID, &out.SenderID, &out.Body, &out.ReplyToMessageID,
 		&out.AttachmentKind, &out.AttachmentName, &out.AttachmentMIME, &out.AttachmentSize,
-		&out.AttachmentObjectKey, &out.VoiceDurationMs, &out.CreatedAt,
+		&out.AttachmentObjectKey, &out.VoiceDurationMs, &out.CreatedAt, &out.UpdatedAt,
 	)
 	return out, err
 }
@@ -302,11 +341,22 @@ func (s *SQLStore) UpsertReaction(ctx context.Context, messageID, userID uuid.UU
 		RETURNING message_id, user_id, emoji, created_at`
 	var r chat.Reaction
 	err := s.pool.QueryRow(ctx, q, messageID, userID, emoji).Scan(&r.MessageID, &r.UserID, &r.Emoji, &r.CreatedAt)
-	return r, err
+	if err != nil {
+		return r, err
+	}
+	return r, touchMessage(ctx, s, messageID)
 }
 
 func (s *SQLStore) DeleteReaction(ctx context.Context, messageID, userID uuid.UUID, emoji string) error {
-	_, err := s.pool.Exec(ctx, `DELETE FROM message_reactions WHERE message_id=$1 AND user_id=$2 AND emoji=$3`, messageID, userID, emoji)
+	if _, err := s.pool.Exec(ctx, `DELETE FROM message_reactions WHERE message_id=$1 AND user_id=$2 AND emoji=$3`, messageID, userID, emoji); err != nil {
+		return err
+	}
+	return touchMessage(ctx, s, messageID)
+}
+
+// touchMessage marks a message changed so the other person's next poll picks it up.
+func touchMessage(ctx context.Context, s *SQLStore, messageID uuid.UUID) error {
+	_, err := s.pool.Exec(ctx, `UPDATE messages SET updated_at=now() WHERE id=$1`, messageID)
 	return err
 }
 

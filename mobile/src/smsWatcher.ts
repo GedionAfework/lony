@@ -1,13 +1,15 @@
 import { AppState, Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import { getSmsAutoImportEnabled, syncBankSms } from './smsAutoIngest';
+import { rememberSmsContext } from './smsIncoming';
 
 const HOUR_KEY = 'lony.sms_checkup_hour';
 const MINUTE_KEY = 'lony.sms_checkup_minute';
 const DAILY_ID = 'lony.sms.daily';
 const DEFAULT_HOUR = 8;
 const DEFAULT_MINUTE = 0;
-const LIVE_POLL_MS = 8_000;
+// New SMS arrive through the native receiver; this poll is the fallback while the app is open.
+const LIVE_POLL_MS = 30_000;
 
 export type SmsWatchCallbacks = {
   token: string;
@@ -82,8 +84,8 @@ export async function scheduleDailySmsCheckup(hour?: number, minute?: number): P
   await Notifications.scheduleNotificationAsync({
     identifier: DAILY_ID,
     content: {
-      title: 'Daily message checkup',
-      body: `Scanning bank SMS at ${hh}:${mm}.`,
+      title: 'Bank messages',
+      body: `Tap to check today's bank messages (${hh}:${mm} reminder).`,
       data: { type: 'sms_daily_checkup' },
     },
     trigger: {
@@ -112,7 +114,6 @@ async function pollInboxOnce(forceDaily = false): Promise<void> {
     const res = await syncBankSms(liveOpts.token, undefined, {
       force: forceDaily,
       userId: liveOpts.userId,
-      maxCount: forceDaily ? 200 : 30,
       defaultCurrency: liveOpts.defaultCurrency || 'USD',
     });
     if (res.imported > 0 || res.accountsAdded > 0 || (res.balancesUpdated ?? 0) > 0) {
@@ -148,6 +149,7 @@ function stopPolling(): void {
 export function startLiveSmsWatch(opts: SmsWatchCallbacks): void {
   stopLiveSmsWatch();
   liveOpts = opts;
+  void rememberSmsContext({ userId: opts.userId, defaultCurrency: opts.defaultCurrency });
   startPolling();
   liveAppSub = AppState.addEventListener('change', (next) => {
     if (next === 'active') {

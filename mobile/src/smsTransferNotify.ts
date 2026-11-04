@@ -137,3 +137,113 @@ function cpBit(input: SmsTransferNotifyInput): string {
   if (!cp) return '';
   return input.kind === 'income' ? ` from ${cp}` : ` to ${cp}`;
 }
+
+/** What the server actually saved for one SMS (not the phone's guess). */
+export type SmsSavedNotice = {
+  kind: 'income' | 'expense';
+  amount: string;
+  currency: string;
+  title: string;
+  accountId: string;
+  accountName: string;
+  when: number;
+};
+
+function money(amount: string, currency: string): string {
+  const n = Number(amount);
+  const text = Number.isFinite(n) ? n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : amount;
+  return currency ? `${currency} ${text}` : text;
+}
+
+/**
+ * One notification for what a sync saved: the transfer itself when there is one, a
+ * summary when several arrive together (e.g. after the phone was offline).
+ */
+export async function notifySmsSaved(notices: SmsSavedNotice[]): Promise<void> {
+  if (Platform.OS === 'web' || !notices.length) return;
+  const ok = await ensureSmsNotificationPermission();
+  if (!ok) return;
+  const Notifications = await notificationsModule();
+  if (!Notifications) return;
+
+  if (notices.length === 1) {
+    const n = notices[0];
+    const payload: SmsTransferNotifyPayload = {
+      type: 'sms_transfer',
+      kind: n.kind,
+      amount: n.amount,
+      currency_code: n.currency,
+      title: n.title,
+      note: n.accountName,
+      account_id: n.accountId,
+      open_form: '0',
+    };
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: n.kind === 'income' ? `Money received · ${money(n.amount, n.currency)}` : `Money sent · ${money(n.amount, n.currency)}`,
+        body: `${n.title} · saved to ${n.accountName}`,
+        data: payload,
+        sound: true,
+      },
+      trigger: null,
+    });
+    return;
+  }
+
+  const totals = new Map<string, { in: number; out: number }>();
+  for (const n of notices) {
+    const t = totals.get(n.currency) || { in: 0, out: 0 };
+    if (n.kind === 'income') t.in += Number(n.amount) || 0;
+    else t.out += Number(n.amount) || 0;
+    totals.set(n.currency, t);
+  }
+  const parts: string[] = [];
+  for (const [cur, t] of totals) {
+    if (t.in) parts.push(`+${money(String(t.in), cur)} in`);
+    if (t.out) parts.push(`−${money(String(t.out), cur)} out`);
+  }
+  const allIncome = notices.every((n) => n.kind === 'income');
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: `${notices.length} transfers saved`,
+      body: parts.join(' · '),
+      data: {
+        type: 'sms_transfer',
+        kind: allIncome ? 'income' : 'expense',
+        amount: '',
+        currency_code: '',
+        title: '',
+        note: '',
+        open_form: '0',
+      },
+      sound: true,
+    },
+    trigger: null,
+  });
+}
+
+/** Tells the user when bank messages or accounts wait for their answer. */
+export async function notifySmsNeedsReview(messages: number, accounts: number): Promise<void> {
+  if (Platform.OS === 'web' || (!messages && !accounts)) return;
+  const ok = await ensureSmsNotificationPermission();
+  if (!ok) return;
+  const Notifications = await notificationsModule();
+  if (!Notifications) return;
+  const bits = [
+    messages ? `${messages} bank message${messages === 1 ? '' : 's'} to check` : null,
+    accounts ? `${accounts} account${accounts === 1 ? '' : 's'} found in your SMS` : null,
+  ].filter(Boolean);
+  await Notifications.scheduleNotificationAsync({
+    content: {
+      title: 'Needs a quick look',
+      body: `${bits.join(' · ')}. Open Home to confirm.`,
+      data: { type: 'sms_review' },
+      sound: false,
+    },
+    trigger: null,
+  });
+}
+
+export function isSmsReviewNotification(data: Record<string, unknown> | undefined | null): boolean {
+  return data?.type === 'sms_review';
+}

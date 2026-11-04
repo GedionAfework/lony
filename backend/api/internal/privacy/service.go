@@ -28,7 +28,9 @@ type ExportBundle struct {
 	Repayments      []map[string]any `json:"repayments"`
 	AIInsights      []map[string]any `json:"ai_insights"`
 	AIConversations []map[string]any `json:"ai_conversations,omitempty"`
-	Trust           map[string]any   `json:"trust,omitempty"`
+	// SMSImports: bank SMS excerpts the app imported, and what was read from them.
+	SMSImports []map[string]any `json:"sms_imports,omitempty"`
+	Trust      map[string]any   `json:"trust,omitempty"`
 }
 
 type Store interface {

@@ -3,7 +3,6 @@ package expenses
 import (
 	"context"
 	"encoding/base64"
-	"errors"
 	"net/http"
 	"regexp"
 	"strings"
@@ -35,6 +34,16 @@ type VoiceParser interface {
 	ParseVoiceText(ctx context.Context, userID uuid.UUID, transcript string, categories []string) (VoiceExtract, error)
 }
 
+// CaptureGate meters voice/receipt captures (free users get a monthly allowance).
+type CaptureGate interface {
+	BeginCapture(ctx context.Context, userID uuid.UUID) error
+	FinishCapture(ctx context.Context, userID uuid.UUID) error
+}
+
+func (s *Service) SetCaptureGate(g CaptureGate) {
+	s.capture = g
+}
+
 func (s *Service) SetVoice(v VoiceParser) {
 	s.voice = v
 }
@@ -47,6 +56,17 @@ type VoiceParseInput struct {
 
 func (s *Service) ParseVoice(ctx context.Context, userID uuid.UUID, in VoiceParseInput) (VoiceExtract, error) {
 	transcript := strings.TrimSpace(in.Text)
+	// Audio needs AI and a capture from the allowance. Typed text falls back to the
+	// rule-based parser when no capture is left.
+	useAI := s.voice != nil
+	if s.capture != nil {
+		if err := s.capture.BeginCapture(ctx, userID); err != nil {
+			if transcript == "" {
+				return VoiceExtract{}, err
+			}
+			useAI = false
+		}
+	}
 	if transcript == "" {
 		raw, err := decodeVoiceAudio(in.Mime, in.AudioBase64)
 		if err != nil {
@@ -80,16 +100,14 @@ func (s *Service) ParseVoice(ctx context.Context, userID uuid.UUID, in VoicePars
 	}
 
 	out := ParseVoiceFallback(transcript)
-	if s.voice != nil {
+	if useAI {
 		refined, err := s.voice.ParseVoiceText(ctx, userID, transcript, names)
-		if err != nil {
-			var api *httpx.APIError
-			if errors.As(err, &api) && api.Code == "AI_PREMIUM_REQUIRED" {
-				return VoiceExtract{}, err
-			}
-		} else if refined.Amount != "" {
+		if err == nil && refined.Amount != "" {
 			refined.Transcript = transcript
 			out = refined
+		}
+		if s.capture != nil {
+			_ = s.capture.FinishCapture(ctx, userID)
 		}
 	}
 	out.Transcript = transcript

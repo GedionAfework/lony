@@ -38,6 +38,7 @@ type Config struct {
 	OpenAIBaseURL       string
 	OpenAIModel         string
 	AIDailyUserCap      int
+	FreeCapturesMonth   int
 	PlaidClientID       string
 	PlaidSecret         string
 	PlaidEnv            string
@@ -75,6 +76,7 @@ func Load() (Config, error) {
 		OpenAIBaseURL:       strings.TrimRight(getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"), "/"),
 		OpenAIModel:         getenv("OPENAI_MODEL", "gpt-4o-mini"),
 		AIDailyUserCap:      intEnv("AI_DAILY_USER_CAP", 40),
+		FreeCapturesMonth:   intEnv("FREE_CAPTURES_PER_MONTH", 30),
 		PlaidClientID:       strings.TrimSpace(os.Getenv("PLAID_CLIENT_ID")),
 		PlaidSecret:         strings.TrimSpace(os.Getenv("PLAID_SECRET")),
 		PlaidEnv:            getenv("PLAID_ENV", "sandbox"),

@@ -41,8 +41,11 @@ type Goal struct {
 	UpdatedAt       time.Time
 
 	SourceURL          *string
+	// LastSeenPrice is the listing's own price, in SourceCurrency (or the goal currency when
+	// SourceCurrency is unset). The target is that price converted to the goal currency.
 	LastSeenPrice      *decimal.Decimal
 	LastPriceCheckedAt *time.Time
+	SourceCurrency     *string
 }
 
 type PriceHistory struct {
@@ -143,6 +146,9 @@ type CreateInput struct {
 	SourceURL          *string
 	LastSeenPrice      *string
 	LastPriceCheckedAt *time.Time
+	// SourceCurrency is the currency of LastSeenPrice when the listing is priced in
+	// another currency than the goal.
+	SourceCurrency *string
 }
 
 type UpdateInput struct {

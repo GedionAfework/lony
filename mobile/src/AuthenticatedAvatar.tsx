@@ -26,38 +26,29 @@ export function AuthenticatedAvatar({
   style,
 }: Props) {
   const { colors } = useTheme();
-  const [remoteUri, setRemoteUri] = useState<string | null>(null);
+  const url = mediaURL(path);
+  // A picture seen before shows on the first frame: no placeholder flash.
+  const [remoteUri, setRemoteUri] = useState<string | null>(() => (url ? memory.get(url) ?? null : null));
 
   useEffect(() => {
     let cancelled = false;
-    let objectUrl: string | null = null;
-    setRemoteUri(null);
-    const url = mediaURL(path);
-    if (!url) return;
-
-    (async () => {
-      try {
-        if (!token) {
-          if (!cancelled) setRemoteUri(url);
-          return;
-        }
-        const loaded = await loadAuthenticatedImage(url, token);
-        if (cancelled) {
-          if (loaded?.objectUrl) URL.revokeObjectURL(loaded.objectUrl);
-          return;
-        }
-        if (loaded?.objectUrl) objectUrl = loaded.objectUrl;
-        if (loaded?.uri) setRemoteUri(loaded.uri);
-      } catch {
-        /* keep fallback / local */
-      }
-    })();
-
+    if (!url) {
+      setRemoteUri(null);
+      return;
+    }
+    const known = memory.get(url);
+    setRemoteUri(known ?? null);
+    if (!token) {
+      setRemoteUri(url);
+      return;
+    }
+    void resolveAvatar(url, token).then((uri) => {
+      if (!cancelled && uri && uri !== known) setRemoteUri(uri);
+    });
     return () => {
       cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [path, token]);
+  }, [url, token]);
 
   // Prefer a successfully loaded remote; local covers the gap after picking / while loading.
   const uri = remoteUri || localUri || null;
@@ -83,14 +74,85 @@ export function AuthenticatedAvatar({
 
 type LoadedImage = { uri: string; objectUrl?: string };
 
+/** url → displayable uri, for this app session. */
+const memory = new Map<string, string>();
+/** One download per url at a time, however many avatars ask for it. */
+const inflight = new Map<string, Promise<string | null>>();
+/** A saved file is reused at once and refreshed in the background after this long. */
+const REFRESH_MS = 6 * 60 * 60 * 1000;
+const refreshed = new Set<string>();
+
+function cacheFile(cacheDir: string, url: string): string {
+  return `${cacheDir}avatar-${url.replace(/[^a-zA-Z0-9._-]/g, '_').slice(-80)}`;
+}
+
+/**
+ * The picture for url: from memory, else the file already on the phone (shown right away,
+ * refreshed quietly if old), else downloaded once.
+ */
+async function resolveAvatar(url: string, token: string): Promise<string | null> {
+  const hit = memory.get(url);
+  if (hit && refreshed.has(url)) return hit;
+  const running = inflight.get(url);
+  if (running) return running;
+  const job = (async () => {
+    if (Platform.OS !== 'web') {
+      try {
+        const FileSystem = await import('expo-file-system/legacy');
+        const cacheDir = FileSystem.cacheDirectory;
+        if (cacheDir) {
+          const dest = cacheFile(cacheDir, url);
+          const info = await FileSystem.getInfoAsync(dest);
+          if (info.exists && info.size) {
+            memory.set(url, info.uri);
+            const ageMs = Date.now() - (info.modificationTime ?? 0) * 1000;
+            if (ageMs < REFRESH_MS) {
+              refreshed.add(url);
+              return info.uri;
+            }
+          }
+        }
+      } catch {
+        /* download below */
+      }
+    }
+    try {
+      const loaded = await loadAuthenticatedImage(url, token);
+      if (loaded?.uri) {
+        const uri = loaded.uri;
+        memory.set(url, uri);
+        refreshed.add(url);
+        return uri;
+      }
+    } catch {
+      /* keep what we had */
+    }
+    return memory.get(url) ?? null;
+  })();
+  inflight.set(url, job);
+  try {
+    return await job;
+  } finally {
+    inflight.delete(url);
+  }
+}
+
+/** Warms the cache so avatars in a list appear without waiting. */
+export function prefetchAvatars(paths: (string | null | undefined)[], token?: string | null): void {
+  if (!token) return;
+  for (const p of paths) {
+    const url = mediaURL(p);
+    if (url && !memory.has(url)) void resolveAvatar(url, token);
+  }
+}
+
 async function loadAuthenticatedImage(url: string, token: string): Promise<LoadedImage | null> {
   if (Platform.OS !== 'web') {
     try {
       const FileSystem = await import('expo-file-system/legacy');
       const cacheDir = FileSystem.cacheDirectory;
       if (cacheDir) {
-        const key = url.replace(/[^a-zA-Z0-9._-]/g, '_').slice(-80);
-        const dest = `${cacheDir}avatar-${key}`;
+        const dest = cacheFile(cacheDir, url);
         const result = await FileSystem.downloadAsync(url, dest, {
           headers: { Authorization: `Bearer ${token}`, Accept: 'image/*' },
         });
@@ -130,4 +192,45 @@ function blobToDataUri(blob: Blob): Promise<string> {
     reader.onerror = () => reject(reader.error ?? new Error('read failed'));
     reader.readAsDataURL(blob);
   });
+}
+
+/**
+ * Any picture behind /api/v1/media (chat photos), with the same cache as avatars:
+ * shown at once when seen before, downloaded once otherwise.
+ */
+export function AuthenticatedImage({
+  path,
+  token,
+  width,
+  height,
+  radius = 14,
+}: {
+  path?: string | null;
+  token?: string | null;
+  width: number;
+  height: number;
+  radius?: number;
+}) {
+  const { colors } = useTheme();
+  const url = mediaURL(path);
+  const [uri, setUri] = useState<string | null>(() => (url ? memory.get(url) ?? null : null));
+  useEffect(() => {
+    let cancelled = false;
+    if (!url) return;
+    if (!token) {
+      setUri(url);
+      return;
+    }
+    void resolveAvatar(url, token).then((u) => {
+      if (!cancelled && u) setUri(u);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [url, token]);
+  return uri ? (
+    <Image source={{ uri }} style={{ width, height, borderRadius: radius, backgroundColor: colors.surfaceMuted }} resizeMode="cover" />
+  ) : (
+    <View style={{ width, height, borderRadius: radius, backgroundColor: colors.surfaceMuted }} />
+  );
 }

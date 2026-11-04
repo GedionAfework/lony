@@ -74,7 +74,7 @@ func Build(actor uuid.UUID, now time.Time, rows []loans.Record, parties map[uuid
 			continue
 		}
 		b := ensure(by, code)
-		amt := outstanding(row)
+		amt := outstanding(row, actor)
 		if !amt.GreaterThan(decimal.Zero) {
 			continue
 		}
@@ -177,12 +177,9 @@ func currencyOf(row loans.Record) string {
 	return *row.CurrencyCode
 }
 
-func outstanding(row loans.Record) decimal.Decimal {
-	if row.OutstandingAmount != nil {
-		return *row.OutstandingAmount
-	}
-	if row.ExpectedTotal != nil {
-		return *row.ExpectedTotal
+func outstanding(row loans.Record, actor uuid.UUID) decimal.Decimal {
+	if rem := row.RemainingFor(actor); rem != nil {
+		return *rem
 	}
 	return decimal.Zero
 }

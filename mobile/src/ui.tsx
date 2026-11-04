@@ -322,6 +322,7 @@ export function GhostButton({ label, onPress, disabled }: { label: string; onPre
   );
 }
 
+/** Tabs on a rounded track; the chosen one is a raised white pill (same as Home). */
 export function Segmented({
   options,
   value,
@@ -333,41 +334,108 @@ export function Segmented({
 }) {
   const { colors } = useTheme();
   return (
-    <View
-      style={{
-        flexDirection: 'row',
-        gap: 8,
-      }}
-    >
+    <View style={{ flexDirection: 'row', gap: 4, padding: 4, borderRadius: radii.full, backgroundColor: colors.surfaceMuted }}>
       {options.map((opt) => {
         const active = opt.id === value;
         return (
           <Pressable
             key={opt.id}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: active }}
             style={{
               flex: 1,
-              minHeight: 44,
-              borderRadius: radii.md,
+              minHeight: 38,
+              borderRadius: radii.full,
               alignItems: 'center',
               justifyContent: 'center',
-              backgroundColor: active ? colors.primary : colors.surfaceMuted,
-              borderWidth: 1,
-              borderColor: active ? colors.primary : colors.border,
+              paddingHorizontal: 4,
+              backgroundColor: active ? colors.surface : 'transparent',
+              shadowColor: '#0F172A',
+              shadowOpacity: active ? 0.08 : 0,
+              shadowRadius: 6,
+              shadowOffset: { width: 0, height: 2 },
+              elevation: active ? 2 : 0,
             }}
             onPress={() => onChange(opt.id)}
           >
             <Text
-              style={{
-                color: active ? colors.onPrimary : colors.text,
-                fontFamily: fonts.uiSemi,
-                fontSize: 13,
-              }}
+              numberOfLines={1}
+              style={{ color: active ? colors.text : colors.muted, fontFamily: active ? fonts.uiSemi : fonts.ui, fontSize: 13 }}
             >
               {opt.label}
             </Text>
           </Pressable>
         );
       })}
+    </View>
+  );
+}
+
+/**
+ * The filled summary card at the top of a screen (like Total balance on Home):
+ * a label, one big figure, an optional line under it, and optional tiles.
+ */
+export function HeroCard({
+  label,
+  value,
+  sub,
+  tiles,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  tiles?: { label: string; value: string; onPress?: () => void }[];
+}) {
+  const { colors } = useTheme();
+  return (
+    <View
+      style={{
+        backgroundColor: colors.primary,
+        borderRadius: 24,
+        padding: space.lg,
+        gap: 10,
+        overflow: 'hidden',
+        shadowColor: colors.primary,
+        shadowOpacity: 0.3,
+        shadowRadius: 18,
+        shadowOffset: { width: 0, height: 8 },
+        elevation: 6,
+      }}
+    >
+      <View
+        pointerEvents="none"
+        style={{ position: 'absolute', width: 200, height: 200, borderRadius: 100, right: -70, top: -90, backgroundColor: 'rgba(255,255,255,0.10)' }}
+      />
+      <Text style={{ color: colors.onPrimary, opacity: 0.85, fontFamily: fonts.uiSemi, fontSize: 14 }}>{label}</Text>
+      <Text
+        style={{ color: colors.onPrimary, fontFamily: fonts.uiBold, fontSize: 32, letterSpacing: -0.5 }}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+      >
+        {value}
+      </Text>
+      {sub ? (
+        <Text style={{ color: colors.onPrimary, opacity: 0.8, fontFamily: fonts.ui, fontSize: 13 }}>{sub}</Text>
+      ) : null}
+      {tiles && tiles.length ? (
+        <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
+          {tiles.map((tile) => (
+            <Pressable
+              key={tile.label}
+              onPress={tile.onPress}
+              disabled={!tile.onPress}
+              style={{ flex: 1, backgroundColor: 'rgba(255,255,255,0.16)', borderRadius: radii.md, paddingVertical: 10, paddingHorizontal: 10, gap: 3 }}
+            >
+              <Text style={{ color: colors.onPrimary, opacity: 0.8, fontFamily: fonts.ui, fontSize: 11 }} numberOfLines={1}>
+                {tile.label}
+              </Text>
+              <Text style={{ color: colors.onPrimary, fontFamily: fonts.uiSemi, fontSize: 13 }} numberOfLines={1} adjustsFontSizeToFit>
+                {tile.value}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -708,12 +776,10 @@ export function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
     <Text
       style={{
-        color: colors.muted,
+        color: colors.text,
         fontFamily: fonts.uiSemi,
-        fontSize: 12,
-        letterSpacing: 0.4,
-        textTransform: 'uppercase',
-        marginTop: 4,
+        fontSize: 15,
+        marginTop: 2,
       }}
     >
       {children}
@@ -772,9 +838,15 @@ export function CheckRow({
           borderWidth: 1.5,
           borderColor: checked ? colors.primary : colors.borderStrong,
           backgroundColor: checked ? colors.primary : colors.surface,
+          alignItems: 'center',
+          justifyContent: 'center',
         }}
-      />
-      <Text style={{ flex: 1, color: colors.muted, fontFamily: fonts.ui, fontSize: 14, lineHeight: 20 }}>{label}</Text>
+      >
+        {checked ? (
+          <Text style={{ color: colors.onPrimary, fontFamily: fonts.uiBold, fontSize: 14, lineHeight: 16 }}>✓</Text>
+        ) : null}
+      </View>
+      <Text style={{ flex: 1, color: colors.text, fontFamily: fonts.ui, fontSize: 14, lineHeight: 20 }}>{label}</Text>
     </Pressable>
   );
 }

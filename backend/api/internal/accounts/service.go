@@ -8,6 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"equilend/api/internal/fx"
 	"equilend/api/internal/httpx"
 	"equilend/api/internal/loans"
 
@@ -32,6 +33,7 @@ type Service struct {
 	banks         BankProfiles
 	accountNotify AccountNumberNotifier
 	cards         CardNotifier
+	fx            RateSource
 	now           func() time.Time
 }
 
@@ -111,6 +113,7 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, in CreateInput) 
 		InterestRatePercent: rate,
 		Compounding:         compounding,
 		InstitutionLabel:    cleanOpt(in.InstitutionLabel, 120),
+		AccountNumber:       cleanAccountNumber(in.AccountNumber),
 		BankProfileID:       in.BankProfileID,
 		CreatedAt:           now,
 		UpdatedAt:           now,
@@ -195,6 +198,10 @@ func (s *Service) Update(ctx context.Context, userID, id uuid.UUID, in UpdateInp
 	}
 	if in.InstitutionLabel != nil {
 		rec.InstitutionLabel = cleanOpt(in.InstitutionLabel, 120)
+	}
+	if in.AccountNumber != nil {
+		// An empty string clears the saved number.
+		rec.AccountNumber = cleanAccountNumber(in.AccountNumber)
 	}
 	if in.BankProfileID != nil {
 		rec.BankProfileID = in.BankProfileID
@@ -355,6 +362,15 @@ func (s *Service) ApplyCashflowDelta(ctx context.Context, userID, accountID uuid
 		return err
 	}
 	return nil
+}
+
+// AccountCurrency is the currency of one of the user's accounts.
+func (s *Service) AccountCurrency(ctx context.Context, userID, accountID uuid.UUID) (string, error) {
+	rec, err := s.store.Get(ctx, userID, accountID)
+	if err != nil {
+		return "", err
+	}
+	return rec.CurrencyCode, nil
 }
 
 // SetStatedBalance records the remaining balance printed on a bank/wallet SMS.
@@ -598,10 +614,12 @@ func (s *Service) Wealth(ctx context.Context, userID uuid.UUID, preferred string
 	}
 
 	dtos := make([]AccountDTO, 0, len(accounts))
+	activeCards := map[uuid.UUID]bool{}
 	for _, a := range accounts {
 		dtos = append(dtos, toDTO(a))
 		bucket := ensure(a.CurrencyCode)
 		if a.AccountType == TypeCreditCard {
+			activeCards[a.ID] = true
 			bucket.pay = bucket.pay.Add(a.Balance)
 		} else {
 			bucket.cash = bucket.cash.Add(a.Balance)
@@ -621,11 +639,15 @@ func (s *Service) Wealth(ctx context.Context, userID uuid.UUID, preferred string
 			}
 		}
 		for _, row := range rows {
-			if !isOpenLoan(row, userID, requireApproval) || row.CurrencyCode == nil || row.ExpectedTotal == nil {
+			if !isOpenLoan(row, userID, requireApproval) || row.CurrencyCode == nil || row.RemainingFor(userID) == nil {
+				continue
+			}
+			// Already inside a card balance counted above.
+			if coveredByCard(row, activeCards) {
 				continue
 			}
 			code := strings.ToUpper(*row.CurrencyCode)
-			amt := *row.ExpectedTotal
+			amt := *row.RemainingFor(userID)
 			a := ensure(code)
 			if row.LenderID == userID && row.BorrowerID != userID {
 				a.recv = a.recv.Add(amt)
@@ -639,6 +661,7 @@ func (s *Service) Wealth(ctx context.Context, userID uuid.UUID, preferred string
 	}
 
 	preferred = strings.ToUpper(strings.TrimSpace(preferred))
+	requested := preferred
 	slices := make([]CurrencySlice, 0, len(by))
 	var prefCash, prefRecv, prefPay decimal.Decimal
 	prefFound := false
@@ -694,7 +717,7 @@ func (s *Service) Wealth(ctx context.Context, userID uuid.UUID, preferred string
 	}
 	prefNet := prefCash.Add(prefRecv).Sub(prefPay)
 	live := prefNet.StringFixed(Scale)
-	return WealthSummary{
+	out := WealthSummary{
 		PreferredCurrency: preferred,
 		CashOnHand:        prefCash.StringFixed(Scale),
 		Receivables:       prefRecv.StringFixed(Scale),
@@ -704,7 +727,71 @@ func (s *Service) Wealth(ctx context.Context, userID uuid.UUID, preferred string
 		NetWorthManual:    false,
 		ByCurrency:        slices,
 		Accounts:          dtos,
-	}, nil
+	}
+	// Money in several currencies: the headline adds them all up in the user's currency.
+	target := requested
+	if target == "" {
+		target = preferred
+	}
+	if len(slices) > 1 || (len(slices) == 1 && target != "" && slices[0].CurrencyCode != target) {
+		if cash, recv, pay, missing, ok := s.totalIn(ctx, slices, target); ok {
+			net := cash.Add(recv).Sub(pay).StringFixed(Scale)
+			out.PreferredCurrency = target
+			out.CashOnHand = cash.StringFixed(Scale)
+			out.Receivables = recv.StringFixed(Scale)
+			out.Payables = pay.StringFixed(Scale)
+			out.NetWorth = net
+			out.LiveNetWorth = net
+			out.Converted = true
+			out.MissingRates = missing
+		}
+	}
+	return out, nil
+}
+
+// totalIn adds every currency slice into target at today's rate. Slices with no rate are
+// left out and named in missing; ok is false when no rates are available at all.
+func (s *Service) totalIn(ctx context.Context, slices []CurrencySlice, target string) (cash, recv, pay decimal.Decimal, missing []string, ok bool) {
+	if s.fx == nil {
+		return
+	}
+	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	rates, _, err := s.fx.Rates(rctx, target)
+	if err != nil || rates == nil {
+		return
+	}
+	for _, sl := range slices {
+		parts := []decimal.Decimal{mustDec(sl.CashOnHand), mustDec(sl.Receivables), mustDec(sl.Payables)}
+		if sl.CurrencyCode != target {
+			converted := true
+			for i, v := range parts {
+				c, err := fx.Convert(v, sl.CurrencyCode, target, rates)
+				if err != nil {
+					converted = false
+					break
+				}
+				parts[i] = c
+			}
+			if !converted {
+				missing = append(missing, sl.CurrencyCode)
+				continue
+			}
+		}
+		cash = cash.Add(parts[0])
+		recv = recv.Add(parts[1])
+		pay = pay.Add(parts[2])
+	}
+	return cash, recv, pay, missing, true
+}
+
+// RateSource gives exchange rates against a base currency (the fx client).
+type RateSource interface {
+	Rates(ctx context.Context, base string) (map[string]decimal.Decimal, time.Time, error)
+}
+
+func (s *Service) SetFX(r RateSource) {
+	s.fx = r
 }
 
 func mustDec(s string) decimal.Decimal {
@@ -789,6 +876,15 @@ func parseNonNeg(raw string) (decimal.Decimal, error) {
 		return decimal.Zero, errors.New("invalid")
 	}
 	return d.Round(Scale), nil
+}
+
+// cleanAccountNumber trims an account number and collapses inner whitespace.
+func cleanAccountNumber(in *string) *string {
+	if in == nil {
+		return nil
+	}
+	v := strings.Join(strings.Fields(*in), " ")
+	return cleanOpt(&v, 64)
 }
 
 func cleanOpt(in *string, max int) *string {

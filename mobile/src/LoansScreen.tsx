@@ -1,10 +1,10 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { Pressable, Text, View } from 'react-native';
 import type { Loan, User } from './api';
 import { formatSignedMoney } from './amountFormat';
 import { t } from './i18n';
 import { fonts, radii, space, useTheme } from './theme';
-import { Card, DueDatePill, EmptyState, Money, Segmented } from './ui';
+import { Card, DueDatePill, EmptyState, HeroCard, Segmented, SectionLabel } from './ui';
 
 type Props = {
   user: User;
@@ -30,11 +30,11 @@ function peerOf(loan: Loan) {
 }
 
 function remaining(loan: Loan): number {
-  const n = Number(loan.expected_total || loan.principal || 0);
+  const n = Number(loan.outstanding_amount || loan.expected_total || loan.principal || 0);
   return Number.isFinite(n) ? n : 0;
 }
 
-export function LoansScreen({ user, loans, onOpenLoan, onOpenPeer, peerDetail }: Props) {
+export function LoansScreen({ user, loans, onOpenLoan, onOpenPeer, peerDetail, formatMoney }: Props) {
   const { colors } = useTheme();
   const locale = user.locale || 'en';
   const [mode, setMode] = useState<'all' | 'individual'>('all');
@@ -60,11 +60,68 @@ export function LoansScreen({ user, loans, onOpenLoan, onOpenPeer, peerDetail }:
     return [...map.values()].sort((a, b) => Math.abs(b.net) - Math.abs(a.net));
   }, [loans, user.default_currency_code, locale]);
 
+  // Totals in the user's main currency, for the summary card.
+  const mainCurrency = (user.default_currency_code || loans[0]?.currency_code || 'USD').toUpperCase();
+  const inMain = loans.filter((l) => (l.currency_code || mainCurrency).toUpperCase() === mainCurrency);
+  const owedToYou = inMain.filter((l) => l.your_role === 'lender').reduce((sum, l) => sum + remaining(l), 0);
+  const youOwe = inMain.filter((l) => l.your_role !== 'lender').reduce((sum, l) => sum + remaining(l), 0);
+  const money = (n: number) => formatMoney(n.toFixed(2), mainCurrency, locale);
+
+  const row = (
+    key: string,
+    title: string,
+    subtitle: string,
+    amount: string,
+    positive: boolean,
+    onPress: () => void,
+    right?: ReactNode,
+  ) => (
+    <Pressable key={key} onPress={onPress} style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 8 }}>
+      <View
+        style={{
+          width: 40,
+          height: 40,
+          borderRadius: radii.full,
+          backgroundColor: positive ? colors.successSoft : colors.surfaceMuted,
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <Text style={{ color: positive ? colors.success : colors.text, fontFamily: fonts.uiBold, fontSize: 15 }}>
+          {title.slice(0, 1).toUpperCase()}
+        </Text>
+      </View>
+      <View style={{ flex: 1, gap: 2 }}>
+        <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }} numberOfLines={1}>
+          {title}
+        </Text>
+        <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }} numberOfLines={1}>
+          {subtitle}
+        </Text>
+      </View>
+      <View style={{ alignItems: 'flex-end', gap: 4 }}>
+        <Text style={{ color: positive ? colors.success : colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }}>{amount}</Text>
+        {right}
+      </View>
+    </Pressable>
+  );
+
   return (
     <View style={{ gap: space.md }}>
-      <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>
+      <Text style={{ color: colors.text, fontFamily: fonts.uiBold, fontSize: 24 }}>
         {t(locale, 'loans.title') || 'Loans'}
       </Text>
+      {!peerDetail && loans.length > 0 ? (
+        <HeroCard
+          label={t(locale, 'loans.title') || 'Loans'}
+          value={money(owedToYou - youOwe)}
+          sub={`${loans.length} ${loans.length === 1 ? 'loan' : 'loans'}`}
+          tiles={[
+            { label: t(locale, 'wealth.owedToYou'), value: money(owedToYou) },
+            { label: t(locale, 'wealth.youOwe'), value: money(youOwe) },
+          ]}
+        />
+      ) : null}
       {!peerDetail ? (
         <Segmented
           options={[
@@ -78,153 +135,45 @@ export function LoansScreen({ user, loans, onOpenLoan, onOpenPeer, peerDetail }:
 
       {loans.length === 0 ? (
         <Card>
-          <EmptyState
-            title={t(locale, 'loans.emptyTitle') || 'No loans in sight'}
-            body={
-              t(locale, 'loans.emptyBody') ||
-              'Tap + to start with a friend, search someone, or invite a contact. They’ll approve before it goes live.'
-            }
-          />
+          <EmptyState title={t(locale, 'loans.emptyTitle') || 'No loans yet'} body={t(locale, 'loans.emptyBody') || 'Tap + to add a loan.'} />
         </Card>
       ) : effectiveMode === 'all' ? (
-        loans.map((loan) => {
-          const peer = peerOf(loan);
-          const title = loan.institution_label || peer?.display_name || t(locale, 'loans.loanFallback');
-          const initial = title.slice(0, 1).toUpperCase();
-          const signed = formatSignedMoney(
-            loan.expected_total,
-            loan.currency_code,
-            loan.your_role === 'lender' ? 1 : -1,
-            locale,
-          );
-          return (
-            <Pressable key={loan.id} onPress={() => onOpenLoan(loan.id)}>
-              <Card>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                  <View
-                    style={{
-                      width: 40,
-                      height: 40,
-                      borderRadius: radii.full,
-                      backgroundColor: colors.surfaceMuted,
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}
-                  >
-                    <Text style={{ color: colors.text, fontFamily: fonts.uiBold, fontSize: 15 }}>{initial}</Text>
-                  </View>
-                  <View style={{ flex: 1, gap: 2 }}>
-                    <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>
-                      {loan.title || title}
-                    </Text>
-                    <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
-                      {loan.reference_code}
-                      {loan.currency_code ? ` · ${loan.currency_code}` : ''}
-                      {loan.title ? ` · ${title}` : ''}
-                    </Text>
-                  </View>
-                  <DueDatePill dueAt={loan.due_at} status={loan.status} locale={user.locale} />
-                </View>
-                <Money value={signed} size="md" tone={loan.your_role === 'lender' ? 'positive' : 'negative'} />
-                {!loan.principal ? (
-                  <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
-                    {t(locale, 'loans.waitingTerms') || 'Waiting for terms'}
-                  </Text>
-                ) : null}
-              </Card>
-            </Pressable>
-          );
-        })
+        <Card>
+          <SectionLabel>{t(locale, 'loans.tabAll') || 'All'}</SectionLabel>
+          {loans.map((loan) => {
+            const peer = peerOf(loan);
+            const who = loan.institution_label || peer?.display_name || t(locale, 'loans.loanFallback');
+            const lender = loan.your_role === 'lender';
+            return row(
+              loan.id,
+              loan.title || who,
+              [loan.title ? who : null, lender ? t(locale, 'expenses.theyOwe') : t(locale, 'wealth.youOwe'), !loan.principal ? t(locale, 'loans.waitingTerms') || 'Waiting for terms' : null]
+                .filter(Boolean)
+                .join(' · '),
+              formatSignedMoney(loan.expected_total, loan.currency_code, lender ? 1 : -1, locale),
+              lender,
+              () => onOpenLoan(loan.id),
+              <DueDatePill dueAt={loan.due_at} status={loan.status} locale={user.locale} />,
+            );
+          })}
+        </Card>
       ) : (
-        individuals.map((bucket) => {
-          const initial = bucket.name.slice(0, 1).toUpperCase();
-          const signed = formatSignedMoney(
-            String(Math.abs(bucket.net).toFixed(2)),
-            bucket.currency,
-            bucket.net >= 0 ? 1 : -1,
-            locale,
-          );
-          return (
-            <Pressable
-              key={`${bucket.peerId}:${bucket.currency}`}
-              onPress={() => {
-                if (onOpenPeer) {
-                  onOpenPeer(
-                    bucket.peerId,
-                    bucket.name,
-                    bucket.loans.map((l) => l.id),
-                  );
-                } else if (bucket.loans[0]) {
-                  onOpenLoan(bucket.loans[0].id);
-                }
-              }}
-            >
-              <Card>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                  <View
-                    style={{
-                      width: 40,
-                      height: 40,
-                      borderRadius: radii.full,
-                      backgroundColor: colors.surfaceMuted,
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                    }}
-                  >
-                    <Text style={{ color: colors.text, fontFamily: fonts.uiBold, fontSize: 15 }}>{initial}</Text>
-                  </View>
-                  <View style={{ flex: 1, gap: 2 }}>
-                    <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>{bucket.name}</Text>
-                    <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
-                      {bucket.loans.length}{' '}
-                      {bucket.loans.length === 1
-                        ? t(locale, 'loans.oneLoan') || 'loan'
-                        : t(locale, 'loans.manyLoans') || 'loans'}
-                      {` · ${bucket.currency}`}
-                    </Text>
-                  </View>
-                </View>
-                <Money value={signed} size="md" tone={bucket.net >= 0 ? 'positive' : 'negative'} />
-                <View style={{ gap: 8, marginTop: 8 }}>
-                  {bucket.loans.map((loan) => {
-                    const line = formatSignedMoney(
-                      loan.expected_total,
-                      loan.currency_code,
-                      loan.your_role === 'lender' ? 1 : -1,
-                      locale,
-                    );
-                    return (
-                      <Pressable
-                        key={loan.id}
-                        onPress={() => onOpenLoan(loan.id)}
-                        style={{
-                          flexDirection: 'row',
-                          justifyContent: 'space-between',
-                          paddingVertical: 8,
-                          borderTopWidth: 1,
-                          borderTopColor: colors.border,
-                        }}
-                      >
-                        <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13, flex: 1 }} numberOfLines={1}>
-                          {loan.title || loan.reference_code}
-                        </Text>
-                        <Text
-                          style={{
-                            color: loan.your_role === 'lender' ? colors.success : colors.warning,
-                            fontFamily: fonts.uiSemi,
-                            fontSize: 13,
-                          }}
-                        >
-                          {line}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-              </Card>
-            </Pressable>
-          );
-        })
+        <Card>
+          <SectionLabel>{t(locale, 'loans.tabIndividual') || 'Individual'}</SectionLabel>
+          {individuals.map((bucket) =>
+            row(
+              `${bucket.peerId}:${bucket.currency}`,
+              bucket.name,
+              `${bucket.loans.length} ${bucket.loans.length === 1 ? t(locale, 'loans.oneLoan') || 'loan' : t(locale, 'loans.manyLoans') || 'loans'} · ${bucket.currency}`,
+              formatSignedMoney(String(Math.abs(bucket.net).toFixed(2)), bucket.currency, bucket.net >= 0 ? 1 : -1, locale),
+              bucket.net >= 0,
+              () => {
+                if (onOpenPeer) onOpenPeer(bucket.peerId, bucket.name, bucket.loans.map((l) => l.id));
+                else if (bucket.loans[0]) onOpenLoan(bucket.loans[0].id);
+              },
+            ),
+          )}
+        </Card>
       )}
     </View>
   );

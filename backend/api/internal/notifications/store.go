@@ -15,6 +15,7 @@ const (
 	TypeLoanRequest         = "loan_request"
 	TypeLoanAccepted        = "loan_accepted"
 	TypeLoanRejected        = "loan_rejected"
+	TypeShareDeclined       = "share_declined"
 	TypeBankProfileShared   = "bank_profile_shared"
 	TypeDueSoon             = "due_soon"
 	TypeDueToday            = "due_today"

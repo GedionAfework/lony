@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Modal, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { Alert, Modal, Platform, Pressable, ScrollView, Share, Text, TextInput, View } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import * as WebBrowser from 'expo-web-browser';
-import { api, isPremiumPlan, type AccountReconcile, type BankLinkConnection, type BankLinkStatus, type CardInstallment, type MoneyAccount, type User } from './api';
+import { api, isPremiumPlan, type AccountReconcile, type BankLinkConnection, type BankLinkStatus, type CardInstallment, type MoneyAccount, type PossibleDuplicateDebt, type User } from './api';
 import { listSmsForAccount, type ArchivedSms } from './smsArchive';
 import { stripAmount } from './amountFormat';
 import type { CatalogOption } from './catalogs';
@@ -14,9 +15,9 @@ import {
   institutionsForAccountType,
 } from './institutions';
 import { SearchSelect } from './SearchSelect';
-import { IconBalance, IconEdit, IconTrash, IconUpload } from './icons';
+import { IconBalance, IconCopy, IconEdit, IconShare, IconTrash, IconUpload } from './icons';
 import { fonts, radii, space, useTheme } from './theme';
-import { Card, EmptyState, Field, PrimaryButton, ScreenHeader, SecondaryButton, SectionLabel } from './ui';
+import { Card, CheckRow, EmptyState, Field, HeroCard, PrimaryButton, ScreenHeader, SecondaryButton, SectionLabel, Segmented } from './ui';
 
 type Props = {
   user: User;
@@ -26,7 +27,11 @@ type Props = {
   reloadToken?: number;
   onPanelChange?: (open: boolean) => void;
   onChanged?: () => void;
+  /** Bumped by the floating add button to open the new-account form. */
+  createSignal?: number;
 };
+
+type AccountsTab = 'accounts' | 'reconcile' | 'transfer';
 
 const FALLBACK_ACCOUNT_TYPES: CatalogOption[] = [
   { id: 'bank', label: 'Bank', keywords: 'bank' },
@@ -111,9 +116,12 @@ export function AccountsScreen({
   reloadToken = 0,
   onPanelChange,
   onChanged,
+  createSignal = 0,
 }: Props) {
   const { colors } = useTheme();
   const [accounts, setAccounts] = useState<MoneyAccount[]>([]);
+  // Self-recorded debts that may already be inside a card balance (counted twice).
+  const [duplicates, setDuplicates] = useState<PossibleDuplicateDebt[]>([]);
   const [busy, setBusy] = useState(false);
   const [creating, setCreating] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
@@ -136,14 +144,17 @@ export function AccountsScreen({
   const [instMonths, setInstMonths] = useState('12');
   const [instMonthly, setInstMonthly] = useState('');
   const [newBalance, setNewBalance] = useState('');
-  const [transferOpen, setTransferOpen] = useState(false);
+  const [tab, setTab] = useState<AccountsTab>('accounts');
+  const [accountNumber, setAccountNumber] = useState('');
+  const [shareOpen, setShareOpen] = useState(false);
+  const [shareIds, setShareIds] = useState<string[]>([]);
+  const [copied, setCopied] = useState(false);
   const [fromId, setFromId] = useState('');
   const [toId, setToId] = useState('');
   const [transferAmount, setTransferAmount] = useState('');
   const [transferNote, setTransferNote] = useState('');
   const [remoteTypes, setRemoteTypes] = useState<CatalogOption[]>([]);
   const [remoteInstitutions, setRemoteInstitutions] = useState<CatalogOption[]>([]);
-  const [reconcileOpen, setReconcileOpen] = useState(false);
   const [reconcileRows, setReconcileRows] = useState<AccountReconcile[]>([]);
   const [importId, setImportId] = useState<string | null>(null);
   const [importCsv, setImportCsv] = useState('');
@@ -185,6 +196,10 @@ export function AccountsScreen({
     try {
       const res = await api.listAccounts(token);
       setAccounts(res.accounts ?? []);
+      api
+        .possibleDuplicateDebts(token)
+        .then((r) => setDuplicates(r.duplicates ?? []))
+        .catch(() => setDuplicates([]));
       const links = await api.listBankLinks(token).catch(() => null);
       if (links) {
         setBankStatus(links.status);
@@ -233,6 +248,19 @@ export function AccountsScreen({
   useEffect(() => {
     void reload();
   }, [reload, reloadToken]);
+
+  useEffect(() => {
+    if (!createSignal) return;
+    resetForm();
+    setImportId(null);
+    setBalanceId(null);
+    setInstallAccount(null);
+    setViewMessage(null);
+    setViewAccount(null);
+    setTab('accounts');
+    setCreating(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [createSignal]);
 
   useEffect(() => {
     let cancelled = false;
@@ -293,6 +321,7 @@ export function AccountsScreen({
     setCreditLimit('');
     setStatementDay('');
     setDueDay('');
+    setAccountNumber('');
     setCreating(false);
     setEditId(null);
   }
@@ -323,6 +352,7 @@ export function AccountsScreen({
     setStatementDay(a.statement_day ? String(a.statement_day) : '');
     setDueDay(a.due_day ? String(a.due_day) : '');
     setCurrency(a.currency_code);
+    setAccountNumber(a.account_number || '');
     const label = (a.institution_label || '').trim();
     const opts = mergeOptions([], institutionsForAccountType(a.account_type));
     // Prefer currently loaded remote+local options when type matches
@@ -364,6 +394,7 @@ export function AccountsScreen({
         interest_rate_percent: stripAmount(interest) || undefined,
         compounding: interest.trim() ? (compounding as 'none' | 'monthly' | 'yearly') : undefined,
         institution_label: institutionLabel.trim() || undefined,
+        account_number: accountType !== 'cash' ? accountNumber.trim() || undefined : undefined,
         credit_limit: accountType === 'credit_card' ? stripAmount(creditLimit) || undefined : undefined,
         statement_day: accountType === 'credit_card' && stmt && stmt !== 'invalid' ? stmt : undefined,
         due_day: accountType === 'credit_card' && due && due !== 'invalid' ? due : undefined,
@@ -402,6 +433,7 @@ export function AccountsScreen({
         interest_rate_percent: clear ? undefined : stripAmount(interest),
         compounding: clear ? undefined : (compounding as 'none' | 'monthly' | 'yearly'),
         institution_label: institutionLabel.trim() || undefined,
+        account_number: accountType !== 'cash' ? accountNumber.trim() : '',
         clear_interest: clear,
         credit_limit: accountType === 'credit_card' ? stripAmount(creditLimit) || '' : undefined,
         statement_day: accountType === 'credit_card' ? (stmt && stmt !== 'invalid' ? stmt : 0) : undefined,
@@ -493,6 +525,17 @@ export function AccountsScreen({
     }
   }
 
+  function confirmArchive(a: MoneyAccount) {
+    Alert.alert(
+      `Archive ${a.name}?`,
+      'It disappears from your accounts and totals. Its past transactions stay.',
+      [
+        { text: t(user.locale, 'common.cancel') || 'Cancel', style: 'cancel' },
+        { text: t(user.locale, 'accounts.archive') || 'Archive', style: 'destructive', onPress: () => void onArchive(a.id) },
+      ],
+    );
+  }
+
   async function onArchive(id: string) {
     setBusy(true);
     try {
@@ -507,13 +550,11 @@ export function AccountsScreen({
 
   function startAccept(a: MoneyAccount) {
     resetForm();
-    setTransferOpen(false);
-    setReconcileOpen(false);
     setImportId(null);
     setBalanceId(null);
     setAcceptId(a.id);
     setAcceptFullName(user.display_name || '');
-    setAcceptAccountNumber('');
+    setAcceptAccountNumber(a.account_number || '');
     setAcceptProfit(a.interest_rate_percent || '');
   }
 
@@ -610,12 +651,12 @@ export function AccountsScreen({
         amount: amt,
         note: transferNote.trim() || undefined,
       });
-      setTransferOpen(false);
       setFromId('');
       setToId('');
       setTransferAmount('');
       setTransferNote('');
       await reload();
+      onChanged?.();
     } catch (e) {
       onError(e instanceof Error ? e.message : 'Transfer failed');
     } finally {
@@ -628,7 +669,6 @@ export function AccountsScreen({
     try {
       const res = await api.reconcileAccounts(token);
       setReconcileRows(res.reconcile ?? []);
-      setReconcileOpen(true);
     } catch (e) {
       onError(e instanceof Error ? e.message : 'Could not reconcile');
     } finally {
@@ -719,8 +759,6 @@ export function AccountsScreen({
   const formOpen = creating || Boolean(editId);
   const panelOpen =
     formOpen ||
-    transferOpen ||
-    reconcileOpen ||
     Boolean(importId) ||
     Boolean(balanceId) ||
     Boolean(viewAccount) ||
@@ -731,12 +769,9 @@ export function AccountsScreen({
 
   function closePanel() {
     resetForm();
-    setTransferOpen(false);
-    setReconcileOpen(false);
     resetImport();
     setBalanceId(null);
     setNewBalance('');
-    setReconcileRows([]);
     setAcceptId(null);
     setInstallAccount(null);
     setInstallments([]);
@@ -749,8 +784,6 @@ export function AccountsScreen({
     setCreating(false);
     setEditId(null);
     setBalanceId(null);
-    setTransferOpen(false);
-    setReconcileOpen(false);
     resetImport();
     setViewMessage(null);
     setViewAccount(a);
@@ -768,8 +801,6 @@ export function AccountsScreen({
     if (viewMessage) return viewMessage.title || 'Message';
     if (viewAccount) return viewAccount.name;
     if (importId) return t(user.locale, 'accounts.importStatement');
-    if (reconcileOpen) return t(user.locale, 'accounts.reconcile');
-    if (transferOpen) return t(user.locale, 'accounts.transfer');
     if (balanceId) return t(user.locale, 'accounts.updateBalance');
     if (editId) return t(user.locale, 'accounts.editAccount');
     return t(user.locale, 'accounts.newAccount');
@@ -781,6 +812,66 @@ export function AccountsScreen({
     keywords: `${a.name} ${a.currency_code}`.toLowerCase(),
   }));
   const importAccount = accounts.find((a) => a.id === importId);
+
+  const shareable = accounts.filter((a) => a.account_number?.trim());
+
+  /** Opens the share sheet with one account picked, or all of them when id is null. */
+  function openShare(id: string | null) {
+    setShareIds(id ? [id] : shareable.map((a) => a.id));
+    setCopied(false);
+    setShareOpen(true);
+  }
+
+  function shareMessage(): string {
+    const picked = shareable.filter((a) => shareIds.includes(a.id));
+    const holder =
+      [user.first_name, user.middle_name, user.last_name].filter((p) => p && p.trim()).join(' ') ||
+      user.display_name?.trim() ||
+      '';
+    const lines: string[] = [];
+    if (holder) lines.push(`${t(user.locale, 'accounts.holder')}: ${holder}`);
+    for (const a of picked) {
+      if (lines.length) lines.push('');
+      lines.push(`${t(user.locale, 'accounts.bank')}: ${(a.institution_label || a.name).trim()}`);
+      lines.push(`${t(user.locale, 'accounts.accountNumber')}: ${a.account_number!.trim()}`);
+    }
+    return lines.join('\n');
+  }
+
+  async function onCopyShare() {
+    if (!shareIds.length) {
+      onError(t(user.locale, 'accounts.shareNoneSelected'));
+      return;
+    }
+    try {
+      await Clipboard.setStringAsync(shareMessage());
+      setCopied(true);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Could not copy');
+    }
+  }
+
+  async function onSendShare() {
+    if (!shareIds.length) {
+      onError(t(user.locale, 'accounts.shareNoneSelected'));
+      return;
+    }
+    try {
+      await Share.share({ message: shareMessage() });
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Could not share');
+    }
+  }
+
+  async function onResolveDuplicate(loanId: string, accountId: string | null) {
+    try {
+      await api.setLoanAccountLink(token, loanId, accountId ? { account_id: accountId } : { dismiss: true });
+      setDuplicates((prev) => prev.filter((d) => d.loan_id !== loanId));
+      onChanged?.();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Could not update the debt');
+    }
+  }
 
   return (
     <View style={{ gap: space.md }}>
@@ -796,13 +887,72 @@ export function AccountsScreen({
           }}
         />
       ) : (
-        <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>
+        <Text style={{ color: colors.text, fontFamily: fonts.uiBold, fontSize: 24 }}>
           {t(user.locale, 'accounts')}
         </Text>
       )}
 
+      {!panelOpen && accounts.length > 0 ? (
+        (() => {
+          const cur = defaultCurrency(user);
+          const mine = accounts.filter((a) => a.currency_code.toUpperCase() === cur);
+          const signed = (a: MoneyAccount) => (a.account_type === 'credit_card' ? -1 : 1) * (Number(a.balance) || 0);
+          const total = mine.reduce((sum, a) => sum + signed(a), 0);
+          const cash = mine.filter((a) => a.account_type === 'cash').reduce((sum, a) => sum + signed(a), 0);
+          const cards = mine.filter((a) => a.account_type === 'credit_card').reduce((sum, a) => sum + signed(a), 0);
+          return (
+            <HeroCard
+              label={t(user.locale, 'wealth.totalBalance')}
+              value={formatMoney(total.toFixed(2), cur, user.locale)}
+              sub={`${accounts.length} ${accounts.length === 1 ? 'account' : 'accounts'}${mine.length < accounts.length ? ` · other currencies not included` : ''}`}
+              tiles={[
+                { label: t(user.locale, 'accounts.typeBank') + ' & wallets', value: formatMoney((total - cash - cards).toFixed(2), cur, user.locale) },
+                { label: t(user.locale, 'accounts.typeCash'), value: formatMoney(cash.toFixed(2), cur, user.locale) },
+                ...(cards ? [{ label: t(user.locale, 'accounts.typeCreditCard'), value: formatMoney(cards.toFixed(2), cur, user.locale) }] : []),
+              ]}
+            />
+          );
+        })()
+      ) : null}
+
       {!panelOpen ? (
+        <Segmented
+          value={tab}
+          onChange={(id) => {
+            const next = id as AccountsTab;
+            setTab(next);
+            if (next === 'reconcile') void onReconcile();
+          }}
+          options={[
+            { id: 'accounts', label: t(user.locale, 'accounts.tabAccount') },
+            { id: 'reconcile', label: t(user.locale, 'accounts.reconcile') },
+            { id: 'transfer', label: t(user.locale, 'accounts.transfer') },
+          ]}
+        />
+      ) : null}
+
+      {!panelOpen && tab === 'accounts' ? (
       <>
+      {duplicates.length > 0 ? (
+        <Card>
+          <SectionLabel>These may be counted twice</SectionLabel>
+          <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
+            Is one of these already in a card balance? Link it so it counts once.
+          </Text>
+          {duplicates.map((d) => (
+            <View key={d.loan_id} style={{ gap: 8, paddingVertical: 8 }}>
+              <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>
+                {d.loan_title} · {formatMoney(d.outstanding, d.currency_code, user.locale)}
+              </Text>
+              {d.cards.map((c) => (
+                <PrimaryButton key={c.id} label={`Part of ${c.name}`} onPress={() => void onResolveDuplicate(d.loan_id, c.id)} />
+              ))}
+              <SecondaryButton label="Not the same" onPress={() => void onResolveDuplicate(d.loan_id, null)} />
+            </View>
+          ))}
+        </Card>
+      ) : null}
+      {bankStatus?.available || bankConnections.length > 0 ? (
       <Card>
         <SectionLabel>{t(user.locale, 'linkedBanks')}</SectionLabel>
         {bankConnections.map((c) => (
@@ -891,28 +1041,7 @@ export function AccountsScreen({
           />
         ) : null}
       </Card>
-
-        <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
-          <View style={{ flex: 1, minWidth: 100 }}>
-            <PrimaryButton
-              label={t(user.locale, 'accounts.addAccount')}
-              onPress={() => {
-                resetForm();
-                setCreating(true);
-              }}
-            />
-          </View>
-          {accounts.length >= 1 ? (
-            <View style={{ flex: 1, minWidth: 100 }}>
-              <SecondaryButton label={t(user.locale, 'accounts.reconcile')} onPress={() => void onReconcile()} />
-            </View>
-          ) : null}
-          {accounts.length >= 2 ? (
-            <View style={{ flex: 1, minWidth: 100 }}>
-              <SecondaryButton label={t(user.locale, 'accounts.transfer')} onPress={() => setTransferOpen(true)} />
-            </View>
-          ) : null}
-        </View>
+      ) : null}
       </>
       ) : null}
 
@@ -988,7 +1117,7 @@ export function AccountsScreen({
           </Card>
         ) : null}
 
-        {reconcileOpen ? (
+        {!panelOpen && tab === 'reconcile' ? (
           <Card>
             <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
               {t(user.locale, 'accounts.reconcileHint')}
@@ -1056,7 +1185,16 @@ export function AccountsScreen({
           </Card>
         ) : null}
 
-        {transferOpen ? (
+        {!panelOpen && tab === 'transfer' && accounts.length < 2 ? (
+          <Card>
+            <EmptyState
+              title={t(user.locale, 'accounts.transfer')}
+              body={t(user.locale, 'accounts.transferNeedsTwo')}
+            />
+          </Card>
+        ) : null}
+
+        {!panelOpen && tab === 'transfer' && accounts.length >= 2 ? (
           <Card>
             <SearchSelect label={t(user.locale, 'accounts.from')} value={fromId} onChange={setFromId} options={accountOptions} />
           <SearchSelect
@@ -1105,6 +1243,20 @@ export function AccountsScreen({
                   />
                 ) : null}
               </>
+            ) : null}
+            {accountType !== 'cash' ? (
+              <Field
+                label={t(user.locale, 'accounts.accountNumberOptional')}
+                value={accountNumber}
+                onChange={setAccountNumber}
+                keyboardType={accountType === 'bank' || accountType === 'credit_card' ? 'number-pad' : 'default'}
+                placeholder={t(user.locale, 'accounts.accountNumberPlaceholder')}
+              />
+            ) : null}
+            {accountType !== 'cash' ? (
+              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12, lineHeight: 17, marginTop: -4 }}>
+                {t(user.locale, 'accounts.accountNumberPrivacy')}
+              </Text>
             ) : null}
             <SearchSelect label={t(user.locale, 'common.currency')} value={currency} onChange={setCurrency} options={CURRENCIES} />
             {!editId ? (
@@ -1326,9 +1478,25 @@ export function AccountsScreen({
           </Card>
         ) : null}
 
-      {!panelOpen ? (
+      {!panelOpen && tab === 'accounts' ? (
       <Card>
-        <SectionLabel>{t(user.locale, 'accounts.yourAccounts')}</SectionLabel>
+        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+          <SectionLabel>{t(user.locale, 'accounts.yourAccounts')}</SectionLabel>
+          {accounts.some((a) => a.account_number) ? (
+            <Pressable
+              onPress={() => openShare(null)}
+              accessibilityRole="button"
+              accessibilityLabel={t(user.locale, 'accounts.shareAccounts')}
+              hitSlop={8}
+              style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 4 }}
+            >
+              <IconShare size={14} color={colors.primary} />
+              <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 13 }}>
+                {t(user.locale, 'accounts.share')}
+              </Text>
+            </Pressable>
+          ) : null}
+        </View>
         {accounts.length === 0 ? (
           <EmptyState
             title={t(user.locale, 'accounts.noAccountsTitle')}
@@ -1337,7 +1505,9 @@ export function AccountsScreen({
         ) : (
           accounts.map((a) => {
             const typeLabel = accountTypes.find((t) => t.id === a.account_type)?.label || a.account_type;
-            const last4 = `${a.name} ${a.institution_label || ''}`.match(/(\d{4})\b/)?.[1];
+            const last4 =
+              a.account_number?.replace(/\s+/g, '').slice(-4) ||
+              `${a.name} ${a.institution_label || ''}`.match(/(\d{4})\b/)?.[1];
             return (
             <View
               key={a.id}
@@ -1498,6 +1668,7 @@ export function AccountsScreen({
                 ) : null}
                 <IconAction
                   accessibilityLabel={t(user.locale, 'accounts.updateBalance')}
+                  label="Balance"
                   onPress={() => {
                     setEditId(null);
                     setCreating(false);
@@ -1510,10 +1681,9 @@ export function AccountsScreen({
                 </IconAction>
                 <IconAction
                   accessibilityLabel={t(user.locale, 'accounts.importStatement')}
+                  label="Import"
                   onPress={() => {
                     resetForm();
-                    setTransferOpen(false);
-                    setReconcileOpen(false);
                     setImportId(a.id);
                     setImportCsv('');
                     setImportFileName('');
@@ -1523,10 +1693,15 @@ export function AccountsScreen({
                 >
                   <IconUpload size={16} color={colors.primary} />
                 </IconAction>
+                {a.account_number ? (
+                  <IconAction accessibilityLabel={t(user.locale, 'accounts.share')} onPress={() => openShare(a.id)}>
+                    <IconShare size={16} color={colors.primary} />
+                  </IconAction>
+                ) : null}
                 <IconAction accessibilityLabel={t(user.locale, 'common.edit')} onPress={() => startEdit(a)}>
                   <IconEdit size={16} color={colors.primary} />
                 </IconAction>
-                <IconAction accessibilityLabel={t(user.locale, 'accounts.archive')} danger onPress={() => onArchive(a.id)}>
+                <IconAction accessibilityLabel={t(user.locale, 'accounts.archive')} danger onPress={() => confirmArchive(a)}>
                   <IconTrash size={16} color={colors.warning} />
                 </IconAction>
               </View>
@@ -1536,6 +1711,131 @@ export function AccountsScreen({
         )}
       </Card>
       ) : null}
+
+      {!panelOpen && tab === 'accounts' ? <View style={{ height: 72 }} /> : null}
+
+      <Modal visible={shareOpen} transparent animationType="slide" onRequestClose={() => setShareOpen(false)}>
+        <Pressable
+          onPress={() => setShareOpen(false)}
+          style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' }}
+        >
+          <Pressable
+            onPress={(e) => e.stopPropagation()}
+            style={{
+              backgroundColor: colors.surface,
+              borderTopLeftRadius: radii.xl,
+              borderTopRightRadius: radii.xl,
+              padding: space.lg,
+              maxHeight: '88%',
+              gap: space.md,
+              borderWidth: 1,
+              borderColor: colors.border,
+            }}
+          >
+            <View style={{ alignItems: 'center', marginBottom: 4 }}>
+              <View style={{ width: 40, height: 4, borderRadius: 2, backgroundColor: colors.border }} />
+            </View>
+            <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 20 }}>
+              {t(user.locale, 'accounts.shareTitle')}
+            </Text>
+            {shareable.length === 0 ? (
+              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
+                {t(user.locale, 'accounts.shareNone')}
+              </Text>
+            ) : (
+              <ScrollView contentContainerStyle={{ gap: space.md }} keyboardShouldPersistTaps="handled">
+                <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
+                  {t(user.locale, 'accounts.shareHint')}
+                </Text>
+                <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
+                  {t(user.locale, 'accounts.shareNothingSent')}
+                </Text>
+                {shareable.length > 1 ? (
+                  <CheckRow
+                    checked={shareIds.length === shareable.length}
+                    label={t(user.locale, 'accounts.shareAll')}
+                    onPress={() => {
+                      setCopied(false);
+                      setShareIds((ids) => (ids.length === shareable.length ? [] : shareable.map((a) => a.id)));
+                    }}
+                  />
+                ) : null}
+                {shareable.map((a) => (
+                  <CheckRow
+                    key={a.id}
+                    checked={shareIds.includes(a.id)}
+                    label={`${(a.institution_label || a.name).trim()} · •••• ${(a.account_number || '').replace(/\s+/g, '').slice(-4)}`}
+                    onPress={() => {
+                      setCopied(false);
+                      setShareIds((ids) => (ids.includes(a.id) ? ids.filter((x) => x !== a.id) : [...ids, a.id]));
+                    }}
+                  />
+                ))}
+                {shareIds.length ? (
+                  <View
+                    style={{
+                      backgroundColor: colors.surfaceMuted,
+                      borderRadius: radii.md,
+                      borderWidth: 1,
+                      borderColor: colors.border,
+                      padding: 12,
+                    }}
+                  >
+                    <Text selectable style={{ color: colors.text, fontFamily: fonts.ui, fontSize: 14, lineHeight: 21 }}>
+                      {shareMessage()}
+                    </Text>
+                  </View>
+                ) : null}
+              </ScrollView>
+            )}
+            {shareable.length ? (
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                <Pressable
+                  onPress={() => void onCopyShare()}
+                  accessibilityRole="button"
+                  style={{
+                    flex: 1,
+                    minHeight: 48,
+                    borderRadius: radii.md,
+                    flexDirection: 'row',
+                    gap: 8,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    backgroundColor: colors.primarySoft,
+                    borderWidth: 1,
+                    borderColor: colors.primary,
+                  }}
+                >
+                  <IconCopy size={16} color={colors.primary} />
+                  <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 14 }}>
+                    {copied ? t(user.locale, 'accounts.copied') : t(user.locale, 'accounts.copy')}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => void onSendShare()}
+                  accessibilityRole="button"
+                  style={{
+                    flex: 1,
+                    minHeight: 48,
+                    borderRadius: radii.md,
+                    flexDirection: 'row',
+                    gap: 8,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    backgroundColor: colors.primary,
+                  }}
+                >
+                  <IconShare size={16} color={colors.onPrimary} />
+                  <Text style={{ color: colors.onPrimary, fontFamily: fonts.uiSemi, fontSize: 14 }}>
+                    {t(user.locale, 'accounts.share')}
+                  </Text>
+                </Pressable>
+              </View>
+            ) : null}
+            <SecondaryButton label={t(user.locale, 'common.cancel') || 'Cancel'} onPress={() => setShareOpen(false)} />
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       <Modal visible={Boolean(acceptId)} transparent animationType="slide" onRequestClose={() => setAcceptId(null)}>
         <Pressable
@@ -1625,35 +1925,44 @@ function formatSmsDate(ms: number, locale?: string | null): string {
   return d.toLocaleDateString(locale || undefined, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
+/** A round icon button with its name underneath, so nobody has to guess what it does. */
 function IconAction({
   children,
   onPress,
   accessibilityLabel,
+  label,
   danger,
 }: {
   children: React.ReactNode;
   onPress: () => void;
   accessibilityLabel: string;
+  label?: string;
   danger?: boolean;
 }) {
   const { colors } = useTheme();
   return (
     <Pressable
       onPress={onPress}
+      accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
-      hitSlop={6}
-      style={{
-        width: 40,
-        height: 40,
-        borderRadius: radii.full,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: danger ? colors.warningSoft : colors.primarySoft,
-        borderWidth: 1,
-        borderColor: danger ? colors.warning : colors.primary,
-      }}
+      hitSlop={4}
+      style={{ alignItems: 'center', gap: 4, minWidth: 52 }}
     >
-      {children}
+      <View
+        style={{
+          width: 40,
+          height: 40,
+          borderRadius: radii.full,
+          alignItems: 'center',
+          justifyContent: 'center',
+          backgroundColor: danger ? colors.warningSoft : colors.primarySoft,
+        }}
+      >
+        {children}
+      </View>
+      <Text style={{ color: danger ? colors.warning : colors.muted, fontFamily: fonts.ui, fontSize: 11 }} numberOfLines={1}>
+        {label ?? accessibilityLabel}
+      </Text>
     </Pressable>
   );
 }

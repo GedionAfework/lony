@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Camera, Plus, Trash2 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
-import { api, isPremiumPlan, type Goal, type MoneyAccount } from '../lib/api';
+import { api, isPremiumPlan, type Goal, type GoalDraft, type MoneyAccount, type PlanAssistantSource } from '../lib/api';
+import { savingAdvice } from '../lib/planAdvice';
 import { formatMoney, stripAmount } from '../lib/format';
 import { CURRENCIES } from '../lib/catalogs';
 import { PageHeader } from '../components/PageHeader';
@@ -51,12 +52,14 @@ export function PlanPage() {
   const [describeText, setDescribeText] = useState('');
   const [urlBusy, setUrlBusy] = useState(false);
   const [extractBusy, setExtractBusy] = useState(false);
-  const [pendingCover, setPendingCover] = useState<{
-    filename: string;
-    mime: string;
-    attachment_base64: string;
-    preview: string;
-  } | null>(null);
+  // Product picture: shown as-is, and saved as the cover by the server after the plan is
+  // created (a browser is usually not allowed to download other sites' images).
+  const [coverUrl, setCoverUrl] = useState<string | null>(null);
+  // The product page's own price/currency, so price tracking compares like with like.
+  const [listing, setListing] = useState<{ url: string; price?: string; currency?: string } | null>(null);
+  const [aiReply, setAiReply] = useState('');
+  const [aiSources, setAiSources] = useState<PlanAssistantSource[]>([]);
+  const [advice, setAdvice] = useState('');
 
   const [contributeAmount, setContributeAmount] = useState('');
   const [contributeAccount, setContributeAccount] = useState('');
@@ -102,48 +105,25 @@ export function PlanPage() {
     setNote('');
     setProductUrl('');
     setDescribeText('');
-    setPendingCover(null);
+    setCoverUrl(null);
+    setListing(null);
+    setAiReply('');
+    setAiSources([]);
+    setAdvice('');
   }
 
-  async function applyImageUrl(imageUrl?: string) {
-    if (!imageUrl) return;
-    try {
-      const imgRes = await fetch(imageUrl);
-      if (!imgRes.ok) return;
-      const blob = await imgRes.blob();
-      const dataUrl: string = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result || ''));
-        reader.onerror = () => reject(new Error('read failed'));
-        reader.readAsDataURL(blob);
-      });
-      const idx = dataUrl.indexOf(',');
-      const b64 = idx >= 0 ? dataUrl.slice(idx + 1) : dataUrl;
-      setPendingCover({
-        filename: 'product.jpg',
-        mime: blob.type || 'image/jpeg',
-        attachment_base64: b64,
-        preview: imageUrl,
-      });
-    } catch {
-      /* cover best-effort */
-    }
-  }
-
-  function applyDraft(d: {
-    title?: string;
-    goal_type?: Goal['goal_type'];
-    currency_code?: string;
-    target_amount?: string;
-    target_date?: string;
-    note?: string;
-    source_url?: string;
-    image_url?: string;
-    type_label?: string;
-  }) {
+  function applyDraft(d: GoalDraft) {
     if (d.title) setTitle(d.title.slice(0, 120));
     if (d.target_amount) setTarget(d.target_amount);
-    if (d.currency_code && d.currency_code.length === 3) setCurrency(d.currency_code.toUpperCase());
+    const cur = d.currency_code && d.currency_code.length === 3 ? d.currency_code.toUpperCase() : currency;
+    if (d.currency_code && d.currency_code.length === 3) setCurrency(cur);
+    if (d.source_url) {
+      setListing({
+        url: d.source_url,
+        price: d.source_price || d.target_amount,
+        currency: d.source_currency || (d.currency_unknown ? undefined : cur),
+      });
+    }
     if (d.goal_type) {
       if (d.goal_type === 'custom') {
         setGoalType('other');
@@ -157,7 +137,14 @@ export function PlanPage() {
     if (d.target_date) setTargetDate(d.target_date);
     if (d.note && !note.trim()) setNote(d.note.slice(0, 400));
     if (d.source_url) setProductUrl(d.source_url);
-    void applyImageUrl(d.image_url);
+    if (d.image_url) setCoverUrl(d.image_url);
+  }
+
+  /** Warns when the price needs a human check before saving. */
+  function draftWarning(d: GoalDraft) {
+    if (!d.target_amount) showError('The page opened, but it did not list a full price. Add the amount below.');
+    else if (d.currency_unknown) showError(`The page shows ${d.target_amount} but not the currency. Check it is ${currency} before saving.`);
+    else if (d.estimated) showError('This price is an estimate, not read from a page. Check it before saving.');
   }
 
   async function onExtractDescribe() {
@@ -168,11 +155,36 @@ export function PlanPage() {
       return;
     }
     setExtractBusy(true);
+    setAiReply('');
+    setAiSources([]);
+    setAdvice('');
     try {
-      const res = await api.extractGoalDraft(token, text);
-      applyDraft(res.draft ?? {});
+      if (/https?:\/\/|www\./i.test(text)) {
+        const res = await api.extractGoalDraft(token, text, currency);
+        applyDraft(res.draft ?? {});
+        draftWarning(res.draft ?? {});
+        return;
+      }
+      // Looks the item up on the web: real listings, the pages used, and a price in this currency.
+      const res = await api.planAssistant(token, currency, [{ role: 'user', content: text }]);
+      setAiReply(res.reply || '');
+      setAiSources(res.sources ?? []);
+      const d = res.draft;
+      if (d?.title || d?.target_amount) {
+        // The listing the price came from, in its own currency, so tracking compares like with like.
+        const listing = (res.sources ?? []).find((src) => src.url === d.source_url && src.price && src.currency_code);
+        const foreign = listing && listing.currency_code?.toUpperCase() !== (d.currency_code || currency).toUpperCase();
+        applyDraft({
+          ...d,
+          image_url: d.image_url || res.image_url,
+          ...(foreign ? { source_price: listing!.price, source_currency: listing!.currency_code?.toUpperCase() } : {}),
+        });
+        if (d.target_amount) {
+          setAdvice(await savingAdvice(token, Number(d.target_amount), (d.currency_code || currency).toUpperCase(), d.target_date, user?.locale));
+        }
+      }
     } catch (e) {
-      showError(e instanceof Error ? e.message : 'Could not extract plan details');
+      showError(e instanceof Error ? e.message : 'Could not look that up');
     } finally {
       setExtractBusy(false);
     }
@@ -186,24 +198,16 @@ export function PlanPage() {
       return;
     }
     setUrlBusy(true);
-      try {
-        try {
-          if (!isPremiumPlan(user)) throw new Error('skip-ai');
-          const res = await api.extractGoalDraft(token, url);
-          applyDraft(res.draft ?? {});
-        } catch {
-          const res = await api.previewGoalUrl(token, url);
-        const p = res.preview;
-        applyDraft({
-          title: p.title,
-          target_amount: p.price,
-          currency_code: p.currency,
-          note: p.description,
-          source_url: p.url || url,
-          image_url: p.image_url,
-          goal_type: 'purchase',
-        });
+    try {
+      // The server reads the page (no AI needed) and converts a foreign price to this currency.
+      const res = await api.extractGoalDraft(token, url, currency);
+      const d = res.draft ?? {};
+      if (!d.title && !d.target_amount) {
+        showError('That page did not include a product title or a price. Try the product page itself.');
+        return;
       }
+      applyDraft({ ...d, source_url: d.source_url || url, goal_type: d.goal_type || 'purchase' });
+      draftWarning(d);
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Could not read that link');
     } finally {
@@ -248,13 +252,13 @@ export function PlanPage() {
         note: note.trim() || undefined,
         type_label: goalType === 'other' ? otherType.trim() : undefined,
         source_url: productUrl.trim() || undefined,
+        ...(listing && listing.url === productUrl.trim() && listing.currency
+          ? { last_seen_price: listing.price, source_currency: listing.currency }
+          : {}),
       }).then(async (res) => {
-        if (pendingCover && res.goal?.id) {
-          await api.uploadGoalCover(token, res.goal.id, {
-            filename: pendingCover.filename,
-            mime: pendingCover.mime,
-            attachment_base64: pendingCover.attachment_base64,
-          });
+        if (coverUrl && res.goal?.id) {
+          // Best effort: a plan without a picture is still a plan.
+          await api.setGoalCoverFromUrl(token, res.goal.id, coverUrl).catch(() => undefined);
         }
       });
       setCreateOpen(false);
@@ -473,8 +477,21 @@ export function PlanPage() {
           placeholder='MacBook Pro 14" around $2,000 by June, or paste a store link…'
         />
         <Button variant="secondary" onClick={() => void onExtractDescribe()} busy={extractBusy} disabled={extractBusy || urlBusy || busy} block>
-          {extractBusy ? 'Extracting…' : 'Fill form with AI'}
+          {extractBusy ? 'Looking up prices…' : 'Find the price with AI'}
         </Button>
+        {aiReply ? <p style={{ fontSize: 13, margin: '6px 0' }}>{aiReply}</p> : null}
+        {aiSources.length ? (
+          <div className="flex-col" style={{ gap: 4 }}>
+            {aiSources.map((src) => (
+              <a key={src.url} href={src.url} target="_blank" rel="noreferrer" className="muted" style={{ fontSize: 12 }}>
+                {src.site}
+                {src.price ? ` · ${src.currency_code || ''} ${src.price}` : ''}
+                {src.price_local && src.currency_code !== currency ? ` (≈ ${currency} ${src.price_local})` : ''}
+              </a>
+            ))}
+          </div>
+        ) : null}
+        {advice ? <p className="muted" style={{ fontSize: 13, margin: '6px 0' }}>{advice}</p> : null}
           </>
         ) : (
           <p className="muted" style={{ fontSize: 13 }}>Plan AI is included with Premium.</p>
@@ -486,7 +503,7 @@ export function PlanPage() {
         <Button variant="secondary" onClick={() => void onFetchProductUrl()} busy={urlBusy} disabled={urlBusy || extractBusy || busy} block>
           {urlBusy ? 'Reading link…' : 'Fetch from link'}
         </Button>
-        {pendingCover ? <img src={pendingCover.preview} alt="" className="cover-image" style={{ height: 120 }} /> : null}
+        {coverUrl ? <img src={coverUrl} alt="" className="cover-image" style={{ height: 120 }} onError={() => setCoverUrl(null)} /> : null}
         <div className="muted" style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, marginTop: 8 }}>
           Details
         </div>

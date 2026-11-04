@@ -81,6 +81,35 @@ type Message struct {
 	AttachmentObjectKey *string
 	VoiceDurationMs     *int32
 	CreatedAt           time.Time
+	UpdatedAt           time.Time  // moves on any change the other person must see
+	DeletedAt           *time.Time // only returned by "changed since" queries
+}
+
+// MessageQuery picks one page of a thread. With nothing set it is the newest Limit
+// messages. Before/BeforeID pages backwards; Since returns everything changed after a
+// cursor (new, reacted, deleted, moved), deleted ones included. After is the old
+// "created after" mode kept for older app versions.
+type MessageQuery struct {
+	After    *time.Time
+	Before   *time.Time
+	BeforeID *uuid.UUID
+	Since    *time.Time
+	Limit    int32
+}
+
+// SinceOverlap re-reads a little before the cursor so a message committed just after
+// the previous poll's clock reading is never skipped; clients merge by id.
+const SinceOverlap = 5 * time.Second
+
+// MessagePage is one fetch of a thread.
+type MessagePage struct {
+	Messages []MessageDTO `json:"messages"`
+	// Cursor is passed back as "since" on the next poll.
+	Cursor time.Time `json:"cursor"`
+	// HasMore: older messages exist before the first one returned.
+	HasMore bool `json:"has_more"`
+	// PeerReadAt lets the app mark its own messages read without refetching them.
+	PeerReadAt *time.Time `json:"peer_read_at,omitempty"`
 }
 
 type Reaction struct {
@@ -109,7 +138,9 @@ type Store interface {
 	DeleteConversation(ctx context.Context, id uuid.UUID) error
 	InsertMessage(ctx context.Context, msg Message) (Message, error)
 	GetMessage(ctx context.Context, id uuid.UUID) (Message, error)
-	ListMessages(ctx context.Context, conversationID uuid.UUID, after *time.Time, limit int32) ([]Message, error)
+	// ListMessages returns the rows for q (always oldest first) and the database clock
+	// at query time, used as the next "since" cursor.
+	ListMessages(ctx context.Context, conversationID uuid.UUID, q MessageQuery) ([]Message, time.Time, error)
 	SoftDeleteMessage(ctx context.Context, id, senderID uuid.UUID) (Message, error)
 	UpsertReaction(ctx context.Context, messageID, userID uuid.UUID, emoji string) (Reaction, error)
 	DeleteReaction(ctx context.Context, messageID, userID uuid.UUID, emoji string) error
@@ -124,11 +155,21 @@ type MediaStore interface {
 }
 
 type Service struct {
-	store Store
-	media MediaStore
-	gate  FriendshipGate
-	loans LoanParty
-	now   func() time.Time
+	store    Store
+	media    MediaStore
+	gate     FriendshipGate
+	loans    LoanParty
+	notifier MessageNotifier
+	now      func() time.Time
+}
+
+// MessageNotifier pushes a new message to the other person's phone.
+type MessageNotifier interface {
+	OnChatMessage(ctx context.Context, recipient, sender uuid.UUID, senderName, preview string) error
+}
+
+func (s *Service) SetNotifier(n MessageNotifier) {
+	s.notifier = n
 }
 
 func NewService(store Store, media MediaStore, gate FriendshipGate) *Service {
@@ -189,6 +230,9 @@ type MessageDTO struct {
 	VoiceDurationMs *int32        `json:"voice_duration_ms,omitempty"`
 	Reactions       []ReactionDTO `json:"reactions"`
 	CreatedAt       time.Time     `json:"created_at"`
+	UpdatedAt       time.Time     `json:"updated_at"`
+	// Deleted: remove this message from the screen (only in "since" results).
+	Deleted bool `json:"deleted,omitempty"`
 }
 
 type SendInput struct {
@@ -367,19 +411,39 @@ func (s *Service) List(ctx context.Context, actor uuid.UUID) ([]ConversationDTO,
 	return out, nil
 }
 
-func (s *Service) ListMessages(ctx context.Context, actor, conversationID uuid.UUID, after *time.Time, limit int32) ([]MessageDTO, error) {
+func (s *Service) ListMessages(ctx context.Context, actor, conversationID uuid.UUID, q MessageQuery) (MessagePage, error) {
 	if err := s.requireMember(ctx, conversationID, actor); err != nil {
-		return nil, err
+		return MessagePage{}, err
 	}
-	if limit <= 0 || limit > 100 {
-		limit = 50
+	sinceMode := q.Since != nil
+	if sinceMode {
+		if q.Limit <= 0 || q.Limit > 500 {
+			q.Limit = 500
+		}
+	} else if q.Limit <= 0 || q.Limit > 100 {
+		q.Limit = 50
 	}
-	rows, err := s.store.ListMessages(ctx, conversationID, after, limit)
+	paging := !sinceMode && q.After == nil
+	want := q.Limit
+	if paging {
+		q.Limit++ // one extra row tells us whether older messages exist
+	}
+	rows, dbNow, err := s.store.ListMessages(ctx, conversationID, q)
 	if err != nil {
-		return nil, err
+		return MessagePage{}, err
+	}
+	page := MessagePage{Cursor: dbNow}
+	if paging && int32(len(rows)) > want {
+		page.HasMore = true
+		rows = rows[len(rows)-int(want):] // drop the oldest extra row
+	}
+	if sinceMode && int32(len(rows)) == q.Limit {
+		// More changes than fit: continue from the last one next time.
+		page.Cursor = rows[len(rows)-1].UpdatedAt
 	}
 	_ = s.store.MarkConversationRead(ctx, conversationID, actor, s.now().UTC())
-	return s.mapMessages(ctx, actor, rows)
+	page.Messages, page.PeerReadAt, err = s.mapMessagesWithRead(ctx, actor, conversationID, rows)
+	return page, err
 }
 
 func (s *Service) Send(ctx context.Context, actor, conversationID uuid.UUID, in SendInput) (MessageDTO, error) {
@@ -445,11 +509,54 @@ func (s *Service) Send(ctx context.Context, actor, conversationID uuid.UUID, in 
 	now := s.now().UTC()
 	_ = s.store.TouchConversation(ctx, conversationID, now)
 	_ = s.store.MarkConversationRead(ctx, conversationID, actor, now)
+	s.notifyRecipient(ctx, actor, conversationID, saved)
 	out, err := s.mapMessages(ctx, actor, []Message{saved})
 	if err != nil {
 		return MessageDTO{}, err
 	}
 	return out[0], nil
+}
+
+// notifyRecipient pushes a short preview of a new message to the other member.
+func (s *Service) notifyRecipient(ctx context.Context, actor, conversationID uuid.UUID, msg Message) {
+	if s.notifier == nil {
+		return
+	}
+	conv, err := s.store.GetConversationByID(ctx, conversationID)
+	if err != nil {
+		return
+	}
+	recipient := conv.UserHighID
+	if recipient == actor {
+		recipient = conv.UserLowID
+	}
+	if recipient == actor {
+		return // notes to self
+	}
+	name := "New message"
+	if peer, err := s.store.GetUserPeer(ctx, actor); err == nil && strings.TrimSpace(peer.DisplayName) != "" {
+		name = peer.DisplayName
+	}
+	_ = s.notifier.OnChatMessage(ctx, recipient, actor, name, messagePreview(msg))
+}
+
+func messagePreview(msg Message) string {
+	switch msg.AttachmentKind {
+	case "voice":
+		return "🎤 Voice message"
+	case "image":
+		return "📷 Photo"
+	case "file":
+		return "📎 File"
+	}
+	if msg.Body == nil {
+		return "New message"
+	}
+	text := strings.Join(strings.Fields(*msg.Body), " ")
+	if utf8.RuneCountInString(text) > 120 {
+		text = string([]rune(text)[:117]) + "…"
+	}
+	return text
 }
 
 func (s *Service) React(ctx context.Context, actor, messageID uuid.UUID, emoji string, remove bool) (MessageDTO, error) {
@@ -599,18 +706,25 @@ func (s *Service) moneyLinksForConversation(ctx context.Context, actor, peerID u
 }
 
 func (s *Service) mapMessages(ctx context.Context, actor uuid.UUID, rows []Message) ([]MessageDTO, error) {
-	ids := make([]uuid.UUID, 0, len(rows))
 	var conversationID uuid.UUID
 	for _, r := range rows {
-		ids = append(ids, r.ID)
 		conversationID = r.ConversationID
+	}
+	out, _, err := s.mapMessagesWithRead(ctx, actor, conversationID, rows)
+	return out, err
+}
+
+func (s *Service) mapMessagesWithRead(ctx context.Context, actor, conversationID uuid.UUID, rows []Message) ([]MessageDTO, *time.Time, error) {
+	ids := make([]uuid.UUID, 0, len(rows))
+	for _, r := range rows {
+		ids = append(ids, r.ID)
 		if r.ReplyToMessageID != nil {
 			ids = append(ids, *r.ReplyToMessageID)
 		}
 	}
 	reactions, err := s.store.ListReactions(ctx, uniqueIDs(ids))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	byMsg := map[uuid.UUID][]Reaction{}
 	for _, r := range reactions {
@@ -632,6 +746,13 @@ func (s *Service) mapMessages(ctx context.Context, actor uuid.UUID, rows []Messa
 	replyCache := map[uuid.UUID]Message{}
 	out := make([]MessageDTO, 0, len(rows))
 	for _, row := range rows {
+		if row.DeletedAt != nil {
+			out = append(out, MessageDTO{
+				ID: row.ID, ConversationID: row.ConversationID, SenderID: row.SenderID, Mine: row.SenderID == actor,
+				Reactions: []ReactionDTO{}, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, Deleted: true,
+			})
+			continue
+		}
 		dto := s.toMessageDTO(actor, row, byMsg[row.ID], peerRead)
 		if row.ReplyToMessageID != nil {
 			reply, ok := replyCache[*row.ReplyToMessageID]
@@ -649,7 +770,7 @@ func (s *Service) mapMessages(ctx context.Context, actor uuid.UUID, rows []Messa
 		}
 		out = append(out, dto)
 	}
-	return out, nil
+	return out, peerRead, nil
 }
 
 func (s *Service) toMessageDTO(actor uuid.UUID, row Message, reactions []Reaction, peerRead *time.Time) MessageDTO {
@@ -672,6 +793,7 @@ func (s *Service) toMessageDTO(actor uuid.UUID, row Message, reactions []Reactio
 		VoiceDurationMs: row.VoiceDurationMs,
 		Reactions:       aggregateReactions(actor, reactions),
 		CreatedAt:       row.CreatedAt,
+		UpdatedAt:       row.UpdatedAt,
 	}
 	if row.AttachmentObjectKey != nil {
 		url := "/api/v1/media/" + *row.AttachmentObjectKey

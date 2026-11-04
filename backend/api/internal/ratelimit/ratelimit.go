@@ -1,8 +1,11 @@
 package ratelimit
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -21,6 +24,9 @@ type Limiter struct {
 	limit    int
 	interval time.Duration
 	now      func() time.Time
+	// perSession counts signed-in requests per access token instead of per IP, so people
+	// sharing one carrier IP do not share one limit.
+	perSession bool
 }
 
 func New(limit int, interval time.Duration) *Limiter {
@@ -32,9 +38,25 @@ func New(limit int, interval time.Duration) *Limiter {
 	}
 }
 
+// PerSession makes the limiter count each signed-in session separately.
+func (l *Limiter) PerSession() *Limiter {
+	l.perSession = true
+	return l
+}
+
+func (l *Limiter) key(r *http.Request) string {
+	if l.perSession {
+		if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") && len(h) > 20 {
+			sum := sha256.Sum256([]byte(h))
+			return "s:" + hex.EncodeToString(sum[:12])
+		}
+	}
+	return clientIP(r)
+}
+
 func (l *Limiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		key := clientIP(r)
+		key := l.key(r)
 		if !l.allow(key) {
 			httpx.Error(w, httpx.E(http.StatusTooManyRequests, "RATE_LIMITED", "too many requests, try again shortly"))
 			return

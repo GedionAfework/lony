@@ -136,10 +136,11 @@ async function request<T>(
       data = JSON.parse(raw) as T | ApiError;
     } catch {
       const snippet = raw.replace(/\s+/g, ' ').trim().slice(0, 120);
-      throw new Error(
+      throw failure(
         res.ok
           ? `Unexpected response from server${snippet ? `: ${snippet}` : ''}`
-          : `Request failed (${res.status})${snippet ? `: ${snippet}` : ''}`,
+          : outageMessage(res.status) ?? `Request failed (${res.status})${snippet ? `: ${snippet}` : ''}`,
+        res.status,
       );
     }
   }
@@ -156,18 +157,38 @@ async function request<T>(
       const detail = Object.entries(fields)
         .map(([k, v]) => `${k}: ${v}`)
         .join('; ');
-      if (detail) {
-        const e = new Error(detail) as Error & { api?: ApiError };
-        e.api = err ?? undefined;
-        throw e;
-      }
+      if (detail) throw failure(detail, res.status, err);
     }
-    const message = err?.error?.message ?? `Request failed (${res.status})`;
-    const e = new Error(message) as Error & { api?: ApiError };
-    e.api = err ?? undefined;
-    throw e;
+    const message = outageMessage(res.status) ?? err?.error?.message ?? `Request failed (${res.status})`;
+    throw failure(message, res.status, err);
   }
   return data as T;
+}
+
+
+/** An Error from the API that remembers the HTTP status. */
+export type ApiFailure = Error & { status?: number; api?: ApiError };
+
+function failure(message: string, status: number, api?: ApiError | null): ApiFailure {
+  const e = new Error(message) as ApiFailure;
+  e.status = status;
+  e.api = api ?? undefined;
+  return e;
+}
+
+/** Plain words for gateway/outage statuses instead of "Request failed (503)". */
+function outageMessage(status: number): string | null {
+  if (status === 502 || status === 503 || status === 504) {
+    return 'Lony is temporarily unavailable. Please try again in a few minutes.';
+  }
+  if (status === 429) return 'Too many requests right now. Please wait a moment and try again.';
+  return null;
+}
+
+/** True only when the server rejected the login itself (bad/expired token, disabled account). */
+export function isAuthRejected(e: unknown): boolean {
+  const status = (e as ApiFailure | null)?.status;
+  return status === 401 || status === 403;
 }
 
 type TokenRefresher = () => Promise<string | null>;
@@ -178,13 +199,21 @@ export function setTokenRefresher(fn: TokenRefresher | null) {
   tokenRefresher = fn;
 }
 
+// One refresh at a time: when the access token expires, many requests fail together. They
+// all wait for the same refresh instead of each spending the (single-use) refresh token.
+let refreshInFlight: Promise<string | null> | null = null;
+
 async function tryRefreshAccessToken(): Promise<string | null> {
   if (!tokenRefresher) return null;
-  try {
-    return await tokenRefresher();
-  } catch {
-    return null;
+  if (!refreshInFlight) {
+    const run = tokenRefresher;
+    refreshInFlight = run()
+      .catch(() => null)
+      .finally(() => {
+        refreshInFlight = null;
+      });
   }
+  return refreshInFlight;
 }
 
 function idemKey(prefix: string): string {
@@ -568,10 +597,10 @@ export const api = {
       headers: { 'Idempotency-Key': idemKey('ai-plan-chat') },
       body: JSON.stringify({ currency_code, messages }),
     }, token, { timeoutMs: 60_000 }),
-  extractGoalDraft: (token: string, text: string) =>
+  extractGoalDraft: (token: string, text: string, currency?: string) =>
     request<{ draft: GoalDraft }>('/goals/extract', {
       method: 'POST',
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({ text, currency }),
     }, token, { timeoutMs: 18_000 }),
   searchGoalMarket: (token: string, query: string, currency_code: string, timeoutMs = 10_000) =>
     request<{ market: GoalMarketSearch }>('/goals/market-search', {
@@ -590,6 +619,12 @@ export const api = {
     }, token),
   listGoalPriceHistory: (token: string, id: string) =>
     request<{ history: GoalPricePoint[] }>(`/goals/${id}/price-history`, { method: 'GET' }, token),
+  setGoalCoverFromUrl: (token: string, id: string, imageUrl: string) =>
+    request<{ goal: Goal }>(`/goals/${id}/cover-url`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('goal-cover-url') },
+      body: JSON.stringify({ image_url: imageUrl }),
+    }, token),
   updateGoal: (token: string, id: string, body: UpdateGoalBody) =>
     request<{ goal: Goal }>(`/goals/${id}`, {
       method: 'PATCH',
@@ -977,6 +1012,10 @@ export const api = {
       note?: string;
       stated_balance?: string;
       occurred_at?: string;
+      /** When the phone received the SMS (ms). Two identical texts at different times are two transfers. */
+      sms_date?: number;
+      /** The user confirmed this message is a real transfer (from the review list). */
+      confirmed?: boolean;
     },
   ) =>
     request<{
@@ -1093,20 +1132,65 @@ export const api = {
       proof_filename?: string;
       proof_mime?: string;
       proof_base64?: string;
+      /** Record the payment as an expense from this account, in the same step as the claim. */
+      pay_from_account_id?: string;
+      title?: string;
+      category_id?: string;
+      occurred_at?: string;
+      /** Or link an expense that is already recorded (e.g. resubmitting a rejected payment). */
+      paid_entry_id?: string;
     } = {},
+    /** Fixed key for a payment that may be sent more than once (offline drafts). */
+    idempotencyKey?: string,
   ) =>
     request<{ repayment: Repayment }>(`/loans/${loanId}/repayments`, {
       method: 'POST',
-      headers: { 'Idempotency-Key': idemKey('repay-claim') },
+      headers: { 'Idempotency-Key': idempotencyKey || idemKey('repay-claim') },
       body: JSON.stringify(body),
     }, token),
   listRepayments: (token: string, loanId: string) =>
     request<{ repayments: Repayment[] }>(`/loans/${loanId}/repayments`, { method: 'GET' }, token),
-  confirmRepayment: (token: string, id: string) =>
+  confirmRepayment: (
+    token: string,
+    id: string,
+    body: { received_account_id?: string; received_entry_id?: string } = {},
+  ) =>
     request<{ repayment: Repayment }>(`/repayments/${id}/confirm`, {
       method: 'POST',
       headers: { 'Idempotency-Key': idemKey('repay-confirm') },
+      body: JSON.stringify(body),
     }, token),
+  resolveRepayment: (token: string, id: string, action: 'undo_expense' | 'keep_expense') =>
+    request<{ repayment: Repayment }>(`/repayments/${id}/resolve`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('repay-resolve') },
+      body: JSON.stringify({ action }),
+    }, token),
+  setLoanAccountLink: (token: string, loanId: string, body: { account_id?: string | null; dismiss?: boolean }) =>
+    request<{ loan: Loan }>(`/loans/${loanId}/account-link`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('loan-account-link') },
+      body: JSON.stringify(body),
+    }, token),
+  debtCardMatches: (token: string, institution: string, currency: string) =>
+    request<{ cards: MoneyAccount[] }>(
+      `/accounts/debt-matches?institution=${encodeURIComponent(institution)}&currency=${encodeURIComponent(currency)}`,
+      { method: 'GET' },
+      token,
+    ),
+  /** Voice/receipt captures left this month (free users get a monthly allowance). */
+  captureAllowance: (token: string) =>
+    request<{ allowance: CaptureAllowance }>('/ai/capture-allowance', { method: 'GET' }, token),
+  declinedShares: (token: string) =>
+    request<{ declined_shares: DeclinedShare[] }>('/cashflow/declined-shares', { method: 'GET' }, token),
+  resolveDeclinedShare: (token: string, loanId: string, action: 'ask_again' | 'keep_cost') =>
+    request<{ loan: Loan | null }>(`/cashflow/declined-shares/${loanId}`, {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('declined-share') },
+      body: JSON.stringify({ action }),
+    }, token),
+  possibleDuplicateDebts: (token: string) =>
+    request<{ duplicates: PossibleDuplicateDebt[] }>('/loans/possible-duplicates', { method: 'GET' }, token),
   rejectRepayment: (token: string, id: string, reason: string) =>
     request<{ repayment: Repayment }>(`/repayments/${id}/reject`, {
       method: 'POST',
@@ -1184,9 +1268,18 @@ export const api = {
       headers: { 'Idempotency-Key': idemKey('chat-open') },
       body: JSON.stringify(opts),
     }, token),
-  listMessages: (token: string, conversationId: string, after?: string) => {
-    const q = after ? `?after=${encodeURIComponent(after)}` : '';
-    return request<{ messages: ChatMessage[] }>(`/conversations/${conversationId}/messages${q}`, { method: 'GET' }, token);
+  /**
+   * One page of a thread. No options: the newest messages. `before`/`beforeId`: older
+   * ones (scrolling up). `since`: everything changed after the last page's cursor,
+   * including deleted messages, so polling never misses a message or an update.
+   */
+  listMessages: (token: string, conversationId: string, opts: { since?: string; before?: string; beforeId?: string } = {}) => {
+    const params = new URLSearchParams();
+    if (opts.since) params.set('since', opts.since);
+    if (opts.before) params.set('before', opts.before);
+    if (opts.beforeId) params.set('before_id', opts.beforeId);
+    const q = params.toString() ? `?${params.toString()}` : '';
+    return request<MessagePage>(`/conversations/${conversationId}/messages${q}`, { method: 'GET' }, token);
   },
   sendMessage: (
     token: string,
@@ -1264,10 +1357,15 @@ export type Loan = {
   interest_rate_percent: string | null;
   interest_amount: string | null;
   expected_total: string | null;
+  outstanding_amount?: string | null;
+  /** Self-recorded debt that is part of this credit card's balance. */
+  linked_account_id?: string | null;
   due_at: string | null;
   note: string | null;
   title?: string | null;
   interest_period_months?: number | null;
+  /** One-time loans: how the flat rate is charged. */
+  interest_charge?: 'once' | 'per_month' | 'per_year';
   installment_count?: number | null;
   installment_amount?: string | null;
   institution_label?: string | null;
@@ -1296,6 +1394,8 @@ export type LoanInstallment = {
 
 export type CreateLoanBody = {
   counterparty_id?: string;
+  /** Self-recorded debt that is part of this credit card's balance (counted once). */
+  linked_account_id?: string;
   co_lender_ids?: string[];
   role: 'borrower' | 'lender';
   principal?: string;
@@ -1307,6 +1407,7 @@ export type CreateLoanBody = {
   loan_kind?: 'one_time' | 'long_term';
   party_mode?: 'peer' | 'alone' | 'shared';
   interest_period_months?: number;
+  interest_charge?: 'once' | 'per_month' | 'per_year';
   installment_count?: number;
   institution_label?: string;
   institution_type?: string;
@@ -1321,6 +1422,7 @@ export type LoanTermsBody = {
   note?: string;
   loan_kind?: 'one_time' | 'long_term';
   interest_period_months?: number;
+  interest_charge?: 'once' | 'per_month' | 'per_year';
   installment_count?: number;
   institution_label?: string;
   start_at?: string;
@@ -1341,6 +1443,8 @@ export type CashflowEntry = {
   next_occurrence_at?: string | null;
   template_id?: string | null;
   linked_loan_id?: string | null;
+  /** Every friend's share of a split expense (one loan each). */
+  shared_with?: { loan_id: string; friend_name: string; amount: string; currency_code: string; status: string }[];
   account_id?: string | null;
   split_group_id?: string | null;
   trip_id?: string | null;
@@ -1539,6 +1643,13 @@ export type GoalDraft = {
   /** Search-engine thumbnail, used when image_url refuses to download. */
   image_thumb_url?: string;
   type_label?: string;
+  /** The listing's own price when it is in another currency (target_amount is converted). */
+  source_price?: string;
+  source_currency?: string;
+  /** The page showed a price without saying which currency. */
+  currency_unknown?: boolean;
+  /** The price is an estimate, not read from a page. */
+  estimated?: boolean;
 };
 
 export type PlanAssistantImage = {
@@ -1565,6 +1676,14 @@ export type PlanAssistantReply = {
   image_url?: string;
   images?: PlanAssistantImage[];
   sources?: PlanAssistantSource[];
+  /** Tappable answers to the assistant's question, each with a picture when one was found. */
+  options?: PlanAssistantOption[];
+};
+
+export type PlanAssistantOption = {
+  label: string;
+  image_url?: string;
+  thumb_url?: string;
 };
 
 export type GoalPriceChange = {
@@ -1599,6 +1718,9 @@ export type CreateGoalBody = {
   note?: string;
   type_label?: string;
   source_url?: string;
+  /** Listing price in its own currency, when that differs from currency_code. */
+  last_seen_price?: string;
+  source_currency?: string;
 };
 
 export type UpdateGoalBody = {
@@ -1920,6 +2042,7 @@ export type MoneyAccount = {
   interest_rate_percent?: string | null;
   compounding?: 'none' | 'monthly' | 'yearly' | null;
   institution_label?: string | null;
+  account_number?: string | null;
   bank_profile_id?: string | null;
   credit_limit?: string | null;
   statement_day?: number | null;
@@ -1981,6 +2104,8 @@ export type CreateAccountBody = {
   interest_rate_percent?: string;
   compounding?: 'none' | 'monthly' | 'yearly';
   institution_label?: string;
+  /** Full account number; an empty string clears it. */
+  account_number?: string;
   bank_profile_id?: string;
   credit_limit?: string;
   statement_day?: number;
@@ -1994,6 +2119,8 @@ export type UpdateAccountBody = {
   interest_rate_percent?: string;
   compounding?: 'none' | 'monthly' | 'yearly';
   institution_label?: string;
+  /** Full account number; an empty string clears it. */
+  account_number?: string;
   bank_profile_id?: string;
   clear_interest?: boolean;
   credit_limit?: string;
@@ -2018,6 +2145,10 @@ export type WealthSummary = {
   net_worth: string;
   live_net_worth?: string;
   net_worth_manual?: boolean;
+  /** Totals add every currency, converted to preferred_currency at today's rate. */
+  converted?: boolean;
+  /** Currencies left out of the totals because no exchange rate was available. */
+  missing_rates?: string[];
   by_currency: WealthCurrencySlice[];
   accounts: MoneyAccount[];
 };
@@ -2086,6 +2217,36 @@ export type Repayment = {
   created_at: string;
   can_confirm: boolean;
   can_reject: boolean;
+  paid_entry_id?: string | null;
+  received_entry_id?: string | null;
+  /** Rejected, but the borrower's expense is still recorded: resubmit, undo or keep it. */
+  needs_resolution?: boolean;
+};
+
+export type CaptureAllowance = {
+  used: number;
+  limit: number;
+  unlimited: boolean;
+  resets_at: string;
+};
+
+/** A friend turned down their share of one of your expenses. */
+export type DeclinedShare = {
+  loan_id: string;
+  entry_id: string;
+  entry_title: string;
+  friend: { id: string; display_name: string };
+  amount: string;
+  currency_code: string;
+};
+
+/** A self-recorded debt that may already be inside a credit card balance. */
+export type PossibleDuplicateDebt = {
+  loan_id: string;
+  loan_title: string;
+  outstanding: string;
+  currency_code: string;
+  cards: MoneyAccount[];
 };
 
 export type AppNotification = {
@@ -2159,4 +2320,16 @@ export type ChatMessage = {
   voice_duration_ms?: number | null;
   reactions: ChatReaction[];
   created_at: string;
+  updated_at?: string;
+  /** Only in "since" results: remove this message. */
+  deleted?: boolean;
+};
+
+export type MessagePage = {
+  messages: ChatMessage[];
+  /** Pass back as `since` on the next poll. */
+  cursor: string;
+  /** Older messages exist before the first one returned. */
+  has_more: boolean;
+  peer_read_at?: string | null;
 };

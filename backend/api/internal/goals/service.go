@@ -34,6 +34,7 @@ type Service struct {
 	milestones MilestoneNotifier
 	prices     PriceChangeNotifier
 	extractor  PlanExtractor
+	fx         RateSource
 	now        func() time.Time
 }
 
@@ -164,6 +165,11 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, in CreateInput) 
 		LastSeenPrice:      lastSeen,
 		LastPriceCheckedAt: checkedAt,
 	}
+	if srcURL != nil && in.SourceCurrency != nil {
+		if c := strings.ToUpper(strings.TrimSpace(*in.SourceCurrency)); len(c) == 3 && c != currency {
+			rec.SourceCurrency = &c
+		}
+	}
 	saved, err := s.store.Insert(ctx, rec)
 	if err != nil {
 		return GoalDTO{}, err
@@ -255,11 +261,13 @@ func (s *Service) Update(ctx context.Context, userID, id uuid.UUID, in UpdateInp
 		if srcURL == nil {
 			rec.LastSeenPrice = nil
 			rec.LastPriceCheckedAt = nil
+			rec.SourceCurrency = nil
 		} else if changed {
 			seen := rec.TargetAmount
 			now := s.now().UTC()
 			rec.LastSeenPrice = &seen
 			rec.LastPriceCheckedAt = &now
+			rec.SourceCurrency = nil
 		}
 	}
 	if in.LastSeenPrice != nil {

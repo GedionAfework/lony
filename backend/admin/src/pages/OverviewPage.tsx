@@ -276,7 +276,7 @@ export function OverviewPage() {
           <StatCard
             icon={Coins}
             label="AI tokens (7d)"
-            value={(overview.ai_tokens_7d ?? 0).toLocaleString()}
+            value={new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(overview.ai_tokens_7d ?? 0)}
             hint={`${overview.ai_requests_today ?? 0} requests today`}
           />
           <StatCard
@@ -286,8 +286,8 @@ export function OverviewPage() {
           />
           <StatCard
             icon={AlertTriangle}
-            label="Loan health"
-            value={`${overview.open_loans} open`}
+            label="Open loans"
+            value={overview.open_loans.toLocaleString()}
             hint={`${overview.overdue_loans} overdue`}
             tone={overview.overdue_loans > 0 ? 'warning' : 'default'}
           />

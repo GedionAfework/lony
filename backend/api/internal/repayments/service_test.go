@@ -58,11 +58,11 @@ func TestClaimConfirmCompletesLoan(t *testing.T) {
 		t.Fatal("duplicate claim")
 	}
 
-	if _, err := svc.Confirm(ctx, borrower, claimed.ID); err == nil {
+	if _, err := svc.Confirm(ctx, borrower, claimed.ID, ConfirmInput{}); err == nil {
 		t.Fatal("borrower cannot confirm")
 	}
 
-	confirmed, err := svc.Confirm(ctx, lender, claimed.ID)
+	confirmed, err := svc.Confirm(ctx, lender, claimed.ID, ConfirmInput{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestClaimConfirmCompletesLoan(t *testing.T) {
 		t.Fatalf("outstanding %+v", loan.OutstandingAmount)
 	}
 
-	if _, err := svc.Confirm(ctx, lender, claimed.ID); err == nil {
+	if _, err := svc.Confirm(ctx, lender, claimed.ID, ConfirmInput{}); err == nil {
 		t.Fatal("double confirm")
 	}
 }

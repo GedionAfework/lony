@@ -1,5 +1,5 @@
 import { EncodingType, readAsStringAsync } from 'expo-file-system/legacy';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Platform, Pressable, Text } from 'react-native';
 import {
   AudioModule,
@@ -41,6 +41,14 @@ export function VoiceAddButton({ token, locale, disabled, onDraft, onError }: Pr
   const recorderState = useAudioRecorderState(audioRecorder, 200);
   const [busy, setBusy] = useState(false);
   const startedAt = useRef(0);
+  // Free users: captures left this month (null = unlimited or unknown).
+  const [left, setLeft] = useState<number | null>(null);
+  useEffect(() => {
+    api
+      .captureAllowance(token)
+      .then((r) => setLeft(r.allowance.unlimited ? null : Math.max(0, r.allowance.limit - r.allowance.used)))
+      .catch(() => setLeft(null));
+  }, [token, busy]);
   const recording = recorderState.isRecording;
 
   async function toggle() {
@@ -131,6 +139,9 @@ export function VoiceAddButton({ token, locale, disabled, onDraft, onError }: Pr
       <Text style={{ color: recording ? colors.error : colors.primary, fontFamily: fonts.uiSemi, fontSize: 13 }}>
         {label}
       </Text>
+      {left !== null && !busy && !recording ? (
+        <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 11 }}>{left} left</Text>
+      ) : null}
     </Pressable>
   );
 }

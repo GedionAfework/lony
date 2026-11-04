@@ -12,6 +12,8 @@ export type CashflowDraft = {
   occurred_at: string;
   recurrence?: 'weekly' | 'monthly' | 'yearly' | 'none';
   is_template?: boolean;
+  /** A loan payment made offline: sent as a repayment claim when syncing. */
+  loan_id?: string;
   created_at: string;
 };
 

@@ -166,6 +166,31 @@ func (m *memoryStore) ReplaceCoLenders(_ context.Context, loanID uuid.UUID, user
 	return nil
 }
 
+func (m *memoryStore) MarkDeclineHandled(_ context.Context, loanID uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	rec, ok := m.loans[loanID]
+	if !ok {
+		return pgx.ErrNoRows
+	}
+	rec.DeclineHandled = true
+	m.loans[loanID] = rec
+	return nil
+}
+
+func (m *memoryStore) SetAccountLink(_ context.Context, rec Record, event Event) (Record, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cur, ok := m.loans[rec.ID]
+	if !ok {
+		return Record{}, pgx.ErrNoRows
+	}
+	cur.LinkedAccountID = rec.LinkedAccountID
+	cur.AccountLinkDismissed = rec.AccountLinkDismissed
+	m.loans[rec.ID] = cur
+	return cur, nil
+}
+
 func (m *memoryStore) SaveScheduleMeta(_ context.Context, rec Record) (Record, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

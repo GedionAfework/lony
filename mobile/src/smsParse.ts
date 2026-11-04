@@ -1,6 +1,7 @@
 /** Parse bank / wallet SMS from any country. */
 
-import { ANY_CUR, NUM, currencyTokenSource, detectCurrency, normalizeAmount } from './smsMoney';
+import { ANY_CUR, NUM, currencyTokenSource, detectCurrency, normalizeAmount, normalizeDigits } from './smsMoney';
+import { hasPhrase, localDirection } from './smsPhrases';
 
 /** Optional currency in front of a number, for patterns where the currency is not the point. */
 const OPT_CUR = `(?:${ANY_CUR}\\s?)?`;
@@ -56,7 +57,8 @@ function cleanName(raw: string): string {
 
 export function classifySmsAccountType(text: string): { type: SmsAccountType; institution: string | null } {
   const raw = text || '';
-  if (/\btelebirr|tele\s*birr|ethio\s*telecom|e-money\b/i.test(raw)) {
+  // Only "telebirr" itself: ethio telecom also sends airtime/data notices, which are not wallet money.
+  if (/\btele\s*birr\b|ቴሌብር/i.test(raw)) {
     return { type: 'mobile_money', institution: 'Telebirr' };
   }
   if (/\bcbe\s*birr\b/i.test(raw)) return { type: 'mobile_money', institution: 'CBE Birr' };
@@ -271,12 +273,16 @@ export function extractSmsStatedBalance(text: string): string | null {
   return null;
 }
 
-function extractDirection(raw: string): 'income' | 'expense' | null {
-  // What happened to *your* account wins over words about the other side ("credited to Abebe").
+/**
+ * Direction stated explicitly about *your* money ("you have received", "your account was
+ * debited"). Null when the message only contains loose money words.
+ */
+export function explicitDirection(raw: string): 'income' | 'expense' | null {
   if (
     /\byou have (?:received|been credited)\b/i.test(raw) ||
     /\b(?:your\s+)?(?:account|a\/c|acct|card|wallet)\b[^.]{0,40}\b(?:has been|was|is)\s+credited\b/i.test(raw) ||
-    /\b(?:direct deposit|money received|ach credit|payment received)\b/i.test(raw)
+    /\b(?:direct deposit|money received|ach credit|payment received)\b/i.test(raw) ||
+    /\b(?:credited|deposited)\s+(?:to|into|in)\s+your\s+(?:account|a\/c|acct|card|wallet)\b/i.test(raw)
   ) {
     return 'income';
   }
@@ -284,10 +290,21 @@ function extractDirection(raw: string): 'income' | 'expense' | null {
     /\byou have (?:transfered|transferred|sent|paid|been debited|bought|purchased|recharged|topped up|withdrawn)\b/i.test(raw) ||
     /\b(?:your\s+)?(?:account|a\/c|acct|card|wallet)\b[^.]{0,40}\b(?:has been|was|is)\s+(?:debited|charged)\b/i.test(raw) ||
     /\b(?:sent|paid)\s+to\b/i.test(raw) ||
-    (/\bfrom your account\b/i.test(raw) && /\bto\b/i.test(raw))
+    (/\bfrom your account\b/i.test(raw) && /\bto\b/i.test(raw)) ||
+    /\bdebited\s+from\s+your\s+(?:account|a\/c|acct|card|wallet)\b/i.test(raw) ||
+    /\b(?:purchase|transaction|payment)\s+of\b[^.]{0,40}\b(?:at|on|with)\b[^.]{0,40}\b(?:card|a\/c|account)\b/i.test(raw) ||
+    /\b(?:cash\s+)?withdraw(?:al|n)\b[^.]{0,40}\b(?:atm|cash|agent)\b/i.test(raw)
   ) {
     return 'expense';
   }
+  // Every other supported language (smsPhrases.ts).
+  return localDirection(raw);
+}
+
+function extractDirection(raw: string): 'income' | 'expense' | null {
+  // What happened to *your* account wins over words about the other side ("credited to Abebe").
+  const explicit = explicitDirection(raw);
+  if (explicit) return explicit;
   // Otherwise the first money word in the message decides.
   const inAt = raw.search(INCOME_WORDS);
   const outAt = raw.search(EXPENSE_WORDS);
@@ -414,12 +431,17 @@ function extractCounterparty(raw: string, kind: 'income' | 'expense' | null): st
 
 /** Reject OTP / balance-only / non-transfer spam. */
 export function isTransferSms(text: string): boolean {
-  const raw = (text || '').trim();
-  if (raw.length < 24) return false;
-  if (OTP_RE.test(raw)) return false;
+  const raw = normalizeDigits(text || '').trim();
+  if (raw.length < 20) return false;
+  if (OTP_RE.test(raw) || hasPhrase('otp', raw)) return false;
   if (!/\d/.test(raw)) return false;
   // Balance notices alone ("your balance is …") are not a transfer.
-  return INCOME_WORDS.test(raw) || EXPENSE_WORDS.test(raw) || /\b(?:zelle|ach|transaction of)\b/i.test(raw);
+  return (
+    INCOME_WORDS.test(raw) ||
+    EXPENSE_WORDS.test(raw) ||
+    /\b(?:zelle|ach|transaction of)\b/i.test(raw) ||
+    localDirection(raw) !== null
+  );
 }
 
 const OTP_RE =
@@ -438,7 +460,7 @@ export function isAccountHintSms(text: string): boolean {
 }
 
 export function parseTransferSms(text: string): ParsedSmsTransfer {
-  const raw = (text || '').trim();
+  const raw = normalizeDigits(text || '').trim();
   const typed = classifySmsAccountType(raw);
   const out: ParsedSmsTransfer = {
     kind: null,

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Modal, Pressable, Text, View } from 'react-native';
+import { Modal, Pressable, ScrollView, Text, View } from 'react-native';
 import {
   api,
   type Budget,
@@ -9,6 +9,7 @@ import {
   type CashflowEntry,
   type CashflowSummary,
   type CategorySpend,
+  type DeclinedShare,
   type Friendship,
   type Loan,
   type TripBudget,
@@ -25,16 +26,20 @@ import {
   daysInCalendarMonth,
   formatCalendarMonthLabel,
   getCalendarParts,
+  monthLabelsForYear,
   toIsoLocal,
+  yearOptions,
 } from './calendarMath';
 import { useDatePrefs, useFormatDate } from './datePrefs';
 import { SearchSelect } from './SearchSelect';
 import { IconClose, IconRepeat } from './icons';
+import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { listCashflowDrafts, removeCashflowDraft, type CashflowDraft } from './offlineDrafts';
 import { NetWorthCard } from './NetWorthCard';
+import { SmsReviewCard } from './SmsReviewCard';
 import { fonts, radii, space, useTheme, type ThemeColors } from './theme';
 import { t } from './i18n';
-import { Card, EmptyState, Field, Money, PrimaryButton, SecondaryButton, SectionLabel } from './ui';
+import { Card, EmptyState, Field, HeroCard, Money, PrimaryButton, SecondaryButton, SectionLabel } from './ui';
 import { storageGet, storageSet } from './secureStorage';
 import { pushWidgetSnapshot } from './widgetSnapshot';
 
@@ -107,7 +112,7 @@ export function displayCashflowNote(entry: CashflowEntry): string | null {
   return first.slice(0, 120);
 }
 
-export type ExpensesTab = 'dashboard' | 'calendar' | 'income' | 'expenses' | 'bills';
+export type ExpensesTab = 'dashboard' | 'income' | 'expenses' | 'bills';
 
 function clientHeat(expense: number, max: number): number {
   if (expense <= 0 || max <= 0) return 0;
@@ -180,7 +185,7 @@ function monthBounds(
 }
 
 function loanRemaining(loan: Loan): number {
-  return Number(loan.expected_total || loan.principal || 0);
+  return Number(loan.outstanding_amount || loan.expected_total || loan.principal || 0);
 }
 
 function HeatMonthGrid({
@@ -325,6 +330,22 @@ export function ExpensesScreen({
   const calendarId = datePrefs.calendarId || user.calendar_id || 'gregorian';
   const [summary, setSummary] = useState<CashflowSummary | null>(null);
   const [wealth, setWealth] = useState<WealthSummary | null>(null);
+  // Friends who turned down their share of one of your expenses.
+  const [declined, setDeclined] = useState<DeclinedShare[]>([]);
+  useEffect(() => {
+    api
+      .declinedShares(token)
+      .then((r) => setDeclined(r.declined_shares ?? []))
+      .catch(() => setDeclined([]));
+  }, [token]);
+  async function onDeclined(share: DeclinedShare, action: 'ask_again' | 'keep_cost') {
+    try {
+      await api.resolveDeclinedShare(token, share.loan_id, action);
+      setDeclined((prev) => prev.filter((d) => d.loan_id !== share.loan_id));
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Could not update the share');
+    }
+  }
   const [income, setIncome] = useState<CashflowEntry[]>([]);
   const [expenseRows, setExpenseRows] = useState<CashflowEntry[]>([]);
   const [incomeTemplates, setIncomeTemplates] = useState<CashflowEntry[]>([]);
@@ -346,11 +367,17 @@ export function ExpensesScreen({
   const [tripLimit, setTripLimit] = useState('');
   const [tripCurrency, setTripCurrency] = useState((user.default_currency_code || 'USD').toUpperCase());
   const [tripBusy, setTripBusy] = useState(false);
+  // Setup forms stay folded away so the dashboard reads as a summary.
+  const [budgetFormOpen, setBudgetFormOpen] = useState(false);
+  const [tripFormOpen, setTripFormOpen] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [drafts, setDrafts] = useState<CashflowDraft[]>([]);
   const [draftBusy, setDraftBusy] = useState(false);
   const [selectedDate, setSelectedDate] = useState(() => new Date());
   const [calendarOpen, setCalendarOpen] = useState(false);
+  // Month/year picker inside the calendar (tap the month label).
+  const [pickMonthYear, setPickMonthYear] = useState(false);
+  const [pickerYear, setPickerYear] = useState(0);
   const [spendCalendar, setSpendCalendar] = useState<CashflowCalendar | null>(null);
 
   const period = useMemo(() => monthBounds(selectedDate, calendarId), [selectedDate, calendarId]);
@@ -526,6 +553,24 @@ export function ExpensesScreen({
     setDraftBusy(true);
     try {
       for (const d of [...drafts]) {
+        if (d.loan_id) {
+          // Same key every attempt, so a retry after a dropped connection is not a second payment.
+          await api.claimRepayment(
+            token,
+            d.loan_id,
+            {
+              amount: d.amount,
+              note: d.note,
+              pay_from_account_id: d.account_id,
+              title: d.title || undefined,
+              category_id: d.category_id,
+              occurred_at: d.occurred_at,
+            },
+            `draft-${d.id}`,
+          );
+          await removeCashflowDraft(d.id);
+          continue;
+        }
         await api.createCashflow(token, {
           kind: d.kind,
           title: d.title,
@@ -579,6 +624,8 @@ export function ExpensesScreen({
   const incomeTotal = Number(slice?.income ?? 0);
   const expenseTotal = Number(slice?.expense ?? slice?.outcome ?? 0);
   const wealthCurrency = (
+    // Converted totals are in the preferred currency: show that, not one currency's slice.
+    (wealth?.converted ? wealth.preferred_currency : undefined) ||
     wealth?.by_currency?.find((c) => c.currency_code.toUpperCase() === preferred)?.currency_code ||
     wealth?.preferred_currency ||
     wealth?.by_currency?.find((c) => Number(c.cash_on_hand) !== 0)?.currency_code ||
@@ -777,28 +824,40 @@ export function ExpensesScreen({
   return (
     <View style={{ gap: space.md }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-        <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>
-          {t(user.locale, 'expenses.title')}
-        </Text>
+        <View style={{ flex: 1, gap: 2 }}>
+          <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 14 }}>{greeting()}</Text>
+          <Text style={{ color: colors.text, fontFamily: fonts.uiBold, fontSize: 24 }} numberOfLines={1}>
+            {(user.first_name || user.display_name || '').trim().split(/\s+/)[0] || t(user.locale, 'expenses.title')}
+          </Text>
+        </View>
         <Pressable
           onPress={() => setCalendarOpen(true)}
+          accessibilityRole="button"
+          accessibilityLabel={period.label}
           style={{
-            paddingHorizontal: 12,
-            paddingVertical: 8,
-            borderRadius: radii.md,
-            backgroundColor: colors.primarySoft,
-            borderWidth: 1,
-            borderColor: colors.primary,
+            flexDirection: 'row',
             alignItems: 'center',
-            minWidth: 72,
+            gap: 8,
+            paddingHorizontal: 14,
+            height: 44,
+            borderRadius: radii.full,
+            backgroundColor: colors.surfaceMuted,
           }}
         >
-          <Text style={{ color: colors.primary, fontFamily: fonts.uiBold, fontSize: 16 }}>{period.day}</Text>
-          <Text style={{ color: colors.primary, fontFamily: fonts.ui, fontSize: 11, opacity: 0.85 }}>{period.short}</Text>
+          <FontAwesome name="calendar" size={14} color={colors.primary} />
+          <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }}>
+            {period.day} {period.short}
+          </Text>
         </Pressable>
       </View>
 
-      <Modal visible={calendarOpen} transparent animationType="fade" onRequestClose={() => setCalendarOpen(false)}>
+      <Modal
+        visible={calendarOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setCalendarOpen(false)}
+        onShow={() => setPickMonthYear(false)}
+      >
         <Pressable
           style={{ flex: 1, backgroundColor: colors.overlay, justifyContent: 'center', padding: 20 }}
           onPress={() => setCalendarOpen(false)}
@@ -814,15 +873,86 @@ export function ExpensesScreen({
               gap: 8,
             }}
           >
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <Pressable onPress={() => setSelectedDate(addCalendarMonths(selectedDate, calendarId, -1))}>
-                <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 14 }}>‹</Text>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+              <CalNavButton
+                icon="chevron-left"
+                label="Previous"
+                onPress={() => {
+                  if (pickMonthYear) setPickerYear((y) => y - 1);
+                  else setSelectedDate((d) => addCalendarMonths(d, calendarId, -1));
+                }}
+              />
+              <Pressable
+                onPress={() => {
+                  setPickerYear(period.calYear);
+                  setPickMonthYear((v) => !v);
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="Choose month and year"
+                hitSlop={8}
+                style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: radii.full, backgroundColor: colors.surfaceMuted }}
+              >
+                <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>
+                  {pickMonthYear ? String(pickerYear) : period.label}
+                </Text>
+                <FontAwesome name={pickMonthYear ? 'chevron-up' : 'chevron-down'} size={11} color={colors.muted} />
               </Pressable>
-              <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>{period.label}</Text>
-              <Pressable onPress={() => setSelectedDate(addCalendarMonths(selectedDate, calendarId, 1))}>
-                <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 14 }}>›</Text>
-              </Pressable>
+              <CalNavButton
+                icon="chevron-right"
+                label="Next"
+                onPress={() => {
+                  if (pickMonthYear) setPickerYear((y) => y + 1);
+                  else setSelectedDate((d) => addCalendarMonths(d, calendarId, 1));
+                }}
+              />
             </View>
+            {pickMonthYear ? (
+              <View style={{ gap: 12 }}>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                  {yearOptions(calendarId, pickerYear, 20).map((y) => {
+                    const on = y === pickerYear;
+                    return (
+                      <Pressable
+                        key={y}
+                        onPress={() => setPickerYear(y)}
+                        style={{ paddingHorizontal: 14, paddingVertical: 8, borderRadius: radii.full, backgroundColor: on ? colors.primary : colors.surfaceMuted }}
+                      >
+                        <Text style={{ color: on ? colors.onPrimary : colors.text, fontFamily: fonts.uiSemi, fontSize: 13 }}>{y}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </ScrollView>
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                  {monthLabelsForYear(calendarId, pickerYear).map(({ month, label }) => {
+                    const on = month === period.calMonth && pickerYear === period.calYear;
+                    return (
+                      <Pressable
+                        key={month}
+                        onPress={() => {
+                          const day = Math.min(Number(period.day) || 1, daysInCalendarMonth(calendarId, pickerYear, month));
+                          const next = dateFromCalendarParts(calendarId, pickerYear, month, day);
+                          if (next) setSelectedDate(next);
+                          setPickMonthYear(false);
+                        }}
+                        style={{
+                          width: '31%',
+                          flexGrow: 1,
+                          paddingVertical: 12,
+                          borderRadius: radii.md,
+                          alignItems: 'center',
+                          backgroundColor: on ? colors.primary : colors.surfaceMuted,
+                        }}
+                      >
+                        <Text style={{ color: on ? colors.onPrimary : colors.text, fontFamily: fonts.uiSemi, fontSize: 13 }} numberOfLines={1}>
+                          {label.slice(0, 3)}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </View>
+            ) : (
+              <>
             <HeatMonthGrid
               period={period}
               selectedIso={selectedIso}
@@ -855,6 +985,17 @@ export function ExpensesScreen({
                 {t(user.locale, 'expenses.calendarMore')}
               </Text>
             </View>
+              </>
+            )}
+            <Pressable
+              onPress={() => {
+                setSelectedDate(new Date());
+                setPickMonthYear(false);
+              }}
+              style={{ alignSelf: 'flex-start', paddingVertical: 6 }}
+            >
+              <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 13 }}>Today</Text>
+            </Pressable>
             <Pressable
               onPress={() => setCalendarOpen(false)}
               accessibilityLabel={t(user.locale, 'common.close')}
@@ -875,10 +1016,9 @@ export function ExpensesScreen({
         </Pressable>
       </Modal>
 
-      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+      <View style={{ flexDirection: 'row', gap: 4, padding: 4, borderRadius: radii.full, backgroundColor: colors.surfaceMuted }}>
         {([
           ['dashboard', 'expenses.tabDashboard'],
-          ['calendar', 'expenses.tabCalendar'],
           ['income', 'expenses.tabIncome'],
           ['expenses', 'expenses.tabExpenses'],
           ['bills', 'expenses.tabBills'],
@@ -889,20 +1029,27 @@ export function ExpensesScreen({
             <Pressable
               key={id}
               onPress={() => onTab(id)}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: active }}
               style={{
-                flexGrow: 1,
-                flexBasis: '18%',
-                minHeight: 40,
+                flex: 1,
+                minHeight: 38,
                 borderRadius: radii.full,
                 alignItems: 'center',
                 justifyContent: 'center',
-                backgroundColor: active ? colors.primary : colors.surfaceMuted,
-                borderWidth: 1,
-                borderColor: active ? colors.primary : colors.border,
-                paddingHorizontal: 6,
+                backgroundColor: active ? colors.surface : 'transparent',
+                paddingHorizontal: 4,
+                shadowColor: '#0F172A',
+                shadowOpacity: active ? 0.08 : 0,
+                shadowRadius: 6,
+                shadowOffset: { width: 0, height: 2 },
+                elevation: active ? 2 : 0,
               }}
             >
-              <Text style={{ color: active ? colors.onPrimary : colors.text, fontFamily: fonts.uiSemi, fontSize: 12 }}>
+              <Text
+                style={{ color: active ? colors.text : colors.muted, fontFamily: active ? fonts.uiSemi : fonts.ui, fontSize: 13 }}
+                numberOfLines={1}
+              >
                 {label}
               </Text>
             </Pressable>
@@ -923,110 +1070,7 @@ export function ExpensesScreen({
         </Card>
       ) : null}
 
-      {tab === 'calendar' ? (
-        <>
-          <Card>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <Pressable onPress={() => setSelectedDate(addCalendarMonths(selectedDate, calendarId, -1))}>
-                <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 18 }}>‹</Text>
-              </Pressable>
-              <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>{period.label}</Text>
-              <Pressable onPress={() => setSelectedDate(addCalendarMonths(selectedDate, calendarId, 1))}>
-                <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 18 }}>›</Text>
-              </Pressable>
-            </View>
-            <HeatMonthGrid
-              period={period}
-              selectedIso={selectedIso}
-              todayIso={toIsoLocal(new Date())}
-              heatByDate={heatByDate}
-              calendarId={calendarId}
-              colors={colors}
-              onPick={setSelectedDate}
-            />
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 10 }}>
-              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 11 }}>
-                {t(user.locale, 'expenses.calendarLess')}
-              </Text>
-              {[1, 2, 3, 4].map((h) => (
-                <View
-                  key={h}
-                  style={{
-                    width: 12,
-                    height: 12,
-                    borderRadius: 3,
-                    backgroundColor: colors.primary,
-                    opacity: heatOpacity(h),
-                  }}
-                />
-              ))}
-              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 11 }}>
-                {t(user.locale, 'expenses.calendarMore')}
-              </Text>
-            </View>
-          </Card>
-          <Card>
-            <SectionLabel>
-              {selectedIso === toIsoLocal(new Date()) ? t(user.locale, 'common.today') : selectedIso}
-            </SectionLabel>
-            {heatByDate.get(selectedIso) ? (
-              <View style={{ flexDirection: 'row', gap: 16, marginBottom: 8 }}>
-                <Text style={{ color: colors.success, fontFamily: fonts.uiSemi, fontSize: 13 }}>
-                  {t(user.locale, 'expenses.earnedThatDay')}{' '}
-                  {formatMoney(String(heatByDate.get(selectedIso)!.income.toFixed(2)), preferred, user.locale)}
-                </Text>
-                <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 13 }}>
-                  {t(user.locale, 'expenses.spentThatDay')}{' '}
-                  {formatMoney(String(heatByDate.get(selectedIso)!.expense.toFixed(2)), preferred, user.locale)}
-                </Text>
-              </View>
-            ) : null}
-            {dayIncome.length === 0 && dayExpense.length === 0 ? (
-              <EmptyState
-                title={t(user.locale, 'expenses.emptyDay')}
-                body={t(user.locale, 'expenses.emptyDayBody')}
-              />
-            ) : (
-              [...dayIncome, ...dayExpense]
-                .sort((a, b) => b.occurred_at.localeCompare(a.occurred_at))
-                .map((e) => (
-                  <Pressable
-                    key={e.id}
-                    onPress={() => onOpenEntry(e)}
-                    style={{
-                      flexDirection: 'row',
-                      justifyContent: 'space-between',
-                      gap: 8,
-                      paddingVertical: 10,
-                      borderBottomWidth: 1,
-                      borderBottomColor: colors.border,
-                    }}
-                  >
-                    <View style={{ flex: 1, gap: 2 }}>
-                      <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }}>
-                        {displayCashflowTitle(e, user.locale)}
-                      </Text>
-                      <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
-                        {cashflowActionLabel(e, user.locale)}
-                        {e.category ? ` · ${e.category}` : ''}
-                      </Text>
-                    </View>
-                    <Text
-                      style={{
-                        color: e.kind === 'income' ? colors.success : colors.text,
-                        fontFamily: fonts.uiSemi,
-                        fontSize: 14,
-                      }}
-                    >
-                      {e.kind === 'income' ? '+' : '−'}
-                      {formatMoney(e.amount, e.currency_code, user.locale)}
-                    </Text>
-                  </Pressable>
-                ))
-            )}
-          </Card>
-        </>
-      ) : tab === 'dashboard' ? (
+      {tab === 'dashboard' ? (
         <>
           <NetWorthCard
             token={token}
@@ -1036,59 +1080,58 @@ export function ExpensesScreen({
             formatMoney={formatMoney}
             onOpenAccounts={onOpenAccounts}
           />
+          <SmsReviewCard
+            token={token}
+            userId={user.id}
+            locale={user.locale}
+            reloadKey={(reloadToken ?? 0) + (wealthReloadToken ?? 0)}
+            formatMoney={formatMoney}
+            onChanged={() => {
+              void reload();
+              void reloadWealth();
+            }}
+            onError={onError}
+          />
+          {declined.map((d) => (
+            <Card key={d.loan_id}>
+              <SectionLabel>Share declined</SectionLabel>
+              <Text style={{ color: colors.text, fontFamily: fonts.ui, fontSize: 14 }}>
+                {d.friend.display_name} declined their {formatMoney(d.amount, d.currency_code, user.locale)} share
+                {d.entry_title ? ` of “${d.entry_title}”` : ''}. You're covering the full cost for now.
+              </Text>
+              <PrimaryButton label="Ask again" onPress={() => void onDeclined(d, 'ask_again')} />
+              <SecondaryButton label="Keep the full cost" onPress={() => void onDeclined(d, 'keep_cost')} />
+            </Card>
+          ))}
 
           <Card>
-            <SectionLabel>
-              {selectedIso === toIsoLocal(new Date()) ? t(user.locale, 'common.today') : selectedIso}
-            </SectionLabel>
+            <SectionTitle
+              title={selectedIso === toIsoLocal(new Date()) ? t(user.locale, 'common.today') : selectedIso}
+            />
             {dayIncome.length === 0 && dayExpense.length === 0 ? (
-              <EmptyState
-                title={t(user.locale, 'expenses.emptyDay')}
-                body={t(user.locale, 'expenses.emptyDayBody')}
-              />
+              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
+                {t(user.locale, 'expenses.emptyDay')}
+              </Text>
             ) : (
               [...dayIncome, ...dayExpense]
                 .sort((a, b) => b.occurred_at.localeCompare(a.occurred_at))
                 .map((e) => (
-                  <Pressable
+                  <TxRow
                     key={e.id}
+                    icon={e.kind === 'income' ? 'arrow-down' : 'arrow-up'}
+                    tone={e.kind === 'income' ? 'in' : 'out'}
+                    title={displayCashflowTitle(e, user.locale)}
+                    subtitle={`${cashflowActionLabel(e, user.locale)}${e.category ? ` · ${e.category}` : ''}`}
+                    amount={`${e.kind === 'income' ? '+' : '−'}${formatMoney(e.amount, e.currency_code, user.locale)}`}
                     onPress={() => onOpenEntry(e)}
-                    style={{
-                      flexDirection: 'row',
-                      justifyContent: 'space-between',
-                      gap: 8,
-                      paddingVertical: 10,
-                      borderBottomWidth: 1,
-                      borderBottomColor: colors.border,
-                    }}
-                  >
-                    <View style={{ flex: 1, gap: 2 }}>
-                      <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }}>
-                        {displayCashflowTitle(e, user.locale)}
-                      </Text>
-                      <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
-                        {cashflowActionLabel(e, user.locale)}
-                        {e.category ? ` · ${e.category}` : ''}
-                      </Text>
-                    </View>
-                    <Text
-                      style={{
-                        color: e.kind === 'income' ? colors.success : colors.text,
-                        fontFamily: fonts.uiSemi,
-                        fontSize: 14,
-                      }}
-                    >
-                      {e.kind === 'income' ? '+' : '−'}
-                      {formatMoney(e.amount, e.currency_code, user.locale)}
-                    </Text>
-                  </Pressable>
+                  />
                 ))
             )}
           </Card>
 
           {drafts.length > 0 ? (
             <Card>
-              <SectionLabel>{t(user.locale, 'expenses.offlineDrafts').replace('{count}', String(drafts.length))}</SectionLabel>
+              <SectionTitle title={t(user.locale, 'expenses.offlineDrafts').replace('{count}', String(drafts.length))} />
               <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
                 {t(user.locale, 'expenses.offlineDraftsBody')}
               </Text>
@@ -1106,50 +1149,31 @@ export function ExpensesScreen({
           ) : null}
 
           <Card>
-            <SectionLabel>{t(user.locale, 'expenses.comingUp')}</SectionLabel>
+            <SectionTitle title={t(user.locale, 'expenses.comingUp')} />
             {upcomingBills.length === 0 ? (
-              <EmptyState
-                title={t(user.locale, 'expenses.noBillsTitle')}
-                body={t(user.locale, 'expenses.noBillsBody')}
-              />
+              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
+                {t(user.locale, 'expenses.noBillsTitle')}
+              </Text>
             ) : (
               upcomingBills.map((b) => (
-                <Pressable
+                <TxRow
                   key={`${b.type}-${b.id}`}
+                  icon={b.type === 'loan' ? 'handshake-o' : 'clock-o'}
+                  tone="neutral"
+                  title={b.title}
+                  subtitle={`${b.at} · ${b.type === 'loan' ? t(user.locale, 'loans.loanFallback') : t(user.locale, 'expenses.actionExpected')}`}
+                  amount={formatMoney(b.amount, b.currency, user.locale)}
                   onPress={() => {
                     if (b.type === 'loan' && b.loanId) onOpenLoan(b.loanId);
                     else if (b.entry) onOpenEntry(b.entry);
                   }}
-                  style={{
-                    flexDirection: 'row',
-                    justifyContent: 'space-between',
-                    gap: 8,
-                    paddingVertical: 10,
-                    borderBottomWidth: 1,
-                    borderBottomColor: colors.border,
-                  }}
-                >
-                  <View style={{ flex: 1, gap: 2 }}>
-                    <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }}>{b.title}</Text>
-                    <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
-                      {b.at} ·{' '}
-                      {b.type === 'loan' ? t(user.locale, 'loans.loanFallback') : t(user.locale, 'expenses.actionExpected')}
-                    </Text>
-                  </View>
-                  <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }}>
-                    {formatMoney(b.amount, b.currency, user.locale)}
-                  </Text>
-                </Pressable>
+                />
               ))
             )}
           </Card>
 
           <Card>
-            <Text
-              style={{ color: colors.muted, fontFamily: fonts.uiSemi, fontSize: 12, textTransform: 'uppercase' }}
-            >
-              {t(user.locale, 'common.thisMonth')}
-            </Text>
+            <SectionTitle title={t(user.locale, 'common.thisMonth')} />
             <Money
               value={formatMoney(net.toFixed(2), currency, user.locale)}
               size="lg"
@@ -1180,7 +1204,7 @@ export function ExpensesScreen({
           </Card>
 
           <Card>
-            <SectionLabel>{t(user.locale, 'expenses.spendingByCategory')}</SectionLabel>
+            <SectionTitle title={t(user.locale, 'expenses.spendingByCategory')} />
             {breakdown.filter((b) => b.currency_code === currency).length === 0 ? (
               <EmptyState title={t(user.locale, 'expenses.noExpenses')} body={t(user.locale, 'expenses.categoryBarsBody')} />
             ) : (
@@ -1206,7 +1230,7 @@ export function ExpensesScreen({
                             height: 8,
                             width: `${pct}%`,
                             borderRadius: radii.full,
-                            backgroundColor: colors.warning,
+                            backgroundColor: colors.primary,
                           }}
                         />
                       </View>
@@ -1217,7 +1241,11 @@ export function ExpensesScreen({
           </Card>
 
           <Card>
-            <SectionLabel>{t(user.locale, 'expenses.thisPayday')}</SectionLabel>
+            <SectionTitle
+              title={t(user.locale, 'expenses.thisPayday')}
+              action={budgetFormOpen ? t(user.locale, 'common.done') : t(user.locale, 'common.edit')}
+              onAction={() => setBudgetFormOpen((v) => !v)}
+            />
             {payday ? (
               <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12, marginBottom: 8 }}>
                 {payday.cycle_start} – {payday.cycle_end}
@@ -1259,6 +1287,8 @@ export function ExpensesScreen({
                 {t(user.locale, 'expenses.budgetsHint')}
               </Text>
             ) : null}
+            {budgetFormOpen ? (
+            <>
             <Field
               label={t(user.locale, 'expenses.paydayDay')}
               value={paydayDay}
@@ -1290,10 +1320,16 @@ export function ExpensesScreen({
               onPress={onSaveBudget}
               disabled={budgetBusy}
             />
+            </>
+            ) : null}
           </Card>
 
           <Card>
-            <SectionLabel>{t(user.locale, 'expenses.trips')}</SectionLabel>
+            <SectionTitle
+              title={t(user.locale, 'expenses.trips')}
+              action={tripFormOpen ? t(user.locale, 'common.cancel') : t(user.locale, 'common.add')}
+              onAction={() => setTripFormOpen((v) => !v)}
+            />
             {trips.length === 0 ? (
               <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13, marginBottom: 8 }}>
                 {t(user.locale, 'expenses.tripsHint')}
@@ -1324,6 +1360,8 @@ export function ExpensesScreen({
                 />
               </View>
             ))}
+            {tripFormOpen ? (
+            <>
             <Field label={t(user.locale, 'expenses.tripTitle')} value={tripTitle} onChange={setTripTitle} />
             <DateField label={t(user.locale, 'expenses.tripStarts')} value={tripStarts} onChange={setTripStarts} />
             <DateField label={t(user.locale, 'expenses.tripEnds')} value={tripEnds} onChange={setTripEnds} />
@@ -1334,44 +1372,33 @@ export function ExpensesScreen({
               onPress={() => void onSaveTrip()}
               disabled={tripBusy}
             />
+            </>
+            ) : null}
           </Card>
 
           <Card>
-            <SectionLabel>{t(user.locale, 'expenses.openLoans')}</SectionLabel>
+            <SectionTitle title={t(user.locale, 'expenses.openLoans')} />
             {openLoans.length === 0 ? (
-              <EmptyState title={t(user.locale, 'expenses.noOpenLoansTitle')} body={t(user.locale, 'expenses.noOpenLoansBody')} />
+              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
+                {t(user.locale, 'expenses.noOpenLoansTitle')}
+              </Text>
             ) : (
               openLoans.map((loan) => (
-                <Pressable
+                <TxRow
                   key={loan.id}
+                  icon="handshake-o"
+                  tone={loan.your_role === 'borrower' ? 'out' : 'in'}
+                  title={loan.title || loan.institution_label || loan.reference_code}
+                  subtitle={loan.your_role === 'borrower' ? t(user.locale, 'wealth.youOwe') : t(user.locale, 'expenses.theyOwe')}
+                  amount={formatMoney(loan.expected_total || loan.principal, loan.currency_code, user.locale)}
                   onPress={() => onOpenLoan(loan.id)}
-                  style={{
-                    flexDirection: 'row',
-                    justifyContent: 'space-between',
-                    paddingVertical: 10,
-                    borderBottomWidth: 1,
-                    borderBottomColor: colors.border,
-                    gap: 8,
-                  }}
-                >
-                  <View style={{ flex: 1, gap: 2 }}>
-                    <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }} numberOfLines={1}>
-                      {loan.title || loan.institution_label || loan.reference_code}
-                    </Text>
-                    <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
-                      {loan.your_role === 'borrower' ? t(user.locale, 'wealth.youOwe') : t(user.locale, 'expenses.theyOwe')}
-                    </Text>
-                  </View>
-                  <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }}>
-                    {formatMoney(loan.expected_total || loan.principal, loan.currency_code, user.locale)}
-                  </Text>
-                </Pressable>
+                />
               ))
             )}
           </Card>
 
           <Card>
-            <SectionLabel>{t(user.locale, 'common.recent')}</SectionLabel>
+            <SectionTitle title={t(user.locale, 'common.recent')} />
             {recent.map((entry) => (
                 <EntryRow
                   key={entry.id}
@@ -1390,6 +1417,26 @@ export function ExpensesScreen({
             ) : null}
           </Card>
         </>
+      ) : null}
+
+      {tab === 'bills' ? (
+        <HeroCard
+          label={t(user.locale, 'expenses.tabBills')}
+          value={formatMoney(
+            bills
+              .filter((b) => !b.paused && b.kind !== 'income' && b.currency_code.toUpperCase() === currency.toUpperCase())
+              .reduce((sum, b) => sum + (Number(b.amount) || 0), 0)
+              .toFixed(2),
+            currency,
+            user.locale,
+          )}
+          sub={`${bills.filter((b) => !b.paused).length} active · ${bills.filter((b) => b.status === 'overdue').length} overdue`}
+          tiles={[
+            { label: 'Upcoming', value: String(bills.filter((b) => b.status === 'upcoming' || b.status === 'expected').length) },
+            { label: 'Overdue', value: String(bills.filter((b) => b.status === 'overdue').length) },
+            { label: 'Paused', value: String(bills.filter((b) => b.paused).length) },
+          ]}
+        />
       ) : null}
 
       {tab === 'bills' ? (
@@ -1414,6 +1461,22 @@ export function ExpensesScreen({
             ))
           )}
         </Card>
+      ) : null}
+
+      {tab === 'income' || tab === 'expenses' ? (
+        <HeroCard
+          label={`${tab === 'income' ? t(user.locale, 'expenses.tabIncome') : t(user.locale, 'expenses.tabExpenses')} · ${period.label}`}
+          value={formatMoney(String(tab === 'income' ? incomeTotal : expenseTotal), currency, user.locale)}
+          sub={`${monthEntries.length} ${monthEntries.length === 1 ? 'entry' : 'entries'}`}
+          tiles={
+            tab === 'expenses'
+              ? breakdown
+                  .filter((b) => b.currency_code === currency)
+                  .slice(0, 3)
+                  .map((b) => ({ label: b.category, value: formatMoney(b.amount, b.currency_code, user.locale) }))
+              : undefined
+          }
+        />
       ) : null}
 
       {tab === 'income' || tab === 'expenses' ? (
@@ -1532,9 +1595,9 @@ function Mini({
       style={{
         width: '47%',
         flexGrow: 1,
-        backgroundColor: colors.surfaceMuted,
-        borderRadius: radii.md,
-        padding: 12,
+        backgroundColor: tone === 'positive' ? colors.successSoft : colors.surfaceMuted,
+        borderRadius: radii.lg,
+        padding: 14,
         gap: 6,
       }}
     >
@@ -1681,12 +1744,8 @@ function EntryRow({
 }) {
   const { colors } = useTheme();
   const formatDate = useFormatDate();
-  const { calendarId } = useDatePrefs();
   const income = entry.kind === 'income';
   const dateLabel = formatDate(entry.occurred_at);
-  const parts = getCalendarParts(new Date(entry.occurred_at), calendarId);
-  const dayNum = String(parts.day);
-  const monthShort = formatCalendarMonthLabel(calendarId, parts.year, parts.month).split(' ')[0];
   const expected = entry.status === 'expected' || entry.is_template;
   return (
     <Pressable
@@ -1694,12 +1753,11 @@ function EntryRow({
       style={{
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 10,
-        paddingVertical: 12,
-        borderBottomWidth: 1,
-        borderBottomColor: colors.border,
+        gap: 12,
+        paddingVertical: 8,
       }}
     >
+      <TxIcon icon={income ? 'arrow-down' : 'arrow-up'} tone={expected ? 'neutral' : income ? 'in' : 'out'} />
       <View style={{ flex: 1, gap: 2 }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
           <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14, flexShrink: 1 }} numberOfLines={1}>
@@ -1715,7 +1773,7 @@ function EntryRow({
       </View>
       <Text
         style={{
-          color: expected ? colors.muted : income ? colors.success : colors.warning,
+          color: expected ? colors.muted : income ? colors.success : colors.text,
           fontFamily: fonts.uiSemi,
           fontSize: 14,
         }}
@@ -1723,22 +1781,103 @@ function EntryRow({
         {income ? '+' : '−'}
         {formatMoney(entry.amount, entry.currency_code, locale ?? undefined)}
       </Text>
-      <View
-        style={{
-          width: 48,
-          paddingVertical: 6,
-          borderRadius: radii.md,
-          backgroundColor: colors.primarySoft,
-          borderWidth: 1,
-          borderColor: colors.primary,
-          alignItems: 'center',
-        }}
-      >
-        <Text style={{ color: colors.primary, fontFamily: fonts.uiBold, fontSize: 15 }}>{dayNum}</Text>
-        <Text style={{ color: colors.primary, fontFamily: fonts.ui, fontSize: 10, opacity: 0.85 }} numberOfLines={1}>
-          {monthShort}
-        </Text>
-      </View>
     </Pressable>
   );
+}
+
+/** A large, easy-to-hit arrow for moving between months. */
+function CalNavButton({ icon, label, onPress }: { icon: 'chevron-left' | 'chevron-right'; label: string; onPress: () => void }) {
+  const { colors } = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      hitSlop={6}
+      style={({ pressed }) => ({
+        width: 44,
+        height: 44,
+        borderRadius: 22,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: pressed ? colors.primarySoft : colors.surfaceMuted,
+      })}
+    >
+      <FontAwesome name={icon} size={14} color={colors.primary} />
+    </Pressable>
+  );
+}
+
+type TxTone = 'in' | 'out' | 'neutral';
+
+function TxIcon({ icon, tone }: { icon: React.ComponentProps<typeof FontAwesome>['name']; tone: TxTone }) {
+  const { colors } = useTheme();
+  const fg = tone === 'in' ? colors.success : tone === 'out' ? colors.text : colors.primary;
+  const bg = tone === 'in' ? colors.successSoft : tone === 'out' ? colors.surfaceMuted : colors.primarySoft;
+  return (
+    <View style={{ width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: bg }}>
+      <FontAwesome name={icon} size={15} color={fg} />
+    </View>
+  );
+}
+
+/** One line of money: round icon, title over a muted subtitle, amount on the right. */
+function TxRow({
+  icon,
+  tone,
+  title,
+  subtitle,
+  amount,
+  onPress,
+}: {
+  icon: React.ComponentProps<typeof FontAwesome>['name'];
+  tone: TxTone;
+  title: string;
+  subtitle?: string;
+  amount: string;
+  onPress?: () => void;
+}) {
+  const { colors } = useTheme();
+  return (
+    <Pressable onPress={onPress} style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 8 }}>
+      <TxIcon icon={icon} tone={tone} />
+      <View style={{ flex: 1, gap: 2 }}>
+        <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }} numberOfLines={1}>
+          {title}
+        </Text>
+        {subtitle ? (
+          <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }} numberOfLines={1}>
+            {subtitle}
+          </Text>
+        ) : null}
+      </View>
+      <Text style={{ color: tone === 'in' ? colors.success : colors.text, fontFamily: fonts.uiSemi, fontSize: 14 }}>
+        {amount}
+      </Text>
+    </Pressable>
+  );
+}
+
+/** Card heading in sentence case, with an optional text action on the right. */
+function SectionTitle({ title, action, onAction }: { title: string; action?: string; onAction?: () => void }) {
+  const { colors } = useTheme();
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+      <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16, flex: 1 }} numberOfLines={1}>
+        {title}
+      </Text>
+      {action && onAction ? (
+        <Pressable onPress={onAction} hitSlop={10} accessibilityRole="button">
+          <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 13 }}>{action}</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
+function greeting(): string {
+  const h = new Date().getHours();
+  if (h < 12) return 'Good morning';
+  if (h < 18) return 'Good afternoon';
+  return 'Good evening';
 }

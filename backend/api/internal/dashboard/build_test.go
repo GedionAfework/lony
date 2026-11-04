@@ -146,3 +146,20 @@ func dec(s string) decimal.Decimal {
 	d, _ := decimal.NewFromString(s)
 	return d
 }
+
+func TestPendingPaidClaimLowersBorrowerPayableOnly(t *testing.T) {
+	me, peer := uuid.New(), uuid.New()
+	now := time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)
+	etb := "ETB"
+	due := now.Add(30 * 24 * time.Hour)
+	total, paid := dec("1000"), dec("400")
+	row := openLoan(me, peer, false, &etb, &total, &due, loans.StatusRepaymentPending)
+	row.PendingPaid = &paid
+
+	if s := Build(me, now, []loans.Record{row}, nil).ByCurrency[0]; s.Payables != "600.0000" {
+		t.Fatalf("borrower payables %s", s.Payables)
+	}
+	if s := Build(peer, now, []loans.Record{row}, nil).ByCurrency[0]; s.Receivables != "1000.0000" {
+		t.Fatalf("lender receivables %s", s.Receivables)
+	}
+}

@@ -98,19 +98,39 @@ func (h *Handler) ListMessages(w http.ResponseWriter, r *http.Request) {
 		}
 		after = &t
 	}
-	limit := int32(50)
+	q := MessageQuery{After: after}
+	for name, dst := range map[string]**time.Time{"before": &q.Before, "since": &q.Since} {
+		raw := strings.TrimSpace(r.URL.Query().Get(name))
+		if raw == "" {
+			continue
+		}
+		t, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			httpx.Error(w, httpx.E(http.StatusBadRequest, "INVALID_"+strings.ToUpper(name), name+" must be RFC3339"))
+			return
+		}
+		*dst = &t
+	}
+	if raw := strings.TrimSpace(r.URL.Query().Get("before_id")); raw != "" {
+		bid, err := uuid.Parse(raw)
+		if err != nil {
+			httpx.Error(w, httpx.E(http.StatusBadRequest, "INVALID_BEFORE_ID", "before_id must be a uuid"))
+			return
+		}
+		q.BeforeID = &bid
+	}
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		n, _ := strconv.Atoi(raw)
 		if n > 0 {
-			limit = int32(n)
+			q.Limit = int32(n)
 		}
 	}
-	out, err := h.svc.ListMessages(r.Context(), auth.UserIDFrom(r.Context()), id, after, limit)
+	out, err := h.svc.ListMessages(r.Context(), auth.UserIDFrom(r.Context()), id, q)
 	if err != nil {
 		httpx.Error(w, err)
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"messages": out})
+	httpx.JSON(w, http.StatusOK, out)
 }
 
 func (h *Handler) Send(w http.ResponseWriter, r *http.Request) {

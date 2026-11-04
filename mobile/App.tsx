@@ -28,7 +28,7 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import { api, DISCLAIMER, isPremiumPlan, setTokenRefresher, type AppNotification, type BankProfile, type BankProfileShare, type CashflowEntry, type Dashboard, type Friendship, type Loan, type LoanInstallment, type Repayment, type SearchHit, type User } from './src/api';
+import { api, DISCLAIMER, isAuthRejected, setTokenRefresher, type AppNotification, type BankProfile, type BankProfileShare, type CashflowEntry, type Dashboard, type Friendship, type Loan, type LoanInstallment, type MoneyAccount, type Repayment, type SearchHit, type User } from './src/api';
 import { formatMoney as formatMoneyLocale, stripAmount } from './src/amountFormat';
 import { formatDisplayDate, formatDisplayDateTime } from './src/calendarFormat';
 import { AnalyticsScreen } from './src/AnalyticsScreen';
@@ -77,6 +77,7 @@ import {
 import {
   configureSmsNotificationHandler,
   parseSmsNotificationData,
+  isSmsReviewNotification,
   smsNotifyToPrefill,
 } from './src/smsTransferNotify';
 import { LoansScreen } from './src/LoansScreen';
@@ -94,6 +95,7 @@ import { ThemeProvider, fonts, radii, useTheme } from './src/theme';
 import { registerPushToken } from './src/push';
 import { storageDelete, storageGet, storageSet } from './src/secureStorage';
 import { SearchSelect } from './src/SearchSelect';
+import { chargeLabel, INTEREST_CHARGES } from './src/interest';
 import { applyNativeDirection, parseLocaleMessages, setActivePack } from './src/i18n';
 import { formatError, passwordHint } from './src/errors';
 import { SettingsScreen, shareExportJSON, shareExportNote } from './src/SettingsScreen';
@@ -245,6 +247,9 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   const [chatThreadOpen, setChatThreadOpen] = useState(false);
   const [planDetailOpen, setPlanDetailOpen] = useState(false);
   const [accountsPanelOpen, setAccountsPanelOpen] = useState(false);
+  // Bumped by the floating add button on the Accounts and Plan screens.
+  const [accountsCreateSignal, setAccountsCreateSignal] = useState(0);
+  const [planCreateSignal, setPlanCreateSignal] = useState(0);
   const [settingsDetailOpen, setSettingsDetailOpen] = useState(false);
   const [avatarLocalUri, setAvatarLocalUri] = useState<string | null>(null);
   const [loanRole, setLoanRole] = useState<'borrower' | 'lender'>('borrower');
@@ -255,7 +260,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   const [interest, setInterest] = useState('0');
   const [currency, setCurrency] = useState('');
   const [dueDate, setDueDate] = useState('');
-  const [interestPeriodMonths, setInterestPeriodMonths] = useState('');
+  const [interestCharge, setInterestCharge] = useState<'once' | 'per_month' | 'per_year'>('once');
   const [installmentCount, setInstallmentCount] = useState('12');
   const [institutionType, setInstitutionType] = useState('');
   const [institutionId, setInstitutionId] = useState('');
@@ -296,6 +301,11 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   const [shareFriendId, setShareFriendId] = useState('');
   const [repayments, setRepayments] = useState<Repayment[]>([]);
   const [rejectReason, setRejectReason] = useState('');
+  // Loan detail: accounts in the loan currency, recent income (lender), and choices.
+  const [loanAccounts, setLoanAccounts] = useState<MoneyAccount[]>([]);
+  const [loanIncome, setLoanIncome] = useState<CashflowEntry[]>([]);
+  const [claimFrom, setClaimFrom] = useState('none');
+  const [receiveInto, setReceiveInto] = useState<Record<string, string>>({});
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [profileName, setProfileName] = useState('');
@@ -593,7 +603,9 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         setToken(tokens.access_token);
         applyUserProfile(tokens.user);
         return tokens.access_token;
-      } catch {
+      } catch (e) {
+        // Rate limits, outages and lost signal are not a logout: keep the login and retry later.
+        if (!isAuthRejected(e)) return null;
         await storageDelete(ACCESS_KEY);
         await storageDelete(REFRESH_KEY);
         setToken(null);
@@ -619,8 +631,12 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
             enterAuthed(me.user, access);
             return;
           }
-        } catch {
-          /* try refresh */
+        } catch (e) {
+          // Server down or no signal: keep the saved login; the user can retry.
+          if (!isAuthRejected(e)) {
+            setError(e instanceof Error ? e.message : 'Could not reach Lony. Try again.');
+            return;
+          }
         }
         if (refresh) {
           const tokens = await api.refresh(refresh);
@@ -631,9 +647,13 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         }
         await storageDelete(ACCESS_KEY);
         await storageDelete(REFRESH_KEY);
-      } catch {
-        await storageDelete(ACCESS_KEY);
-        await storageDelete(REFRESH_KEY);
+      } catch (e) {
+        if (isAuthRejected(e)) {
+          await storageDelete(ACCESS_KEY);
+          await storageDelete(REFRESH_KEY);
+        } else {
+          setError(e instanceof Error ? e.message : 'Could not reach Lony. Try again.');
+        }
       } finally {
         setBooting(false);
       }
@@ -1003,6 +1023,18 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     let cancelled = false;
 
     const openFromData = (raw: Record<string, unknown> | undefined, dedupeKey?: string) => {
+      if (raw?.type === 'chat_message' && typeof raw.peer_id === 'string') {
+        // A new message: open that conversation.
+        setChatPeerId(raw.peer_id);
+        setScreen('chats');
+        return;
+      }
+      if (isSmsReviewNotification(raw)) {
+        // Bank messages waiting for an answer are shown on Home.
+        setExpensesTab('dashboard');
+        setScreen('home');
+        return;
+      }
       const data = parseSmsNotificationData(raw);
       if (!data) return;
       if (dedupeKey) {
@@ -1334,6 +1366,82 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     }
   }
 
+  /**
+   * Settings save themselves: a moment after a value changes, only the changed fields are sent.
+   * The reply updates the user without rewriting the fields, so typing is never interrupted.
+   */
+  const [settingsSaveState, setSettingsSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  useEffect(() => {
+    if (screen !== 'settings' || !token || !user?.profile_complete) return;
+    const v = (x?: string | null) => (x ?? '').trim();
+    const body: Parameters<typeof api.patchMe>[1] = {};
+    if (v(profileLocale) && v(profileLocale) !== v(user.locale || 'en')) body.locale = v(profileLocale);
+    if (v(profileCalendarId) && v(profileCalendarId) !== v(user.calendar_id || 'gregorian')) body.calendar_id = v(profileCalendarId);
+    const hour = v(profileHourCycle) === 'ethiopian_6' ? '24h' : v(profileHourCycle);
+    const userHour = user.hour_cycle === 'ethiopian_6' ? '24h' : v(user.hour_cycle || '24h');
+    if (hour && hour !== userHour) body.hour_cycle = hour;
+    if (v(profileTimezone) && v(profileTimezone) !== v(user.timezone || 'UTC')) body.timezone = v(profileTimezone);
+    if (v(profileCurrency).length === 3 && v(profileCurrency).toUpperCase() !== v(user.default_currency_code).toUpperCase()) {
+      body.default_currency_code = v(profileCurrency).toUpperCase();
+    }
+    if (loanRequireApproval !== (user.loan_require_approval !== false)) body.loan_require_approval = loanRequireApproval;
+    // Profile text: only once the required fields are filled in.
+    const profileValid = Boolean(v(profileUsername) && v(profileFirstName) && v(profileLastName));
+    if (profileValid) {
+      if (v(profileUsername) !== v(user.username)) body.username = v(profileUsername);
+      if (v(profileFirstName) !== v(user.first_name)) body.first_name = v(profileFirstName);
+      if (v(profileMiddleName) !== v(user.middle_name)) body.middle_name = v(profileMiddleName);
+      if (v(profileLastName) !== v(user.last_name)) body.last_name = v(profileLastName);
+      if (v(profileName) && v(profileName) !== v(user.display_name)) body.display_name = v(profileName);
+      if (v(profilePhone) !== v(user.phone_e164)) body.phone_e164 = v(profilePhone) || undefined;
+      if (v(profileCountry).length === 2 && v(profileCountry).toUpperCase() !== v(user.country_code).toUpperCase()) {
+        body.country_code = v(profileCountry).toUpperCase();
+      }
+      if (profileAuthPref !== ((user.preferred_auth_provider as string) || 'email')) body.preferred_auth_provider = profileAuthPref;
+    }
+    if (Object.keys(body).length === 0) return;
+    // Taps save almost at once; typing waits until the user pauses.
+    const typing = 'username' in body || 'first_name' in body || 'middle_name' in body || 'last_name' in body || 'display_name' in body || 'phone_e164' in body;
+    const timer = setTimeout(() => {
+      setSettingsSaveState('saving');
+      void api
+        .patchMe(token, body)
+        .then((res) => {
+          setUser(res.user);
+          if (body.default_currency_code) {
+            setCurrency(res.user.default_currency_code ?? '');
+            setDashCurrency(res.user.default_currency_code ?? '');
+          }
+          if (body.locale) void loadLocalePack(res.user.locale || 'en');
+          setSettingsSaveState('saved');
+        })
+        .catch((e) => {
+          setSettingsSaveState('error');
+          setError(e instanceof Error ? e.message : 'Could not save that change');
+        });
+    }, typing ? 900 : 250);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    screen,
+    token,
+    user,
+    profileLocale,
+    profileCalendarId,
+    profileHourCycle,
+    profileTimezone,
+    profileCurrency,
+    loanRequireApproval,
+    profileUsername,
+    profileFirstName,
+    profileMiddleName,
+    profileLastName,
+    profileName,
+    profilePhone,
+    profileCountry,
+    profileAuthPref,
+  ]);
+
   async function onSaveAskRecurring(next: boolean) {
     setAskRecurringReceived(next);
     if (!token) return;
@@ -1467,7 +1575,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     }
   }
 
-  async function onCreateLoan() {
+  async function onCreateLoan(cardChoice?: string) {
     if (!token) {
       return;
     }
@@ -1503,7 +1611,6 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     setBusy(true);
     setError(null);
     try {
-      const period = Number(interestPeriodMonths) || 0;
       const months = Number(stripAmount(installmentCount)) || 0;
       const principalRaw = stripAmount(principal);
       const interestRaw = stripAmount(interest) || '0';
@@ -1526,16 +1633,12 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         setBusy(false);
         return;
       }
-      if (loanKind === 'one_time' && Number(interestRaw) > 0 && period < 1) {
-        setError('Set an interest calculating period (months)');
-        setBusy(false);
-        return;
-      }
-      if (!loanTitle.trim() && !institutionName) {
-        setError('Add a title so you can tell loans apart');
-        setBusy(false);
-        return;
-      }
+      // No name typed: call it after the other person so loans stay easy to tell apart.
+      const peerName =
+        loanLockedPeer?.display_name ||
+        friends.find((f) => f.peer.id === (loanFriendId || lenderIds[0]))?.peer.display_name ||
+        '';
+      const autoTitle = !loanTitle.trim() && !institutionName ? (peerName ? `Loan with ${peerName}` : 'Loan') : '';
       const body: Parameters<typeof api.createLoan>[1] = {
         role: alone ? 'borrower' : loanRole,
         loan_kind: loanKind === 'long_term' || alone ? 'long_term' : 'one_time',
@@ -1559,7 +1662,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         body.interest_rate_percent = interestRaw;
         if (loanKind === 'one_time' && !alone) {
           body.due_at = new Date(`${dueDate.trim()}T12:00:00.000Z`).toISOString();
-          if (period > 0) body.interest_period_months = period;
+          if (Number(interestRaw) > 0) body.interest_charge = interestCharge;
         } else {
           body.installment_count = months;
           body.interest_period_months = months;
@@ -1575,8 +1678,17 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         body.title = loanTitle.trim();
       } else if (institutionName) {
         body.title = institutionName;
+      } else if (autoTitle) {
+        body.title = autoTitle;
+      }
+      if (alone && cardChoice && cardChoice !== 'separate') {
+        body.linked_account_id = cardChoice;
       }
       const created = await api.createLoan(token, body);
+      if (alone && cardChoice === 'separate') {
+        // Remember the answer so the "may be counted twice" check does not ask again.
+        await api.setLoanAccountLink(token, created.loan.id, { dismiss: true }).catch(() => undefined);
+      }
       setSelectedLoan(created.loan);
       setInstitutionLabel(institutionName);
       setScreen('loan');
@@ -1606,6 +1718,22 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
       } catch {
         setRepayments([]);
       }
+      setClaimFrom('none');
+      setReceiveInto({});
+      setInterestCharge(res.loan.interest_charge || 'once');
+      const loanCurrency = (res.loan.currency_code || '').toUpperCase();
+      api
+        .listAccounts(token)
+        .then((r) => setLoanAccounts((r.accounts ?? []).filter((a) => a.currency_code.toUpperCase() === loanCurrency)))
+        .catch(() => setLoanAccounts([]));
+      if (res.loan.your_role === 'lender' && res.loan.borrower.id !== res.loan.lender.id) {
+        api
+          .listCashflow(token, { kind: 'income', currency: loanCurrency, limit: 50 })
+          .then((r) => setLoanIncome((r.entries ?? []).filter((e) => !e.is_template && (e.status ?? 'confirmed') === 'confirmed')))
+          .catch(() => setLoanIncome([]));
+      } else {
+        setLoanIncome([]);
+      }
       if (res.loan.your_role === 'borrower') {
         try {
           const pay = await api.loanPaymentProfile(token, id);
@@ -1634,6 +1762,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         principal: principal.trim(),
         currency_code: currency.trim().toUpperCase(),
         interest_rate_percent: interest.trim() || '0',
+        interest_charge: interestCharge,
         due_at: new Date(`${dueDate.trim()}T12:00:00.000Z`).toISOString(),
         note: note.trim() || undefined,
       });
@@ -1678,7 +1807,12 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         proof_filename?: string;
         proof_mime?: string;
         proof_base64?: string;
+        pay_from_account_id?: string;
       } = {};
+      if (claimFrom !== 'none') {
+        // Also records the expense in the same server step, so it is counted once.
+        body.pay_from_account_id = claimFrom;
+      }
       const picked = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true, multiple: false });
       if (!picked.canceled && picked.assets?.[0]) {
         const asset = picked.assets[0];
@@ -1701,6 +1835,8 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         }
       }
       await api.claimRepayment(token, selectedLoan.id, body);
+      setClaimFrom('none');
+      setWealthReload((n) => n + 1);
       const [loanRes, repayRes] = await Promise.all([
         api.getLoan(token, selectedLoan.id),
         api.listRepayments(token, selectedLoan.id),
@@ -1721,8 +1857,13 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     }
     setBusy(true);
     setError(null);
+    const choice = receiveInto[id] || 'none';
     try {
-      await api.confirmRepayment(token, id);
+      await api.confirmRepayment(token, id, {
+        received_account_id: choice.startsWith('acct:') ? choice.slice(5) : undefined,
+        received_entry_id: choice.startsWith('entry:') ? choice.slice(6) : undefined,
+      });
+      setWealthReload((n) => n + 1);
       const [loanRes, repayRes] = await Promise.all([
         api.getLoan(token, selectedLoan.id),
         api.listRepayments(token, selectedLoan.id),
@@ -1732,6 +1873,38 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
       await refreshFriends();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not confirm repayment');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // A rejected payment whose expense is still recorded: send it again, undo the expense
+  // (balance restored), or keep it as an ordinary expense.
+  async function onResolvePayment(rep: Repayment, action: 'resubmit' | 'undo_expense' | 'keep_expense') {
+    if (!token || !selectedLoan) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      if (action === 'resubmit') {
+        await api.claimRepayment(token, selectedLoan.id, {
+          amount: rep.amount,
+          note: rep.note || undefined,
+          paid_entry_id: rep.paid_entry_id || undefined,
+        });
+      } else {
+        await api.resolveRepayment(token, rep.id, action);
+      }
+      setWealthReload((n) => n + 1);
+      const [loanRes, repayRes] = await Promise.all([
+        api.getLoan(token, selectedLoan.id),
+        api.listRepayments(token, selectedLoan.id),
+      ]);
+      setSelectedLoan(loanRes.loan);
+      setRepayments(repayRes.repayments ?? []);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not update the payment');
     } finally {
       setBusy(false);
     }
@@ -2074,7 +2247,6 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                 const res = await syncBankSms(token, undefined, {
                   force: true,
                   userId: user?.id,
-                  maxCount: 200,
                   defaultCurrency: user?.default_currency_code || 'USD',
                   onBalancesReady: (updated) => {
                     if (updated > 0) {
@@ -2099,15 +2271,14 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                 const readNote = [
                   `Read ${res.scanned ?? 0} messages: ${res.moneyMessages ?? 0} from banks or wallets, ${res.transfersFound ?? 0} money in or out.`,
                   res.alreadySaved ? `${res.alreadySaved} were already saved.` : '',
-                  res.unreadable ? `${res.unreadable} bank message(s) couldn’t be read.` : '',
-                  res.unlinked ? `${res.unlinked} had no account to save to.` : '',
+                  res.needsReview ? `${res.needsReview} to check on Home before saving.` : '',
+                  res.accountsSuggested ? `${res.accountsSuggested} account(s) found — add them on Home.` : '',
                 ]
                   .filter(Boolean)
                   .join(' ');
                 const withSummary = (body: string) => [body, insOuts, readNote].filter(Boolean).join('\n\n');
                 const accountNote = [
                   res.accountsAdded ? `${res.accountsAdded} of your account(s) added` : '',
-                  res.accountsRemoved ? `${res.accountsRemoved} that aren’t yours removed` : '',
                 ]
                   .filter(Boolean)
                   .join(' · ');
@@ -2183,7 +2354,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         >
           <IconRefresh size={18} color={colors.text} />
         </Pressable>
-        {isPremiumPlan(user) ? (
+        {user ? (
         <Pressable
           onPress={async () => {
             try {
@@ -2435,6 +2606,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               onError={(message) => setError(message)}
               reloadToken={accountsReload}
               onPanelChange={setAccountsPanelOpen}
+              createSignal={accountsCreateSignal}
               onChanged={() => {
                 setAccountsReload((n) => n + 1);
                 setWealthReload((n) => n + 1);
@@ -2609,6 +2781,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               formatMoney={formatMoney}
               onError={(message) => setError(message)}
               onDetailChange={setPlanDetailOpen}
+              createSignal={planCreateSignal}
             />
           ) : null}
 
@@ -2678,6 +2851,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               onAuthPref={setProfileAuthPref}
               onSave={onSaveProfile}
               onSaveRegion={onSaveRegion}
+              saveState={settingsSaveState}
               onAvatar={onPickAvatar}
               onTos={() => setScreen('tos')}
               onBanks={() => {
@@ -2710,7 +2884,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               interest={interest}
               currency={currency}
               dueDate={dueDate}
-              interestPeriodMonths={interestPeriodMonths}
+              interestCharge={interestCharge}
               installmentCount={installmentCount}
               institutionType={institutionType}
               institutionId={institutionId}
@@ -2744,7 +2918,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               onInterest={setInterest}
               onCurrency={setCurrency}
               onDueDate={setDueDate}
-              onInterestPeriodMonths={setInterestPeriodMonths}
+              onInterestCharge={setInterestCharge}
               onInstallmentCount={setInstallmentCount}
               onInstitutionType={setInstitutionType}
               onInstitutionId={setInstitutionId}
@@ -2872,9 +3046,12 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                     {selectedLoan.installment_count ? ` Â· ${selectedLoan.installment_count} months` : ''}
                   </Text>
                 ) : null}
-                {selectedLoan.interest_period_months && selectedLoan.loan_kind !== 'long_term' ? (
+                {selectedLoan.loan_kind !== 'long_term' && Number(selectedLoan.interest_rate_percent || 0) > 0 ? (
                   <Text style={[styles.muted, { marginTop: 4 }]}>
-                    Interest period Â· {selectedLoan.interest_period_months} mo
+                    Interest {Number(selectedLoan.interest_rate_percent)}% {chargeLabel(selectedLoan.interest_charge)}
+                    {selectedLoan.interest_charge === 'per_month' && selectedLoan.interest_period_months
+                      ? ` · ${selectedLoan.interest_period_months} months`
+                      : ''}
                   </Text>
                 ) : null}
               </Card>
@@ -2955,6 +3132,14 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                   <SectionLabel>Propose or update terms</SectionLabel>
                   <Field label="Principal" value={principal} onChange={setPrincipal} money />
                   <Field label="Flat interest %" value={interest} onChange={setInterest} keyboardType="decimal-pad" />
+                  {Number(interest || 0) > 0 ? (
+                    <SearchSelect
+                      label="Interest charged"
+                      value={interestCharge}
+                      onChange={(v) => setInterestCharge(v as 'once' | 'per_month' | 'per_year')}
+                      options={INTEREST_CHARGES}
+                    />
+                  ) : null}
                   <SearchSelect label="Currency" value={currency} onChange={setCurrency} options={CURRENCIES} />
                   <DateField
                     label="Due date"
@@ -2984,6 +3169,20 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               (selectedLoan.status === 'active' || selectedLoan.status === 'overdue') &&
               !(selectedLoan.installments && selectedLoan.installments.length > 0) ? (
                 <Card>
+                  {loanAccounts.length > 0 ? (
+                    <SearchSelect
+                      label="Paid from"
+                      value={claimFrom}
+                      onChange={setClaimFrom}
+                      options={[
+                        { id: 'none', label: 'Not recorded in an account' },
+                        ...loanAccounts.map((a) => ({
+                          id: a.id,
+                          label: `${a.name} · ${formatMoney(a.balance, a.currency_code, user?.locale)}`,
+                        })),
+                      ]}
+                    />
+                  ) : null}
                   <PrimaryButton label={busy ? 'Workingâ€¦' : 'I paid (optional proof)'} onPress={onClaimRepayment} disabled={busy} />
                 </Card>
               ) : null}
@@ -2998,8 +3197,47 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
                       </Text>
                       {rep.note ? <Text style={styles.muted}>{rep.note}</Text> : null}
                       {rep.proof_url ? <Text style={styles.dev}>Proof Â· {rep.proof_name || 'attachment'}</Text> : null}
+                      {rep.needs_resolution ? (
+                        <View style={{ gap: 8, padding: 10, borderRadius: 12, backgroundColor: colors.warningSoft }}>
+                          <Text style={[styles.rowTitle, { color: colors.warning }]}>Payment rejected</Text>
+                          <Text style={styles.muted}>
+                            {rep.rejection_reason ? `“${rep.rejection_reason}”. ` : ''}
+                            The {formatMoney(rep.amount, selectedLoan.currency_code, user?.locale)} expense is still recorded in your
+                            account. Choose what to do with it.
+                          </Text>
+                          <PrimaryButton
+                            label="Send again"
+                            onPress={() => onResolvePayment(rep, 'resubmit')}
+                            disabled={busy || selectedLoan.status === 'repayment_pending'}
+                          />
+                          <SecondaryButton label="Undo expense" onPress={() => onResolvePayment(rep, 'undo_expense')} disabled={busy} />
+                          <SecondaryButton label="Keep as expense" onPress={() => onResolvePayment(rep, 'keep_expense')} disabled={busy} />
+                        </View>
+                      ) : null}
                       {rep.can_confirm ? (
-                        <PrimaryButton label="Confirm received" onPress={() => onConfirmRepayment(rep.id)} disabled={busy} />
+                        <>
+                          {selectedLoan.borrower.id !== selectedLoan.lender.id ? (
+                            <>
+                              <SearchSelect
+                                label="Record it in"
+                                value={receiveInto[rep.id] || 'none'}
+                                onChange={(v) => setReceiveInto((prev) => ({ ...prev, [rep.id]: v }))}
+                                options={[
+                                  { id: 'none', label: "Don't record in an account" },
+                                  ...loanAccounts.map((a) => ({ id: `acct:${a.id}`, label: `Add to ${a.name}` })),
+                                  ...loanIncome
+                                    .filter((e) => Number(e.amount) >= Number(rep.amount))
+                                    .map((e) => ({
+                                      id: `entry:${e.id}`,
+                                      label: `Already recorded: ${e.title} · ${formatMoney(e.amount, e.currency_code, user?.locale)} · ${e.occurred_at.slice(0, 10)}`,
+                                    })),
+                                ]}
+                              />
+                              <Text style={styles.muted}>If you already typed this income in by hand, pick it so it isn't counted twice.</Text>
+                            </>
+                          ) : null}
+                          <PrimaryButton label="Confirm received" onPress={() => onConfirmRepayment(rep.id)} disabled={busy} />
+                        </>
                       ) : null}
                       {rep.can_reject ? (
                         <>
@@ -3380,9 +3618,18 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
             onChange={goTab}
           />
         ) : null}
-        {showNav && (screen === 'loans' || screen === 'home') ? (
+        {(showNav && (screen === 'loans' || screen === 'home')) ||
+        (authed && !detailChromeHidden && (screen === 'accounts' || screen === 'plan')) ? (
           <Pressable
             onPress={() => {
+              if (screen === 'accounts') {
+                setAccountsCreateSignal((n) => n + 1);
+                return;
+              }
+              if (screen === 'plan') {
+                setPlanCreateSignal((n) => n + 1);
+                return;
+              }
               if (screen === 'loans') {
                 setLoanFriendId('');
                 setLoanLockedPeer(null);
@@ -3403,11 +3650,21 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               setScreen('cashflow-new');
             }}
             accessibilityRole="button"
-            accessibilityLabel={screen === 'loans' ? 'New loan' : expensesTab === 'income' ? 'New income' : 'New expense'}
+            accessibilityLabel={
+              screen === 'accounts'
+                ? 'New account'
+                : screen === 'plan'
+                  ? 'New plan'
+                  : screen === 'loans'
+                    ? 'New loan'
+                    : expensesTab === 'income'
+                      ? 'New income'
+                      : 'New expense'
+            }
             style={{
               position: 'absolute',
               left: 20,
-              bottom: 96,
+              bottom: showNav ? 96 : 28,
               width: 56,
               height: 56,
               borderRadius: 28,

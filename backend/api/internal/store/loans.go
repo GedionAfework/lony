@@ -100,6 +100,12 @@ func (s *SQLStore) InsertLoan(ctx context.Context, rec loans.Record, terms *loan
 			return loans.Record{}, err
 		}
 	}
+	if rec.LinkedAccountID != nil || rec.SourceEntryID != nil {
+		if _, err := tx.Exec(ctx, `UPDATE loans SET linked_account_id = $2, source_entry_id = $3 WHERE id = $1`,
+			row.ID, rec.LinkedAccountID, rec.SourceEntryID); err != nil {
+			return loans.Record{}, err
+		}
+	}
 	if err := insertEvents(ctx, q, row.ID, events); err != nil {
 		return loans.Record{}, err
 	}
@@ -108,6 +114,36 @@ func (s *SQLStore) InsertLoan(ctx context.Context, rec loans.Record, terms *loan
 	}
 	_ = loadScheduleMeta(ctx, s, &mapped)
 	return mapped, nil
+}
+
+func (s *SQLStore) MarkDeclineHandled(ctx context.Context, loanID uuid.UUID) error {
+	_, err := s.pool.Exec(ctx, `UPDATE loans SET decline_handled = true, updated_at = now() WHERE id = $1`, loanID)
+	return err
+}
+
+func (s *SQLStore) SetAccountLink(ctx context.Context, rec loans.Record, event loans.Event) (loans.Record, error) {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return loans.Record{}, err
+	}
+	defer tx.Rollback(ctx)
+	tag, err := tx.Exec(ctx, `
+		UPDATE loans SET linked_account_id = $2, account_link_dismissed = $3, updated_at = now()
+		WHERE id = $1
+	`, rec.ID, rec.LinkedAccountID, rec.AccountLinkDismissed)
+	if err != nil {
+		return loans.Record{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return loans.Record{}, pgx.ErrNoRows
+	}
+	if err := insertEvents(ctx, s.q.WithTx(tx), rec.ID, []loans.Event{event}); err != nil {
+		return loans.Record{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return loans.Record{}, err
+	}
+	return s.GetLoan(ctx, rec.ID)
 }
 
 func (s *SQLStore) GetLoan(ctx context.Context, id uuid.UUID) (loans.Record, error) {
@@ -143,11 +179,31 @@ func (s *SQLStore) ListTerms(ctx context.Context, loanID uuid.UUID) ([]loans.Ter
 	if err != nil {
 		return nil, err
 	}
+	charges := map[uuid.UUID]string{}
+	if crow, err := s.pool.Query(ctx, `SELECT id, interest_charge FROM loan_terms WHERE loan_id = $1`, loanID); err == nil {
+		for crow.Next() {
+			var id uuid.UUID
+			var c string
+			if crow.Scan(&id, &c) == nil {
+				charges[id] = c
+			}
+		}
+		crow.Close()
+	}
 	out := make([]loans.Terms, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, mapTerms(row))
+		t := mapTerms(row)
+		t.InterestCharge = charges[t.ID]
+		out = append(out, t)
 	}
 	return out, nil
+}
+
+func chargeOrOnce(c string) string {
+	if c == "" {
+		return loans.InterestOnce
+	}
+	return c
 }
 
 func (s *SQLStore) ListEvents(ctx context.Context, loanID uuid.UUID) ([]loans.Event, error) {
@@ -481,6 +537,14 @@ func copySchedule(dst *loans.Record, src loans.Record) {
 	if src.Title != nil {
 		dst.Title = src.Title
 	}
+	dst.LinkedAccountID = src.LinkedAccountID
+	dst.SourceEntryID = src.SourceEntryID
+	dst.DeclineHandled = src.DeclineHandled
+	if src.InterestCharge != "" {
+		dst.InterestCharge = src.InterestCharge
+	}
+	dst.AccountLinkDismissed = src.AccountLinkDismissed
+	dst.PendingPaid = src.PendingPaid
 }
 
 func hasSchedule(rec loans.Record) bool {
@@ -511,9 +575,10 @@ func patchScheduleMetaTx(ctx context.Context, tx pgx.Tx, rec loans.Record) error
 			institution_type = $8,
 			party_mode = $9,
 			title = $10,
+			interest_charge = $11,
 			updated_at = now()
 		WHERE id = $1
-	`, rec.ID, kind, rec.InterestPeriodMonths, rec.InstallmentCount, decPtr(rec.InstallmentAmount), rec.InstitutionLabel, rec.StartAt, rec.InstitutionType, mode, rec.Title)
+	`, rec.ID, kind, rec.InterestPeriodMonths, rec.InstallmentCount, decPtr(rec.InstallmentAmount), rec.InstitutionLabel, rec.StartAt, rec.InstitutionType, mode, rec.Title, chargeOrOnce(rec.InterestCharge))
 	return err
 }
 
@@ -529,9 +594,10 @@ func patchTermsScheduleTx(ctx context.Context, tx pgx.Tx, termID uuid.UUID, term
 			installment_count = $4,
 			installment_amount = $5,
 			institution_label = $6,
-			start_at = $7
+			start_at = $7,
+			interest_charge = $8
 		WHERE id = $1
-	`, termID, kind, terms.InterestPeriodMonths, terms.InstallmentCount, decPtr(terms.InstallmentAmount), terms.InstitutionLabel, terms.StartAt)
+	`, termID, kind, terms.InterestPeriodMonths, terms.InstallmentCount, decPtr(terms.InstallmentAmount), terms.InstitutionLabel, terms.StartAt, chargeOrOnce(terms.InterestCharge))
 	return err
 }
 
@@ -544,11 +610,17 @@ func loadScheduleMeta(ctx context.Context, s *SQLStore, rec *loans.Record) error
 	var partyMode string
 	var start *time.Time
 	var title *string
+	var pendingPaid *string
 	err := s.pool.QueryRow(ctx, `
 		SELECT loan_kind, interest_period_months, installment_count, installment_amount::text,
-		       institution_label, start_at, institution_type, party_mode, title
+		       institution_label, start_at, institution_type, party_mode, title,
+		       linked_account_id, account_link_dismissed, interest_charge, source_entry_id, decline_handled,
+		       (SELECT r.amount::text FROM repayments r
+		         WHERE r.loan_id = loans.id AND r.status = 'pending' AND r.paid_entry_id IS NOT NULL
+		         LIMIT 1)
 		FROM loans WHERE id = $1
-	`, rec.ID).Scan(&kind, &period, &count, &amount, &institution, &start, &instType, &partyMode, &title)
+	`, rec.ID).Scan(&kind, &period, &count, &amount, &institution, &start, &instType, &partyMode, &title,
+		&rec.LinkedAccountID, &rec.AccountLinkDismissed, &rec.InterestCharge, &rec.SourceEntryID, &rec.DeclineHandled, &pendingPaid)
 	if err != nil {
 		return err
 	}
@@ -564,6 +636,7 @@ func loadScheduleMeta(ctx context.Context, s *SQLStore, rec *loans.Record) error
 	rec.PartyMode = partyMode
 	rec.StartAt = start
 	rec.Title = title
+	rec.PendingPaid = parseDec(pendingPaid)
 	ids, _ := s.ListCoLenders(ctx, rec.ID)
 	rec.CoLenderIDs = ids
 	return nil

@@ -22,6 +22,19 @@ type LoanCreator interface {
 	Create(ctx context.Context, actor uuid.UUID, in loans.CreateInput) (loans.LoanDTO, error)
 }
 
+// DeclinedShareLoans is the part of the loans service that tracks friends' shares of an
+// expense that were turned down.
+type DeclinedShareLoans interface {
+	DeclinedShares(ctx context.Context, actor uuid.UUID) ([]loans.DeclinedShare, error)
+	DeclinedShare(ctx context.Context, actor, loanID uuid.UUID) (loans.Record, error)
+	MarkDeclineHandled(ctx context.Context, loanID uuid.UUID) error
+}
+
+const (
+	DeclinedAskAgain = "ask_again"
+	DeclinedKeepCost = "keep_cost"
+)
+
 type AccountLinker interface {
 	ApplyCashflowDelta(ctx context.Context, userID, accountID uuid.UUID, kind string, amount decimal.Decimal, currency, note string) error
 	SetStatedBalance(ctx context.Context, userID, accountID uuid.UUID, balance, note string) error
@@ -31,6 +44,7 @@ type AccountLinker interface {
 	FindAccountByLast4(ctx context.Context, userID uuid.UUID, currency, last4 string) (*uuid.UUID, error)
 	// MatchAccount picks an account from a spoken hint (name, institution, last4) or currency.
 	MatchAccount(ctx context.Context, userID uuid.UUID, hint, currency string) (*uuid.UUID, error)
+	AccountCurrency(ctx context.Context, userID, accountID uuid.UUID) (string, error)
 }
 
 type RecurringPrefs interface {
@@ -44,6 +58,7 @@ type Service struct {
 	notify   BillNotifier
 	receipts ReceiptExtractor
 	voice    VoiceParser
+	capture  CaptureGate
 	prefs    RecurringPrefs
 	now      func() time.Time
 }
@@ -445,6 +460,20 @@ func (s *Service) Update(ctx context.Context, userID, id uuid.UUID, in UpdateInp
 		}
 		return EntryDTO{}, err
 	}
+	// An entry that paid or received a loan repayment must keep the amount the loan has.
+	if in.Amount != nil || in.AccountID != nil || in.CurrencyCode != nil {
+		if checker, ok := s.store.(RepaymentEntryChecker); ok {
+			if linked, err := checker.EntryBacksRepayment(ctx, id); err == nil && linked {
+				amountChanged := in.Amount != nil && !sameAmount(*in.Amount, rec.Amount)
+				accountChanged := in.AccountID != nil && (rec.AccountID == nil || *in.AccountID != *rec.AccountID)
+				currencyChanged := in.CurrencyCode != nil && !strings.EqualFold(strings.TrimSpace(*in.CurrencyCode), rec.CurrencyCode)
+				if amountChanged || accountChanged || currencyChanged {
+					return EntryDTO{}, httpx.E(http.StatusConflict, "LINKED_TO_LOAN",
+						"This entry is a loan repayment. You can change its title, category or note; to change the amount, record the correction on the loan.")
+				}
+			}
+		}
+	}
 	if in.Title != nil {
 		title := strings.TrimSpace(*in.Title)
 		if title == "" || utf8.RuneCountInString(title) > 120 {
@@ -527,7 +556,13 @@ func (s *Service) Update(ctx context.Context, userID, id uuid.UUID, in UpdateInp
 		})
 	}
 	rec.UpdatedAt = s.now().UTC()
-	saved, err := s.store.Update(ctx, rec)
+	var saved Entry
+	if ledger, ok := s.store.(BalanceLedger); ok {
+		// The balance follows the edit (amount or account changed).
+		saved, err = ledger.UpdateEntryWithBalance(ctx, rec)
+	} else {
+		saved, err = s.store.Update(ctx, rec)
+	}
 	if err != nil {
 		return EntryDTO{}, err
 	}
@@ -535,7 +570,12 @@ func (s *Service) Update(ctx context.Context, userID, id uuid.UUID, in UpdateInp
 }
 
 func (s *Service) Delete(ctx context.Context, userID, id uuid.UUID) error {
-	if err := s.store.Delete(ctx, userID, id); err != nil {
+	del := s.store.Delete
+	if ledger, ok := s.store.(BalanceLedger); ok {
+		// Deleting an entry gives its money back to the account balance.
+		del = ledger.DeleteEntryWithBalance
+	}
+	if err := del(ctx, userID, id); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return httpx.E(http.StatusNotFound, "NOT_FOUND", "entry not found")
 		}
@@ -662,6 +702,7 @@ func (s *Service) Share(ctx context.Context, userID, entryID uuid.UUID, in Share
 		Note:                &note,
 		Title:               &title,
 		AutoAccept:          false, // counterparty accepts → bond forms
+		SourceEntryID:       &entryID,
 	})
 	if err != nil {
 		return EntryDTO{}, loans.LoanDTO{}, err
@@ -671,6 +712,50 @@ func (s *Service) Share(ctx context.Context, userID, entryID uuid.UUID, in Share
 	}
 	rec.LinkedLoanID = &loan.ID
 	return toDTO(rec), loan, nil
+}
+
+// DeclinedShares lists friends' shares of the user's expenses that were turned down.
+func (s *Service) DeclinedShares(ctx context.Context, userID uuid.UUID) ([]loans.DeclinedShare, error) {
+	dl, ok := s.loans.(DeclinedShareLoans)
+	if !ok {
+		return []loans.DeclinedShare{}, nil
+	}
+	return dl.DeclinedShares(ctx, userID)
+}
+
+// ResolveDeclinedShare answers a declined share: ask the same friend again for the same
+// amount, or keep the full cost (the expense already counts it all).
+func (s *Service) ResolveDeclinedShare(ctx context.Context, userID, loanID uuid.UUID, action string) (*loans.LoanDTO, error) {
+	dl, ok := s.loans.(DeclinedShareLoans)
+	if !ok {
+		return nil, httpx.E(http.StatusServiceUnavailable, "UNAVAILABLE", "loans are not available")
+	}
+	rec, err := dl.DeclinedShare(ctx, userID, loanID)
+	if err != nil {
+		return nil, err
+	}
+	var out *loans.LoanDTO
+	switch action {
+	case DeclinedAskAgain:
+		if rec.Principal == nil {
+			return nil, httpx.E(http.StatusConflict, "INVALID_STATE", "the declined share has no amount")
+		}
+		amount := rec.Principal.StringFixed(Scale)
+		_, loan, err := s.Share(ctx, userID, *rec.SourceEntryID, ShareInput{FriendID: rec.BorrowerID, ShareAmount: &amount})
+		if err != nil {
+			return nil, err
+		}
+		out = &loan
+	case DeclinedKeepCost:
+	default:
+		return nil, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"action": "must be ask_again or keep_cost",
+		})
+	}
+	if err := dl.MarkDeclineHandled(ctx, loanID); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (s *Service) Receive(ctx context.Context, userID, id uuid.UUID, accountID *uuid.UUID, amountOverride *decimal.Decimal) (EntryDTO, error) {
@@ -879,6 +964,22 @@ func (s *Service) resolveCategory(ctx context.Context, userID uuid.UUID, kind, n
 	return name, nil, nil
 }
 
+// RepaymentEntryChecker reports whether an entry paid or received a live loan repayment.
+type RepaymentEntryChecker interface {
+	EntryBacksRepayment(ctx context.Context, entryID uuid.UUID) (bool, error)
+}
+
+func sameAmount(raw string, have decimal.Decimal) bool {
+	d, err := decimal.NewFromString(strings.TrimSpace(strings.ReplaceAll(raw, ",", "")))
+	return err == nil && d.Round(Scale).Equal(have.Round(Scale))
+}
+
+// ResolveCategory maps a category name or id to the user's category (used when another
+// package writes a cashflow entry, e.g. a loan repayment).
+func (s *Service) ResolveCategory(ctx context.Context, userID uuid.UUID, kind, name string, id *uuid.UUID) (string, *uuid.UUID, error) {
+	return s.resolveCategory(ctx, userID, kind, name, id)
+}
+
 func normalizeKind(raw string) (string, error) {
 	k := strings.TrimSpace(strings.ToLower(raw))
 	switch k {
@@ -1001,6 +1102,9 @@ func (s *Service) applyAccount(ctx context.Context, userID uuid.UUID, rec Entry)
 		return httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
 			"account_id": "choose which account received this money",
 		})
+	}
+	if ledger, ok := s.store.(BalanceLedger); ok {
+		return ledger.ApplyEntryBalance(ctx, userID, rec.ID, accountID)
 	}
 	note := rec.Title
 	return s.accounts.ApplyCashflowDelta(ctx, userID, *accountID, rec.Kind, rec.Amount, rec.CurrencyCode, note)
@@ -1184,6 +1288,11 @@ type SMSIngestInput struct {
 	Note          string
 	StatedBalance string
 	OccurredAt    *time.Time
+	// SMSDateMs is when the phone received the message. The same text received at
+	// another time is another transfer (two identical 50 ETB payments).
+	SMSDateMs *int64
+	// Confirmed: the user said by hand that this is a real transfer.
+	Confirmed bool
 }
 
 type SMSIngestResult struct {
@@ -1205,7 +1314,18 @@ func (s *Service) IngestSMS(ctx context.Context, userID uuid.UUID, in SMSIngestI
 			"text": "max 4000 characters",
 		})
 	}
-	fp := SMSFingerprint(text)
+	if in.Create && !in.Confirmed {
+		if why := SMSNotATransfer(text); why != "" {
+			return SMSIngestResult{}, httpx.Field(http.StatusUnprocessableEntity, "NOT_A_TRANSFER", "this message is not a transfer: "+why, map[string]string{
+				"text": why,
+			})
+		}
+	}
+	legacyFP := SMSFingerprint(text)
+	fp := legacyFP
+	if in.SMSDateMs != nil && *in.SMSDateMs > 0 {
+		fp = fmt.Sprintf("%s@%d", legacyFP, *in.SMSDateMs/60_000)
+	}
 	parsed := ParseTransferSMS(text)
 	// Prefer the phone's parse when the client already extracted a transfer.
 	if k := strings.ToLower(strings.TrimSpace(in.Kind)); k == KindIncome || k == KindExpense {
@@ -1238,8 +1358,26 @@ func (s *Service) IngestSMS(ctx context.Context, userID uuid.UUID, in SMSIngestI
 		parsed.StatedBalance = bal
 	}
 	occurred := smsOccurredAt(in.OccurredAt, text, s.now().UTC())
+	// Unknown currency: the account's own, not a guess.
+	if parsed.CurrencyCode == "" && in.AccountID != nil && s.accounts != nil {
+		if cur, err := s.accounts.AccountCurrency(ctx, userID, *in.AccountID); err == nil {
+			parsed.CurrencyCode = strings.ToUpper(cur)
+		}
+	}
 	if logger, ok := s.store.(SMSLogStore); ok {
-		if existing, err := logger.GetSMSIngest(ctx, userID, fp); err == nil && existing != nil {
+		existing, err := logger.GetSMSIngest(ctx, userID, fp)
+		if (err != nil || existing == nil) && fp != legacyFP {
+			// Saved before messages were told apart by time: the same text is the same
+			// transfer only if it happened at about the same moment.
+			if old, oerr := logger.GetSMSIngest(ctx, userID, legacyFP); oerr == nil && old != nil {
+				if old.CashflowID == nil {
+					existing = old
+				} else if ent, gerr := s.store.Get(ctx, userID, *old.CashflowID); gerr != nil || absDuration(ent.OccurredAt.Sub(occurred)) <= 10*time.Minute {
+					existing = old
+				}
+			}
+		}
+		if existing != nil {
 			out := SMSIngestResult{Parsed: parsed, Duplicate: true}
 			if existing.CashflowID != nil {
 				if ent, err := s.store.Get(ctx, userID, *existing.CashflowID); err == nil {
@@ -1379,6 +1517,13 @@ func (s *Service) IngestSMS(ctx context.Context, userID uuid.UUID, in SMSIngestI
 
 // findRecentPayment returns a confirmed cashflow with the same kind/amount/currency within ±2 days
 // (covers receipt scans of the same real-world payment).
+func absDuration(d time.Duration) time.Duration {
+	if d < 0 {
+		return -d
+	}
+	return d
+}
+
 func (s *Service) findRecentPayment(ctx context.Context, userID uuid.UUID, kind, amount, currency string, around time.Time) *Entry {
 	amt, err := decimal.NewFromString(strings.TrimSpace(strings.ReplaceAll(amount, ",", "")))
 	if err != nil || !amt.GreaterThan(decimal.Zero) {
@@ -1406,9 +1551,21 @@ func (s *Service) findRecentPayment(ctx context.Context, userID uuid.UUID, kind,
 		if !row.Amount.Equal(amt.Round(Scale)) && row.Amount.StringFixed(Scale) != amt.StringFixed(Scale) {
 			continue
 		}
+		// One typed-in or scanned entry stands for one SMS: once an SMS matched it, a second
+		// SMS with the same amount is a second payment.
+		if linker, ok := s.store.(SMSLinkChecker); ok {
+			if linked, err := linker.SMSLinkedToEntry(ctx, userID, row.ID); err == nil && linked {
+				continue
+			}
+		}
 		return row
 	}
 	return nil
+}
+
+// SMSLinkChecker reports whether an SMS was already matched to an entry.
+type SMSLinkChecker interface {
+	SMSLinkedToEntry(ctx context.Context, userID, entryID uuid.UUID) (bool, error)
 }
 
 type ReceiptScanInput struct {
@@ -1442,9 +1599,17 @@ func (s *Service) ScanReceipt(ctx context.Context, userID uuid.UUID, in ReceiptS
 			"image_base64": "image too large",
 		})
 	}
+	if s.capture != nil {
+		if err := s.capture.BeginCapture(ctx, userID); err != nil {
+			return ReceiptScanResult{}, err
+		}
+	}
 	extract, err := s.receipts.ExtractReceipt(ctx, userID, mime, b64)
 	if err != nil {
 		return ReceiptScanResult{}, err
+	}
+	if s.capture != nil {
+		_ = s.capture.FinishCapture(ctx, userID)
 	}
 	// Soft-match expected entries by amount for reconciliation.
 	if extract.Amount != "" {

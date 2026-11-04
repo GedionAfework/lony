@@ -36,6 +36,13 @@ type createBody struct {
 	InstitutionType      *string     `json:"institution_type"`
 	PartyMode            *string     `json:"party_mode"`
 	StartAt              *time.Time  `json:"start_at"`
+	LinkedAccountID      *uuid.UUID  `json:"linked_account_id"`
+	InterestCharge       *string     `json:"interest_charge"`
+}
+
+type accountLinkBody struct {
+	AccountID *uuid.UUID `json:"account_id"`
+	Dismiss   bool       `json:"dismiss"`
 }
 
 type termsBody struct {
@@ -49,6 +56,7 @@ type termsBody struct {
 	InstallmentCount     *int32     `json:"installment_count"`
 	InstitutionLabel     *string    `json:"institution_label"`
 	StartAt              *time.Time `json:"start_at"`
+	InterestCharge       string     `json:"interest_charge"`
 }
 
 func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
@@ -74,6 +82,8 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
 		InstitutionType:      body.InstitutionType,
 		PartyMode:            body.PartyMode,
 		StartAt:              body.StartAt,
+		LinkedAccountID:      body.LinkedAccountID,
+		InterestCharge:       body.InterestCharge,
 	})
 	if err != nil {
 		httpx.Error(w, err)
@@ -163,6 +173,17 @@ func (h *Handler) MarkInstallmentPaid(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, http.StatusOK, map[string]any{"loan": out})
+}
+
+func (h *Handler) SetAccountLink(w http.ResponseWriter, r *http.Request) {
+	var body accountLinkBody
+	if err := httpx.Decode(r, &body); err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	h.withID(w, r, func(id uuid.UUID) (LoanDTO, error) {
+		return h.svc.SetAccountLink(r.Context(), auth.UserIDFrom(r.Context()), id, body.AccountID, body.Dismiss)
+	})
 }
 
 func (h *Handler) withID(w http.ResponseWriter, r *http.Request, fn func(uuid.UUID) (LoanDTO, error)) {

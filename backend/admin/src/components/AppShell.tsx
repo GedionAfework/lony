@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
   Users,
@@ -12,9 +12,13 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronDown,
+  Sun,
+  Moon,
+  Monitor,
   type LucideIcon,
 } from 'lucide-react';
 import { useAuth } from '../auth';
+import { useThemeMode, type ThemeMode } from '../theme';
 import { BrandLogo } from './BrandLogo';
 
 type NavItem = {
@@ -23,16 +27,23 @@ type NavItem = {
   icon: LucideIcon;
   perm?: string;
   end?: boolean;
+  group: string;
 };
 
 const NAV: NavItem[] = [
-  { to: '/', label: 'Overview', icon: LayoutDashboard, perm: 'overview.read', end: true },
-  { to: '/users', label: 'User management', icon: Users, perm: 'users.read' },
-  { to: '/categories', label: 'Categories', icon: Layers, perm: 'categories.read' },
-  { to: '/themes', label: 'Themes', icon: Palette, perm: 'themes.read' },
-  { to: '/localization', label: 'Localization', icon: Languages, perm: 'localization.manage' },
-  { to: '/audit', label: 'Audit log', icon: ScrollText, perm: 'audit.read' },
-  { to: '/settings', label: 'Settings', icon: Settings, perm: 'settings.ai' },
+  { to: '/', label: 'Overview', icon: LayoutDashboard, perm: 'overview.read', end: true, group: 'Insights' },
+  { to: '/users', label: 'Users', icon: Users, perm: 'users.read', group: 'People' },
+  { to: '/audit', label: 'Audit log', icon: ScrollText, perm: 'audit.read', group: 'People' },
+  { to: '/categories', label: 'Categories', icon: Layers, perm: 'categories.read', group: 'Content' },
+  { to: '/themes', label: 'Themes', icon: Palette, perm: 'themes.read', group: 'Content' },
+  { to: '/localization', label: 'Languages', icon: Languages, perm: 'localization.manage', group: 'Content' },
+  { to: '/settings', label: 'Settings', icon: Settings, perm: 'settings.ai', group: 'System' },
+];
+
+const THEME_OPTIONS: { id: ThemeMode; label: string; icon: LucideIcon }[] = [
+  { id: 'light', label: 'Light', icon: Sun },
+  { id: 'dark', label: 'Dark', icon: Moon },
+  { id: 'system', label: 'Match system', icon: Monitor },
 ];
 
 const COLLAPSE_KEY = 'lony_admin_sidebar_collapsed';
@@ -50,6 +61,8 @@ export function AppShell() {
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem(COLLAPSE_KEY) === '1');
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const [themeMode, setThemeMode] = useThemeMode();
+  const location = useLocation();
 
   useEffect(() => {
     localStorage.setItem(COLLAPSE_KEY, collapsed ? '1' : '0');
@@ -78,6 +91,9 @@ export function AppShell() {
   }
 
   const visibleNav = NAV.filter((item) => !item.perm || hasPerm(item.perm));
+  const current =
+    visibleNav.find((item) => (item.end ? location.pathname === item.to : location.pathname.startsWith(item.to) && item.to !== '/')) ??
+    visibleNav.find((item) => item.to === '/');
   const roleName = me?.admin_role || (me?.role === 'admin' ? 'Admin' : '');
 
   return (
@@ -105,7 +121,9 @@ export function AppShell() {
         </div>
 
         <nav className="shell-nav">
-          {visibleNav.map((item) => (
+          {visibleNav.map((item, i) => (
+            <div key={item.to} style={{ display: 'contents' }}>
+              {i === 0 || visibleNav[i - 1].group !== item.group ? <div className="shell-nav-group">{item.group}</div> : null}
             <NavLink
               key={item.to}
               to={item.to}
@@ -116,13 +134,33 @@ export function AppShell() {
               <item.icon size={18} strokeWidth={2} />
               <span className="shell-nav-label">{item.label}</span>
             </NavLink>
+            </div>
           ))}
         </nav>
       </aside>
 
       <div className="shell-main">
         <header className="shell-topbar">
-          <div className="shell-topbar-spacer" />
+          <div className="shell-topbar-title">
+            <small>{current?.group ?? 'Lony'}</small>
+            <strong>{current?.label ?? 'Admin'}</strong>
+          </div>
+          <div className="theme-toggle" role="radiogroup" aria-label="Appearance">
+            {THEME_OPTIONS.map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                role="radio"
+                aria-checked={themeMode === opt.id}
+                title={opt.label}
+                aria-label={opt.label}
+                className={themeMode === opt.id ? 'active' : ''}
+                onClick={() => setThemeMode(opt.id)}
+              >
+                <opt.icon size={15} strokeWidth={2} />
+              </button>
+            ))}
+          </div>
           <div className="shell-account" ref={menuRef}>
             <button
               type="button"

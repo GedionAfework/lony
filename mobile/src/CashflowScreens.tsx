@@ -12,7 +12,6 @@ import {
   type SearchHit,
   type TripBudget,
   type User,
-  isPremiumPlan,
 } from './api';
 import { stripAmount, formatAmountCommas } from './amountFormat';
 import { CURRENCIES } from './catalogs';
@@ -28,6 +27,7 @@ import { fonts, radii, space, useTheme } from './theme';
 import { VoiceAddButton, type VoiceDraft } from './VoiceAddButton';
 import {
   Card,
+  CheckRow,
   EmptyState,
   Field,
   PrimaryButton,
@@ -146,6 +146,7 @@ export function CashflowFormScreen({
   );
   const [categoryId, setCategoryId] = useState(editing?.category_id ?? '');
   const [newCategory, setNewCategory] = useState('');
+  const [allCategories, setAllCategories] = useState(false);
   const [note, setNote] = useState(editing?.note ?? prefill?.note ?? '');
   const [date, setDate] = useState(
     editing?.occurred_at?.slice(0, 10) ?? prefill?.occurred_at?.slice(0, 10) ?? todayIso(),
@@ -547,7 +548,7 @@ export function CashflowFormScreen({
 
       let payAmount = cleaned;
       if (kind === 'expense' && isLoanPayment === 'yes' && loanId && selectedLoan) {
-        const remaining = Number(selectedLoan.expected_total || selectedLoan.principal || 0);
+        const remaining = Number(selectedLoan.outstanding_amount || selectedLoan.expected_total || selectedLoan.principal || 0);
         const installment = Number(selectedLoan.installment_amount || 0);
         if (payMode === 'full') {
           payAmount = remaining.toFixed(2);
@@ -603,6 +604,60 @@ export function CashflowFormScreen({
         ...(kind === 'expense' && tripId && tripId !== 'none' ? { trip_id: tripId } : {}),
         ...(kind === 'expense' && editing && (!tripId || tripId === 'none') ? { clear_trip: true } : {}),
       };
+
+      // A loan payment is one server step: the expense, the balance change and the
+      // repayment claim are saved together, so the money is never counted twice.
+      if (!editing && kind === 'expense' && isLoanPayment === 'yes' && loanId) {
+        let res: Awaited<ReturnType<typeof api.claimRepayment>>;
+        try {
+          res = await api.claimRepayment(token, loanId, {
+            amount: payAmount,
+            note: payload.note,
+            pay_from_account_id: accountId,
+            title: payload.title || undefined,
+            category_id: payload.category_id,
+            occurred_at: payload.occurred_at,
+          });
+        } catch (e) {
+          const msg = (e instanceof Error ? e.message : '').toLowerCase();
+          if (msg.includes('network') || msg.includes('failed to fetch') || msg.includes('timeout')) {
+            // Offline: keep the payment and send it with the other drafts later.
+            const { saveCashflowDraft } = await import('./offlineDrafts');
+            await saveCashflowDraft({
+              kind: 'expense',
+              title: payload.title,
+              amount: payAmount,
+              currency_code: payload.currency_code,
+              category_id: payload.category_id,
+              account_id: accountId,
+              note: payload.note,
+              occurred_at: payload.occurred_at,
+              loan_id: loanId,
+            });
+            onError('You’re offline — the loan payment is saved on this device. Open Expenses to send it later.');
+            setBusy(false);
+            return;
+          }
+          throw e;
+        }
+        const now = new Date().toISOString();
+        onSaved({
+          id: res.repayment.paid_entry_id || res.repayment.id,
+          kind: 'expense',
+          title: payload.title,
+          amount: res.repayment.amount,
+          currency_code: payload.currency_code,
+          category: '',
+          category_id: payload.category_id ?? null,
+          occurred_at: payload.occurred_at,
+          linked_loan_id: loanId,
+          account_id: accountId,
+          status: 'confirmed',
+          created_at: now,
+          updated_at: now,
+        });
+        return;
+      }
 
       let entry: CashflowEntry;
       if (editing) {
@@ -675,17 +730,6 @@ export function CashflowFormScreen({
             } catch (e) {
               onError(e instanceof Error ? e.message : `Share with ${friend.name} failed`);
             }
-          }
-        }
-
-        if (kind === 'expense' && isLoanPayment === 'yes' && loanId) {
-          try {
-            await api.claimRepayment(token, loanId, {
-              amount: payAmount,
-              note: title.trim() || 'Expense payment',
-            });
-          } catch (e) {
-            onError(e instanceof Error ? e.message : 'Expense saved, but loan payment failed');
           }
         }
       }
@@ -783,7 +827,7 @@ export function CashflowFormScreen({
         }
         onBack={onBack}
         right={
-          editing || !isPremiumPlan(user) ? undefined : (
+          editing ? undefined : (
             <VoiceAddButton
               token={token}
               locale={user.locale}
@@ -797,23 +841,17 @@ export function CashflowFormScreen({
       {prefill && !editing ? (
         <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
           {prefill.source === 'sms'
-            ? 'Filled from your bank SMS. Add category and any missing details, then save.'
-            : 'AI filled this from your photo. Review, choose “with friends” if you’re splitting, then save.'}
+            ? 'Filled from your SMS. Check it and save.'
+            : 'Filled from your photo. Check it and save.'}
         </Text>
       ) : null}
       <Card>
-        {kind === 'expense' && !editing ? (
-          <>
-            <SectionLabel>Is this a loan payment?</SectionLabel>
-            <Segmented
-              options={[
-                { id: 'no', label: 'No' },
-                { id: 'yes', label: 'Yes' },
-              ]}
-              value={isLoanPayment}
-              onChange={setIsLoanPayment}
-            />
-          </>
+        {kind === 'expense' && !editing && payableLoans.length > 0 ? (
+          <CheckRow
+            checked={isLoanPayment === 'yes'}
+            label="This pays back a loan"
+            onPress={() => setIsLoanPayment((v) => (v === 'yes' ? 'no' : 'yes'))}
+          />
         ) : null}
 
         {kind === 'expense' && !editing && isLoanPayment === 'yes' ? (
@@ -832,7 +870,7 @@ export function CashflowFormScreen({
                   setAmount(formatAmountCommas(loan.installment_amount));
                 } else {
                   setPayMode('full');
-                  setAmount(formatAmountCommas(loan.expected_total || loan.principal || ''));
+                  setAmount(formatAmountCommas(loan.outstanding_amount || loan.expected_total || loan.principal || ''));
                 }
               }}
               options={loanOptions}
@@ -850,7 +888,7 @@ export function CashflowFormScreen({
                       setAmount(formatAmountCommas(selectedLoan.installment_amount));
                     } else if (mode === 'full') {
                       setAmount(
-                        formatAmountCommas(selectedLoan.expected_total || selectedLoan.principal || ''),
+                        formatAmountCommas(selectedLoan.outstanding_amount || selectedLoan.expected_total || selectedLoan.principal || ''),
                       );
                     }
                   }}
@@ -870,7 +908,7 @@ export function CashflowFormScreen({
                 {selectedLoan ? (
                   <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
                     Remaining{' '}
-                    {formatAmountCommas(selectedLoan.expected_total || selectedLoan.principal || '0')}{' '}
+                    {formatAmountCommas(selectedLoan.outstanding_amount || selectedLoan.expected_total || selectedLoan.principal || '0')}{' '}
                     {selectedLoan.currency_code}
                     {selectedLoan.installment_amount
                       ? `\nInstallment ${formatAmountCommas(selectedLoan.installment_amount)}`
@@ -885,20 +923,21 @@ export function CashflowFormScreen({
           </>
         ) : (
           <>
-            <Field label="Title" value={title} onChange={setTitle} />
             <Field label="Amount" value={amount} onChange={setAmount} money />
+            <Field
+              label={kind === 'income' ? 'From' : 'What was it for?'}
+              value={title}
+              onChange={setTitle}
+              placeholder={kind === 'income' ? 'e.g. Salary' : 'e.g. Lunch, taxi, rent'}
+            />
             <SearchSelect label="Currency" value={currency} onChange={setCurrency} options={CURRENCIES} />
             {canSplitPayment ? (
               <>
-                <SectionLabel>{t(user.locale, 'cashflow.splitPayment')}</SectionLabel>
-                <Segmented
-                  options={[
-                    { id: 'no', label: t(user.locale, 'cashflow.splitNo') },
-                    { id: 'yes', label: t(user.locale, 'cashflow.splitYes') },
-                  ]}
-                  value={splitOn ? 'yes' : 'no'}
-                  onChange={(id) => {
-                    const on = id === 'yes';
+                <CheckRow
+                  checked={splitOn}
+                  label="Paid from more than one account"
+                  onPress={() => {
+                    const on = !splitOn;
                     setSplitOn(on);
                     if (on) {
                       setSplitLines([
@@ -976,15 +1015,51 @@ export function CashflowFormScreen({
                     accountOptions.length ? 'Which account?' : `Add a ${currency} account first`
                   }
                 />
-                <SearchSelect
-                  label="Category"
-                  value={categoryId}
-                  onChange={(id) => {
-                    setCategoryId(id);
-                    setNewCategory('');
-                  }}
-                  options={categoryOptions}
-                />
+                <View style={{ gap: 8 }}>
+                  <Text style={{ color: colors.muted, fontFamily: fonts.uiSemi, fontSize: 13 }}>Category</Text>
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
+                    {(allCategories || categoryOptions.length <= 9
+                      ? categoryOptions
+                      : [
+                          ...categoryOptions.slice(0, 8),
+                          ...categoryOptions.slice(8).filter((c) => c.id === categoryId),
+                        ]
+                    ).map((c) => {
+                      const on = c.id === categoryId;
+                      return (
+                        <Pressable
+                          key={c.id}
+                          onPress={() => {
+                            setCategoryId(c.id);
+                            setNewCategory('');
+                          }}
+                          accessibilityRole="radio"
+                          accessibilityState={{ checked: on }}
+                          style={{
+                            paddingHorizontal: 14,
+                            paddingVertical: 9,
+                            borderRadius: radii.full,
+                            backgroundColor: on ? colors.primary : colors.surfaceMuted,
+                          }}
+                        >
+                          <Text style={{ color: on ? colors.onPrimary : colors.text, fontFamily: fonts.uiSemi, fontSize: 13 }}>
+                            {c.label}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                    {categoryOptions.length > 9 ? (
+                      <Pressable
+                        onPress={() => setAllCategories((v) => !v)}
+                        style={{ paddingHorizontal: 14, paddingVertical: 9, borderRadius: radii.full }}
+                      >
+                        <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 13 }}>
+                          {allCategories ? 'Fewer' : `More (${categoryOptions.length - 8})`}
+                        </Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
+                </View>
                 {showNewCategory ? (
                   <Field label="Custom category" value={newCategory} onChange={setNewCategory} />
                 ) : null}
@@ -1008,14 +1083,11 @@ export function CashflowFormScreen({
 
             {kind === 'income' ? (
               <>
-                <SectionLabel>Recurring?</SectionLabel>
-                <Segmented
-                  options={[
-                    { id: 'no', label: 'One-time' },
-                    { id: 'yes', label: 'Recurring' },
-                  ]}
-                  value={incomePeriodic}
-                  onChange={(id) => {
+                <CheckRow
+                  checked={incomePeriodic === 'yes'}
+                  label="I get this regularly (e.g. every month)"
+                  onPress={() => {
+                    const id = incomePeriodic === 'yes' ? 'no' : 'yes';
                     setIncomePeriodic(id);
                     if (id === 'yes') setSplitOn(false);
                   }}
@@ -1038,14 +1110,11 @@ export function CashflowFormScreen({
 
             {kind === 'expense' && !editing && isLoanPayment === 'no' ? (
               <>
-                <SectionLabel>Recurring payment?</SectionLabel>
-                <Segmented
-                  options={[
-                    { id: 'no', label: 'One-time' },
-                    { id: 'yes', label: 'Recurring' },
-                  ]}
-                  value={isRecurring}
-                  onChange={(id) => {
+                <CheckRow
+                  checked={isRecurring === 'yes'}
+                  label="I pay this regularly (e.g. rent, subscription)"
+                  onPress={() => {
+                    const id = isRecurring === 'yes' ? 'no' : 'yes';
                     setIsRecurring(id);
                     if (id === 'yes') setSplitOn(false);
                   }}
@@ -1064,14 +1133,11 @@ export function CashflowFormScreen({
                   </>
                 ) : null}
 
-                <SectionLabel>Who’s paying?</SectionLabel>
-                <Segmented
-                  options={[
-                    { id: 'alone', label: 'Alone' },
-                    { id: 'friends', label: 'With friends' },
-                  ]}
-                  value={payWith}
-                  onChange={(id) => {
+                <CheckRow
+                  checked={payWith === 'friends'}
+                  label="Split this with friends"
+                  onPress={() => {
+                    const id = payWith === 'friends' ? 'alone' : 'friends';
                     setPayWith(id);
                     if (id === 'friends') setSplitOn(false);
                   }}
@@ -1697,7 +1763,18 @@ export function CashflowShowScreen({
         )}
       </Card>
 
-      {current.linked_loan_id ? (
+      {current.shared_with?.length ? (
+        <Card>
+          <SectionLabel>Shared with</SectionLabel>
+          {current.shared_with.map((sh) => (
+            <SecondaryButton
+              key={sh.loan_id}
+              label={`${sh.friend_name} · ${formatAmountCommas(sh.amount)} ${sh.currency_code} · ${({ pending: 'waiting for them', active: 'accepted', overdue: 'overdue', repayment_pending: 'paid, to confirm', completed: 'paid back', rejected: 'declined', cancelled: 'cancelled' } as Record<string, string>)[sh.status] || sh.status}`}
+              onPress={() => onOpenLoan(sh.loan_id)}
+            />
+          ))}
+        </Card>
+      ) : current.linked_loan_id ? (
         <Card>
           <SecondaryButton label="Open linked loan" onPress={() => onOpenLoan(current.linked_loan_id!)} />
         </Card>

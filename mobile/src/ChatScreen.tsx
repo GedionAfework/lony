@@ -13,6 +13,7 @@ import {
   FlatList,
   Keyboard,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   Pressable,
   StyleSheet,
@@ -20,6 +21,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import {
   api,
   type ChatMessage,
@@ -28,11 +30,46 @@ import {
 } from './api';
 import { formatMoney } from './amountFormat';
 import { t } from './i18n';
+import { mergeMessages } from './chatSync';
 import { apiBaseUrl, fonts, useTheme, type ThemeColors } from './theme';
-import { AuthenticatedAvatar } from './AuthenticatedAvatar';
+import { AuthenticatedAvatar, AuthenticatedImage, prefetchAvatars } from './AuthenticatedAvatar';
 import { IconAttach, IconBack, IconEmoji, IconLoans, IconMic, IconSend } from './icons';
 
 type ChatPeer = { id: string; display_name: string; username?: string | null; avatar_url?: string | null };
+
+/** Last chat list and threads seen this session: reopening shows them at once, then refreshes. */
+let listCache: Conversation[] = [];
+const threadCache = new Map<string, ChatMessage[]>();
+
+/** A text message on its way to the server; shown right away, retried on tap if it failed. */
+type Outgoing = { tmpId: string; convId: string; body: string; replyTo: ChatMessage | null; createdAt: string; failed: boolean };
+
+/** "Today", "Yesterday", or a date, for the separators between days. */
+function dayLabel(iso: string, locale?: string | null): string {
+  const d = new Date(iso);
+  const today = new Date();
+  const start = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((start(today) - start(d)) / 86_400_000);
+  if (diff === 0) return 'Today';
+  if (diff === 1) return 'Yesterday';
+  return d.toLocaleDateString(locale || undefined, {
+    weekday: diff < 7 ? 'long' : undefined,
+    day: 'numeric',
+    month: 'short',
+    year: d.getFullYear() === today.getFullYear() ? undefined : 'numeric',
+  });
+}
+
+function sameDay(a: string, b: string): boolean {
+  const x = new Date(a);
+  const y = new Date(b);
+  return x.getFullYear() === y.getFullYear() && x.getMonth() === y.getMonth() && x.getDate() === y.getDate();
+}
+
+function mmss(ms: number): string {
+  const sec = Math.max(0, Math.round(ms / 1000));
+  return `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, '0')}`;
+}
 
 const REACTION_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏', '🔥', '👏'];
 const COMPOSER_EMOJIS = [
@@ -82,7 +119,7 @@ export function ChatScreen({
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(audioRecorder, 200);
-  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [conversations, setConversations] = useState<Conversation[]>(() => listCache);
   const [active, setActive] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState('');
@@ -91,8 +128,39 @@ export function ChatScreen({
   const [busy, setBusy] = useState(false);
   const [reactFor, setReactFor] = useState<string | null>(null);
   const listRef = useRef<FlatList<ChatMessage>>(null);
-  const lastCreated = useRef<string | undefined>(undefined);
+  // Server cursor for "what changed since". Only fetches move it, never our own sends,
+  // so a message the other person sent a moment earlier is never skipped.
+  const cursor = useRef<string | undefined>(undefined);
+  const peerReadAt = useRef<string | null>(null);
+  // The thread currently on screen; late replies for any other thread are dropped.
+  const activeId = useRef<string | undefined>(undefined);
+  const scrolledToNewest = useRef<string | undefined>(undefined);
+  const [hasOlder, setHasOlder] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const recordStartedAt = useRef<number>(0);
+  const [outbox, setOutbox] = useState<Outgoing[]>([]);
+  const [viewImage, setViewImage] = useState<string | null>(null);
+  const [playingId, setPlayingId] = useState<string | null>(null);
+  const playerRef = useRef<ReturnType<typeof createAudioPlayer> | null>(null);
+  const [recordMs, setRecordMs] = useState(0);
+
+  // Remember each thread so reopening it is instant.
+  useEffect(() => {
+    if (active && messages.length) threadCache.set(active.id, messages);
+  }, [active, messages]);
+
+  // A running clock while recording a voice note.
+  useEffect(() => {
+    if (!recorderState.isRecording) {
+      setRecordMs(0);
+      return;
+    }
+    const id = setInterval(() => setRecordMs(Date.now() - (recordStartedAt.current || Date.now())), 250);
+    return () => clearInterval(id);
+  }, [recorderState.isRecording]);
+
+  // Stop any voice note when leaving the screen.
+  useEffect(() => () => playerRef.current?.remove(), []);
 
   useEffect(() => {
     const sub = Keyboard.addListener('keyboardDidShow', () => {
@@ -104,7 +172,9 @@ export function ChatScreen({
   async function loadConversations() {
     const res = await api.listConversations(token);
     const list = res.conversations ?? [];
+    listCache = list;
     setConversations(list);
+    prefetchAvatars(list.map((c) => c.peer.avatar_url), token);
     setActive((prev) => {
       if (!prev) {
         return prev;
@@ -113,17 +183,60 @@ export function ChatScreen({
     });
   }
 
+  // Shows a thread from its newest messages. Ignored if another thread was opened meanwhile.
+  async function loadThread(conv: Conversation) {
+    activeId.current = conv.id;
+    cursor.current = undefined;
+    peerReadAt.current = null;
+    scrolledToNewest.current = undefined;
+    setActive(conv);
+    setMessages(threadCache.get(conv.id) ?? []);
+    setHasOlder(false);
+    setReactFor(null);
+    const page = await api.listMessages(token, conv.id);
+    if (activeId.current !== conv.id) {
+      return;
+    }
+    cursor.current = page.cursor;
+    peerReadAt.current = page.peer_read_at ?? null;
+    setMessages((prev) => mergeMessages(prev.length ? prev : [], page.messages ?? [], page.peer_read_at));
+    setHasOlder(page.has_more);
+  }
+
+  function closeThread() {
+    activeId.current = undefined;
+    cursor.current = undefined;
+    setActive(null);
+    setMessages([]);
+    setHasOlder(false);
+  }
+
+  async function loadOlder() {
+    if (!active || loadingOlder || messages.length === 0) {
+      return;
+    }
+    const convId = active.id;
+    const first = messages[0];
+    setLoadingOlder(true);
+    try {
+      const page = await api.listMessages(token, convId, { before: first.created_at, beforeId: first.id });
+      if (activeId.current !== convId) {
+        return;
+      }
+      setMessages((prev) => mergeMessages(prev, page.messages ?? [], peerReadAt.current));
+      setHasOlder(page.has_more);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : 'Could not load earlier messages');
+    } finally {
+      setLoadingOlder(false);
+    }
+  }
+
   async function openPeer(peerId: string) {
     setBusy(true);
     try {
       const res = await api.openConversation(token, { peer_id: peerId });
-      setActive(res.conversation);
-      lastCreated.current = undefined;
-      const msgs = await api.listMessages(token, res.conversation.id);
-      setMessages(msgs.messages ?? []);
-      if (msgs.messages?.length) {
-        lastCreated.current = msgs.messages[msgs.messages.length - 1].created_at;
-      }
+      await loadThread(res.conversation);
       await loadConversations();
     } catch (e) {
       onError(e instanceof Error ? e.message : 'Could not open chat');
@@ -136,13 +249,7 @@ export function ChatScreen({
     setBusy(true);
     try {
       const res = await api.openConversation(token, { loan_id: loanId });
-      setActive(res.conversation);
-      lastCreated.current = undefined;
-      const msgs = await api.listMessages(token, res.conversation.id);
-      setMessages(msgs.messages ?? []);
-      if (msgs.messages?.length) {
-        lastCreated.current = msgs.messages[msgs.messages.length - 1].created_at;
-      }
+      await loadThread(res.conversation);
       await loadConversations();
       onLoanOpened?.();
     } catch (e) {
@@ -153,34 +260,27 @@ export function ChatScreen({
     }
   }
 
-  async function refreshMessages(full = false) {
-    if (!active) {
-      return;
+  async function refreshMessages() {
+    const convId = activeId.current;
+    if (!convId || !cursor.current) {
+      return; // the first page is still loading
     }
-    const res = await api.listMessages(token, active.id, full ? undefined : lastCreated.current);
-    const incoming = res.messages ?? [];
-    if (!incoming.length) {
-      return;
+    try {
+      const page = await api.listMessages(token, convId, { since: cursor.current });
+      if (activeId.current !== convId) {
+        return;
+      }
+      cursor.current = page.cursor;
+      peerReadAt.current = page.peer_read_at ?? peerReadAt.current;
+      setMessages((prev) => mergeMessages(prev, page.messages ?? [], peerReadAt.current));
+    } catch (e) {
+      // The thread was merged into another one (e.g. a loan chat): reopen it by person.
+      const peer = active?.peer?.id;
+      if (peer && e instanceof Error && /conversation not found/i.test(e.message)) {
+        const res = await api.openConversation(token, { peer_id: peer });
+        await loadThread(res.conversation);
+      }
     }
-    setMessages((prev) => {
-      if (full || !lastCreated.current) {
-        return incoming;
-      }
-      const seen = new Set(prev.map((m) => m.id));
-      const merged = [...prev];
-      for (const m of incoming) {
-        if (!seen.has(m.id)) {
-          merged.push(m);
-        } else {
-          const idx = merged.findIndex((x) => x.id === m.id);
-          if (idx >= 0) {
-            merged[idx] = m;
-          }
-        }
-      }
-      return merged;
-    });
-    lastCreated.current = incoming[incoming.length - 1]?.created_at ?? lastCreated.current;
   }
 
   useEffect(() => {
@@ -209,10 +309,16 @@ export function ChatScreen({
       return () => clearInterval(listPoll);
     }
     const t = setInterval(() => {
-      refreshMessages(false).catch(() => undefined);
-      loadConversations().catch(() => undefined);
+      refreshMessages().catch(() => undefined);
     }, 2500);
-    return () => clearInterval(t);
+    // The chat list (unread badges) changes slowly; no need to reload it with every poll.
+    const listPoll = setInterval(() => {
+      loadConversations().catch(() => undefined);
+    }, 15000);
+    return () => {
+      clearInterval(t);
+      clearInterval(listPoll);
+    };
   }, [active?.id, token]);
 
   useEffect(() => {
@@ -220,7 +326,25 @@ export function ChatScreen({
     return () => onActiveChange?.(false);
   }, [active]);
 
-  async function sendText(extra?: string) {
+  /** Shows the message at once and sends it in the background; a failed one waits for a tap. */
+  async function deliver(item: Outgoing) {
+    setOutbox((list) => list.map((o) => (o.tmpId === item.tmpId ? { ...o, failed: false } : o)));
+    try {
+      const res = await api.sendMessage(token, item.convId, {
+        body: item.body,
+        reply_to_message_id: item.replyTo?.id,
+      });
+      if (activeId.current === item.convId) {
+        setMessages((prev) => mergeMessages(prev, [res.message], peerReadAt.current));
+      }
+      setOutbox((list) => list.filter((o) => o.tmpId !== item.tmpId));
+      loadConversations().catch(() => undefined);
+    } catch {
+      setOutbox((list) => list.map((o) => (o.tmpId === item.tmpId ? { ...o, failed: true } : o)));
+    }
+  }
+
+  function sendText(extra?: string) {
     if (!active) {
       return;
     }
@@ -228,23 +352,20 @@ export function ChatScreen({
     if (!body) {
       return;
     }
-    setBusy(true);
-    try {
-      const res = await api.sendMessage(token, active.id, {
-        body,
-        reply_to_message_id: replyTo?.id,
-      });
-      setDraft('');
-      setReplyTo(null);
-      setShowEmoji(false);
-      setMessages((prev) => [...prev, res.message]);
-      lastCreated.current = res.message.created_at;
-      await loadConversations();
-    } catch (e) {
-      onError(e instanceof Error ? e.message : 'Could not send');
-    } finally {
-      setBusy(false);
-    }
+    const item: Outgoing = {
+      tmpId: `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      convId: active.id,
+      body,
+      replyTo,
+      createdAt: new Date().toISOString(),
+      failed: false,
+    };
+    setDraft('');
+    setReplyTo(null);
+    setShowEmoji(false);
+    setOutbox((list) => [...list, item]);
+    requestAnimationFrame(() => listRef.current?.scrollToEnd({ animated: true }));
+    void deliver(item);
   }
 
   async function sendFile() {
@@ -286,9 +407,8 @@ export function ChatScreen({
         attachment_base64: b64,
       });
       setReplyTo(null);
-      setMessages((prev) => [...prev, res.message]);
-      lastCreated.current = res.message.created_at;
-      await loadConversations();
+      setMessages((prev) => mergeMessages(prev, [res.message], peerReadAt.current));
+      loadConversations().catch(() => undefined);
     } catch (e) {
       onError(e instanceof Error ? e.message : 'Could not send file');
     } finally {
@@ -340,9 +460,8 @@ export function ChatScreen({
           voice_duration_ms: durationMs,
         });
         setReplyTo(null);
-        setMessages((prev) => [...prev, res.message]);
-        lastCreated.current = res.message.created_at;
-        await loadConversations();
+        setMessages((prev) => mergeMessages(prev, [res.message], peerReadAt.current));
+        loadConversations().catch(() => undefined);
         setBusy(false);
         return;
       }
@@ -365,11 +484,26 @@ export function ChatScreen({
     }
   }
 
-  async function playVoice(msg: ChatMessage) {
+  async function cancelRecording() {
+    try {
+      if (recorderState.isRecording || audioRecorder.isRecording) await audioRecorder.stop();
+    } catch {
+      /* nothing to stop */
+    }
+  }
+
+  function playVoice(msg: ChatMessage) {
     if (!msg.attachment_url) {
       return;
     }
+    // Tapping the playing note pauses it; another note stops the first.
+    if (playingId === msg.id) {
+      playerRef.current?.pause();
+      setPlayingId(null);
+      return;
+    }
     try {
+      playerRef.current?.remove();
       const url = msg.attachment_url.startsWith('http')
         ? msg.attachment_url
         : `${apiBaseUrl.replace(/\/api\/v1$/, '')}${msg.attachment_url}`;
@@ -377,23 +511,25 @@ export function ChatScreen({
         uri: url,
         headers: { Authorization: `Bearer ${token}` },
       });
+      playerRef.current = player;
+      player.addListener('playbackStatusUpdate', (status: { didJustFinish?: boolean }) => {
+        if (status.didJustFinish) setPlayingId((id) => (id === msg.id ? null : id));
+      });
       player.play();
+      setPlayingId(msg.id);
     } catch (e) {
       onError(e instanceof Error ? e.message : 'Could not play voice note');
     }
   }
 
   async function react(msg: ChatMessage, emoji: string) {
-    setBusy(true);
+    setReactFor(null);
     try {
       const remove = msg.reactions.some((r) => r.emoji === emoji && r.mine);
       const res = await api.reactMessage(token, msg.id, emoji, remove);
-      setMessages((prev) => prev.map((m) => (m.id === msg.id ? res.message : m)));
-      setReactFor(null);
+      setMessages((prev) => mergeMessages(prev, [res.message], peerReadAt.current));
     } catch (e) {
       onError(e instanceof Error ? e.message : 'Could not react');
-    } finally {
-      setBusy(false);
     }
   }
 
@@ -489,14 +625,7 @@ export function ChatScreen({
               key={c.id}
               style={styles.row}
               onPress={() => {
-                setActive(c);
-                lastCreated.current = undefined;
-                api.listMessages(token, c.id).then((res) => {
-                  setMessages(res.messages ?? []);
-                  if (res.messages?.length) {
-                    lastCreated.current = res.messages[res.messages.length - 1].created_at;
-                  }
-                });
+                loadThread(c).catch((e) => onError(e instanceof Error ? e.message : 'Could not open chat'));
               }}
               onLongPress={() => onOpenProfile?.(c.peer)}
             >
@@ -573,6 +702,28 @@ export function ChatScreen({
     );
   }
 
+  // A pending message whose real copy already arrived (via the poll) is not shown twice.
+  const pendingHere = outbox.filter(
+    (o) =>
+      o.convId === active.id &&
+      (o.failed || !messages.some((m) => m.mine && m.body === o.body && Date.parse(m.created_at) >= Date.parse(o.createdAt) - 5000)),
+  );
+  const listData: ChatMessage[] = [
+    ...messages,
+    ...pendingHere.map(
+      (o): ChatMessage => ({
+        id: o.tmpId,
+        conversation_id: o.convId,
+        sender_id: userId,
+        mine: true,
+        body: o.body,
+        reply_to: o.replyTo,
+        attachment_kind: '',
+        reactions: [],
+        created_at: o.createdAt,
+      }),
+    ),
+  ];
   const isSelfChat = active.peer.id === userId || active.peer.display_name === 'Self' || active.peer.display_name === 'Saved Messages';
   const peerTitle = isSelfChat ? 'Self' : active.peer.display_name;
   const peerInitial = isSelfChat ? selfInitial : active.peer.display_name.slice(0, 1).toUpperCase();
@@ -586,8 +737,7 @@ export function ChatScreen({
       <View style={styles.threadHeader}>
         <Pressable
           onPress={() => {
-            setActive(null);
-            setMessages([]);
+            closeThread();
             setReplyTo(null);
             loadConversations();
           }}
@@ -663,88 +813,150 @@ export function ChatScreen({
       <FlatList
         ref={listRef}
         style={{ flex: 1 }}
-        data={messages}
+        data={listData}
         keyExtractor={(m) => m.id}
         contentContainerStyle={styles.thread}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="interactive"
-        onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
-        renderItem={({ item }) => (
-          <Pressable
-            onLongPress={() => {
-              setReactFor(item.id);
-              setReplyTo(item);
-            }}
-            style={[styles.bubbleWrap, item.mine ? styles.mineWrap : styles.theirsWrap]}
-          >
-            {item.reply_to ? (
-              <View style={styles.replyBox}>
-                <Text style={styles.replyText} numberOfLines={2}>
-                  {item.reply_to.body || attachmentLabel(item.reply_to)}
-                </Text>
-              </View>
-            ) : null}
-            <View style={styles.bubbleBody}>
-              <Text style={[styles.bubbleText, item.mine && styles.mineText]}>
-                {item.body
-                  ? item.body
-                  : item.attachment_kind === 'voice'
-                    ? `Voice · ${Math.round((item.voice_duration_ms ?? 0) / 1000)}s`
-                    : item.attachment_kind === 'image'
-                      ? `Image · ${item.attachment_name || 'Attachment'}`
-                      : item.attachment_kind === 'file'
-                        ? `File · ${item.attachment_name || 'Attachment'}`
-                        : ''}
+        // Keep the view still when earlier messages are added above it.
+        maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+        ListHeaderComponent={
+          hasOlder ? (
+            <Pressable onPress={() => void loadOlder()} disabled={loadingOlder} style={{ alignSelf: 'center', padding: 10 }}>
+              <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 13 }}>
+                {loadingOlder ? 'Loading…' : 'Load earlier messages'}
               </Text>
-              <View style={styles.timeCornerRow}>
-                <Text style={[styles.timeCorner, item.mine && styles.mineTime]}>
-                  {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </Text>
-                {item.mine ? (
-                  <View style={styles.tickStack}>
-                    <Text
-                      style={[
-                        styles.tickMark,
-                        styles.tickBack,
-                        { color: colors.text },
-                      ]}
-                    >
-                      ✓
+            </Pressable>
+          ) : null
+        }
+        onContentSizeChange={() => {
+          // Follow the conversation only when a newer message arrives, not when older ones load.
+          const newest = listData[listData.length - 1]?.id;
+          if (newest && newest !== scrolledToNewest.current) {
+            scrolledToNewest.current = newest;
+            listRef.current?.scrollToEnd({ animated: true });
+          }
+        }}
+        renderItem={({ item, index }) => {
+          const prev = listData[index - 1];
+          const showDay = !prev || !sameDay(prev.created_at, item.created_at);
+          // Messages from the same person a minute apart sit closer together.
+          const grouped = !showDay && prev && prev.mine === item.mine && Math.abs(Date.parse(item.created_at) - Date.parse(prev.created_at)) < 60_000;
+          const pending = pendingHere.find((o) => o.tmpId === item.id);
+          return (
+            <View style={{ marginTop: grouped ? 0 : 6 }}>
+              {showDay ? (
+                <View style={styles.dayChip}>
+                  <Text style={styles.dayChipText}>{dayLabel(item.created_at, locale)}</Text>
+                </View>
+              ) : null}
+              <Pressable
+                onLongPress={() => (pending ? undefined : setReactFor(item.id))}
+                onPress={() => {
+                  if (pending?.failed) void deliver(pending);
+                  else if (reactFor) setReactFor(null);
+                }}
+                delayLongPress={250}
+                style={[styles.bubbleWrap, item.mine ? styles.mineWrap : styles.theirsWrap, pending && !pending.failed ? { opacity: 0.75 } : null]}
+              >
+                {item.reply_to ? (
+                  <View style={styles.replyBox}>
+                    <Text style={styles.replyText} numberOfLines={2}>
+                      {item.reply_to.body || attachmentLabel(item.reply_to)}
                     </Text>
-                    {item.read ? (
-                      <Text style={[styles.tickMark, styles.tickFront, { color: colors.text }]}>✓</Text>
-                    ) : null}
                   </View>
                 ) : null}
-              </View>
-            </View>
-            {item.attachment_kind === 'voice' ? (
-              <Pressable onPress={() => playVoice(item)} hitSlop={8}>
-                <Text style={[styles.playHint, item.mine && styles.mineTime]}>Tap to play</Text>
-              </Pressable>
-            ) : null}
-            {item.reactions?.length ? (
-              <View style={styles.reactionRow}>
-                {item.reactions.map((r) => (
-                  <Pressable key={r.emoji} style={[styles.reactionChip, r.mine && styles.reactionMine]} onPress={() => react(item, r.emoji)}>
-                    <Text style={styles.reactionText}>
-                      {r.emoji} {r.count}
+                {item.attachment_kind === 'image' && item.attachment_url ? (
+                  <Pressable onPress={() => setViewImage(item.attachment_url!)} onLongPress={() => setReactFor(item.id)}>
+                    <AuthenticatedImage path={item.attachment_url} token={token} width={220} height={220} />
+                  </Pressable>
+                ) : null}
+                {item.attachment_kind === 'voice' ? (
+                  <Pressable onPress={() => playVoice(item)} hitSlop={6} style={styles.voiceRow} accessibilityRole="button" accessibilityLabel={playingId === item.id ? 'Pause voice note' : 'Play voice note'}>
+                    <View style={[styles.voiceBtn, item.mine && { backgroundColor: 'rgba(255,255,255,0.25)' }]}>
+                      <Text style={[styles.voiceBtnText, item.mine && styles.mineText]}>{playingId === item.id ? '❚❚' : '▶'}</Text>
+                    </View>
+                    <View style={styles.voiceWave}>
+                      {[6, 12, 9, 16, 8, 14, 10, 18, 7, 13, 9, 15, 6, 11].map((h, i) => (
+                        <View key={i} style={[styles.voiceBar, { height: h }, item.mine && { backgroundColor: 'rgba(255,255,255,0.7)' }]} />
+                      ))}
+                    </View>
+                    <Text style={[styles.timeCorner, item.mine && styles.mineTime]}>{mmss(item.voice_duration_ms ?? 0)}</Text>
+                  </Pressable>
+                ) : null}
+                <View style={styles.bubbleBody}>
+                  {item.body || item.attachment_kind === 'file' ? (
+                    <Text style={[styles.bubbleText, item.mine && styles.mineText]}>
+                      {item.body ? item.body : `📎 ${item.attachment_name || 'Attachment'}`}
                     </Text>
-                  </Pressable>
-                ))}
-              </View>
-            ) : null}
-            {reactFor === item.id ? (
-              <View style={styles.reactionPicker}>
-                {REACTION_EMOJIS.map((e) => (
-                  <Pressable key={e} onPress={() => react(item, e)} style={styles.reactionPick}>
-                    <Text style={styles.emoji}>{e}</Text>
-                  </Pressable>
-                ))}
-              </View>
-            ) : null}
-          </Pressable>
-        )}
+                  ) : null}
+                  <View style={styles.timeCornerRow}>
+                    <Text style={[styles.timeCorner, item.mine && styles.mineTime]}>
+                      {pending?.failed
+                        ? 'Not sent · tap to retry'
+                        : new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </Text>
+                    {item.mine && pending && !pending.failed ? (
+                      <Text style={[styles.timeCorner, styles.mineTime]}>🕓</Text>
+                    ) : item.mine && !pending ? (
+                      <View style={styles.tickStack}>
+                        <Text style={[styles.tickMark, styles.tickBack, { color: colors.text }]}>✓</Text>
+                        {item.read ? <Text style={[styles.tickMark, styles.tickFront, { color: colors.text }]}>✓</Text> : null}
+                      </View>
+                    ) : null}
+                  </View>
+                </View>
+                {item.reactions?.length ? (
+                  <View style={styles.reactionRow}>
+                    {item.reactions.map((r) => (
+                      <Pressable key={r.emoji} style={[styles.reactionChip, r.mine && styles.reactionMine]} onPress={() => react(item, r.emoji)}>
+                        <Text style={styles.reactionText}>
+                          {r.emoji} {r.count}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                ) : null}
+              </Pressable>
+              {reactFor === item.id ? (
+                <View style={[styles.actionSheet, item.mine ? { alignSelf: 'flex-end' } : { alignSelf: 'flex-start' }]}>
+                  <View style={styles.reactionPicker}>
+                    {REACTION_EMOJIS.map((e) => (
+                      <Pressable key={e} onPress={() => react(item, e)} style={styles.reactionPick}>
+                        <Text style={styles.emoji}>{e}</Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                  <View style={styles.actionRow}>
+                    <Pressable
+                      onPress={() => {
+                        setReplyTo(item);
+                        setReactFor(null);
+                      }}
+                      style={styles.actionBtn}
+                    >
+                      <Text style={styles.actionText}>↩ Reply</Text>
+                    </Pressable>
+                    {item.body ? (
+                      <Pressable
+                        onPress={() => {
+                          void Clipboard.setStringAsync(item.body || '');
+                          setReactFor(null);
+                        }}
+                        style={styles.actionBtn}
+                      >
+                        <Text style={styles.actionText}>⧉ Copy</Text>
+                      </Pressable>
+                    ) : null}
+                    <Pressable onPress={() => setReactFor(null)} style={styles.actionBtn}>
+                      <Text style={[styles.actionText, { color: colors.muted }]}>Close</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              ) : null}
+            </View>
+          );
+        }}
       />
 
       {replyTo ? (
@@ -771,6 +983,26 @@ export function ChatScreen({
         </View>
       ) : null}
 
+      {recorderState.isRecording ? (
+        <View style={styles.recordBar}>
+          <View style={styles.recordDot} />
+          <Text style={styles.recordText}>Recording {mmss(recordMs)}</Text>
+          <Pressable onPress={() => void cancelRecording()} hitSlop={8}>
+            <Text style={[styles.headerLink, { color: colors.muted }]}>Cancel</Text>
+          </Pressable>
+          <Pressable onPress={toggleRecord} hitSlop={8}>
+            <Text style={styles.headerLink}>Send</Text>
+          </Pressable>
+        </View>
+      ) : null}
+
+      <Modal visible={Boolean(viewImage)} transparent animationType="fade" onRequestClose={() => setViewImage(null)}>
+        <Pressable style={styles.viewer} onPress={() => setViewImage(null)}>
+          {viewImage ? <AuthenticatedImage path={viewImage} token={token} width={360} height={480} radius={0} /> : null}
+          <Text style={styles.viewerHint}>Tap to close</Text>
+        </Pressable>
+      </Modal>
+
       <View style={styles.composer}>
         <View style={styles.inputBubble}>
           <Pressable onPress={() => setShowEmoji((v) => !v)} accessibilityLabel="Emoji" style={styles.iconBtn}>
@@ -792,7 +1024,7 @@ export function ChatScreen({
           <IconAttach size={20} color={colors.muted} />
         </Pressable>
         {draft.trim() ? (
-          <Pressable style={styles.sendIconBtn} onPress={() => sendText()} disabled={busy} accessibilityLabel="Send">
+          <Pressable style={styles.sendIconBtn} onPress={() => sendText()} accessibilityLabel="Send">
             <IconSend size={18} color={colors.onPrimary} />
           </Pressable>
         ) : (
@@ -1058,6 +1290,55 @@ function makeStyles(colors: ThemeColors) {
     bubbleText: { color: colors.text, fontSize: 15, lineHeight: 21, fontFamily: fonts.ui },
     mineText: { color: colors.onPrimary },
     bubbleBody: {},
+    dayChip: {
+      alignSelf: 'center',
+      paddingHorizontal: 12,
+      paddingVertical: 4,
+      borderRadius: 999,
+      backgroundColor: colors.surfaceMuted,
+      marginVertical: 10,
+    },
+    dayChipText: { color: colors.muted, fontFamily: fonts.uiSemi, fontSize: 12 },
+    voiceRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 4, minWidth: 200 },
+    voiceBtn: {
+      width: 34,
+      height: 34,
+      borderRadius: 17,
+      alignItems: 'center',
+      justifyContent: 'center',
+      backgroundColor: colors.primarySoft,
+    },
+    voiceBtnText: { color: colors.primary, fontFamily: fonts.uiBold, fontSize: 13 },
+    voiceWave: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 3 },
+    voiceBar: { width: 3, borderRadius: 2, backgroundColor: colors.muted },
+    actionSheet: { gap: 6, marginTop: 4, marginBottom: 6, maxWidth: '92%' },
+    actionRow: { flexDirection: 'row', gap: 6 },
+    actionBtn: {
+      paddingHorizontal: 12,
+      paddingVertical: 7,
+      borderRadius: 999,
+      backgroundColor: colors.surface,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+    },
+    actionText: { color: colors.text, fontFamily: fonts.uiSemi, fontSize: 13 },
+    recordBar: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: 12,
+      marginHorizontal: 12,
+      marginBottom: 6,
+      paddingHorizontal: 14,
+      paddingVertical: 10,
+      borderRadius: 999,
+      backgroundColor: colors.surface,
+      borderWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.border,
+    },
+    recordDot: { width: 10, height: 10, borderRadius: 5, backgroundColor: colors.error },
+    recordText: { flex: 1, color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14 },
+    viewer: { flex: 1, backgroundColor: 'rgba(0,0,0,0.92)', alignItems: 'center', justifyContent: 'center', gap: 16 },
+    viewerHint: { color: 'rgba(255,255,255,0.7)', fontFamily: fonts.ui, fontSize: 13 },
     timeCornerRow: {
       marginTop: 8,
       flexDirection: 'row',

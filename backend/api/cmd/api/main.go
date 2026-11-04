@@ -42,7 +42,9 @@ func main() {
 	}
 	defer pool.Close()
 
-	handler := server.New(cfg, pool, store.New(pool))
+	sqlStore := store.New(pool)
+	sqlStore.SetAccountNumberKey(cfg.BankKey)
+	handler := server.New(cfg, pool, sqlStore)
 	httpServer := &http.Server{
 		Addr:              cfg.HTTPAddr,
 		Handler:           handler,
