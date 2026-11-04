@@ -22,6 +22,21 @@ const LIMIT = 20;
 
 type Tab = 'users' | 'roles';
 
+const HUES = ['#159E9E', '#E07B12', '#2F7DD3', '#8B5CF6', '#E0457B', '#0E8A6A', '#C9A227', '#5B6B82'];
+
+function initialsOf(name: string): string {
+  const parts = name.trim().split(/\s+/);
+  return ((parts[0]?.[0] || '?') + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
+}
+
+/** A stable colour per person, so the same user always looks the same. */
+function initialsStyle(name: string) {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) | 0;
+  const color = HUES[Math.abs(h) % HUES.length];
+  return { color, background: `color-mix(in srgb, ${color} 15%, transparent)` };
+}
+
 export function UsersPage() {
   const { hasPerm } = useAuth();
   const canRoles = hasPerm('roles.manage');
@@ -189,9 +204,14 @@ function UsersPanel() {
         key: 'name',
         header: 'User',
         render: (u) => (
-          <div className="cell-stack">
-            <strong>{u.display_name}</strong>
-            <span className="muted mono">{u.email}</span>
+          <div className="user-cell">
+            <span className="user-initials" style={initialsStyle(u.display_name || u.email)}>
+              {initialsOf(u.display_name || u.email)}
+            </span>
+            <div className="cell-stack">
+              <strong>{u.display_name}</strong>
+              <span className="muted">{u.email}</span>
+            </div>
           </div>
         ),
       },

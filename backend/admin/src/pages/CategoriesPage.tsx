@@ -399,8 +399,12 @@ function InstitutionsSection() {
   const [search, setSearch] = useState('');
   const [activeOnly, setActiveOnly] = useState(false);
 
-  // Institutions are always scoped to institution_type — goal_type must never be sent as type_kind here.
-  const INSTITUTION_TYPE_KIND = 'institution_type' as const;
+  // Accounts: banks, wallets and mobile money people keep money in. Lenders: who a loan is from.
+  const [kind, setKind] = useState<'account_type' | 'institution_type'>('account_type');
+  const INSTITUTION_TYPE_KIND = kind;
+  const [countryFilter, setCountryFilter] = useState('');
+  const [pageIndex, setPageIndex] = useState(0);
+  const PAGE_SIZE = 50;
 
   const loadTypeCodes = useCallback(async () => {
     if (!token) return;
@@ -413,7 +417,7 @@ function InstitutionsSection() {
       /* surfaced via main load error */
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
+  }, [token, kind]);
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -427,7 +431,23 @@ function InstitutionsSection() {
     } finally {
       setLoading(false);
     }
-  }, [token, typeCodeFilter]);
+  }, [token, typeCodeFilter, kind]);
+
+  // A filter change starts again from the first page.
+  useEffect(() => {
+    setPageIndex(0);
+  }, [kind, typeCodeFilter, countryFilter, search, activeOnly]);
+
+  const countries = Array.from(new Set(items.map((r) => r.country_code || '').filter(Boolean))).sort();
+  const filtered = items.filter((r) => {
+    if (activeOnly && !r.active) return false;
+    if (countryFilter === 'global' ? Boolean(r.country_code) : countryFilter && r.country_code !== countryFilter) return false;
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
+    return r.label.toLowerCase().includes(q) || (r.country_code || '').toLowerCase().includes(q) || r.type_code.toLowerCase().includes(q);
+  });
+  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const pageRows = filtered.slice(pageIndex * PAGE_SIZE, pageIndex * PAGE_SIZE + PAGE_SIZE);
 
   useEffect(() => {
     void loadTypeCodes();
@@ -604,13 +624,42 @@ function InstitutionsSection() {
         right={
           <IconButton
             icon={Filter}
-            label={(typeCodeFilter || search || activeOnly) ? 'Filters active' : 'Filter'}
-            variant={(typeCodeFilter || search || activeOnly) ? 'primary' : 'ghost'}
-            className={(typeCodeFilter || search || activeOnly) ? 'filter-icon-active' : undefined}
+            label={(typeCodeFilter || search || activeOnly) ? 'Filters active' : 'More filters'}
+            variant={(typeCodeFilter || activeOnly) ? 'primary' : 'ghost'}
+            className={(typeCodeFilter || activeOnly) ? 'filter-icon-active' : undefined}
             onClick={() => setFilterOpen(true)}
           />
         }
       />
+
+      <div className="filter-bar">
+        <div className="seg" role="tablist" aria-label="Institution group">
+          <button type="button" role="tab" aria-selected={kind === 'account_type'} className={kind === 'account_type' ? 'active' : ''} onClick={() => { setKind('account_type'); setTypeCodeFilter(''); }}>
+            Accounts
+          </button>
+          <button type="button" role="tab" aria-selected={kind === 'institution_type'} className={kind === 'institution_type' ? 'active' : ''} onClick={() => { setKind('institution_type'); setTypeCodeFilter(''); }}>
+            Lenders
+          </button>
+        </div>
+        <input className="filter-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by name, type or country…" aria-label="Search institutions" />
+        <select value={typeCodeFilter} onChange={(e) => setTypeCodeFilter(e.target.value)} aria-label="Type">
+          <option value="">All types</option>
+          {typeCodes.map((t) => (
+            <option key={t.id} value={t.code}>
+              {t.label}
+            </option>
+          ))}
+        </select>
+        <select value={countryFilter} onChange={(e) => setCountryFilter(e.target.value)} aria-label="Country">
+          <option value="">All countries</option>
+          <option value="global">Worldwide</option>
+          {countries.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+      </div>
 
       <Modal
         open={filterOpen}
@@ -659,13 +708,8 @@ function InstitutionsSection() {
       </Modal>
 
       <Table
-        title="Institutions"
-        subtitle={`${items.filter((r) => {
-          if (activeOnly && !r.active) return false;
-          const q = search.trim().toLowerCase();
-          if (!q) return true;
-          return r.label.toLowerCase().includes(q) || (r.country_code || '').toLowerCase().includes(q) || r.type_code.toLowerCase().includes(q);
-        }).length} items`}
+        title={kind === 'account_type' ? 'Account institutions' : 'Lenders'}
+        subtitle={`${filtered.length.toLocaleString()} of ${items.length.toLocaleString()} · page ${pageIndex + 1} of ${pageCount}`}
         columns={[
           {
             key: 'item',
@@ -676,9 +720,8 @@ function InstitutionsSection() {
               ) : (
                 <div className="cell-stack">
                   <strong>{row.label}</strong>
-                  <span className="muted mono">
-                    {row.type_code}
-                    {row.country_code ? ` · ${row.country_code}` : ''}
+                  <span className="muted">
+                    <span className="chip-mini">{row.country_code || 'Worldwide'}</span> {row.type_code.replace(/_/g, ' ')}
                   </span>
                 </div>
               ),
@@ -746,17 +789,25 @@ function InstitutionsSection() {
             },
           },
         ] satisfies TableColumn<CatalogInstitution>[]}
-        rows={items.filter((r) => {
-          if (activeOnly && !r.active) return false;
-          const q = search.trim().toLowerCase();
-          if (!q) return true;
-          return r.label.toLowerCase().includes(q) || (r.country_code || '').toLowerCase().includes(q) || r.type_code.toLowerCase().includes(q);
-        })}
+        rows={pageRows}
         rowKey={(r) => r.id}
         loading={loading}
         emptyIcon={Landmark}
-        emptyMessage="No institutions yet."
+        emptyMessage="No institutions match."
       />
+      {pageCount > 1 ? (
+        <div className="pager">
+          <Button variant="ghost" disabled={pageIndex === 0} onClick={() => setPageIndex((i) => Math.max(0, i - 1))}>
+            Previous
+          </Button>
+          <span className="muted">
+            Page {pageIndex + 1} of {pageCount}
+          </span>
+          <Button variant="ghost" disabled={pageIndex >= pageCount - 1} onClick={() => setPageIndex((i) => Math.min(pageCount - 1, i + 1))}>
+            Next
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 }

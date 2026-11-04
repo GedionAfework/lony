@@ -206,12 +206,12 @@ export function OverviewPage() {
                 <AreaChart data={signupSeries} margin={{ top: 8, right: 4, left: 4, bottom: 0 }}>
                   <defs>
                     <linearGradient id="signupFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={TEAL} stopOpacity={0.4} />
-                      <stop offset="100%" stopColor={TEAL} stopOpacity={0} />
+                      <stop offset="0%" stopColor="#FFFFFF" stopOpacity={0.35} />
+                      <stop offset="100%" stopColor="#FFFFFF" stopOpacity={0} />
                     </linearGradient>
                   </defs>
                   <Tooltip
-                    cursor={{ stroke: TEAL, strokeWidth: 1, strokeDasharray: '4 4' }}
+                    cursor={{ stroke: '#FFFFFF', strokeWidth: 1, strokeDasharray: '4 4' }}
                     contentStyle={{
                       background: 'var(--surface)',
                       border: '1px solid var(--line)',
@@ -224,10 +224,10 @@ export function OverviewPage() {
                   <Area
                     type="monotone"
                     dataKey="count"
-                    stroke={TEAL}
+                    stroke="#FFFFFF"
                     strokeWidth={2.5}
                     fill="url(#signupFill)"
-                    activeDot={{ r: 5, stroke: '#fff', strokeWidth: 2 }}
+                    activeDot={{ r: 5, stroke: 'var(--hero-b)', strokeWidth: 2, fill: '#fff' }}
                     isAnimationActive
                   />
                 </AreaChart>
