@@ -37,8 +37,8 @@ func (a privacyStoreAdapter) GetUserPlanAccess(ctx context.Context, userID uuid.
 
 func (s *SQLStore) GetUserPlanAccess(ctx context.Context, userID uuid.UUID) (planTier string, role string, err error) {
 	err = s.pool.QueryRow(ctx, `
-		SELECT COALESCE(plan_tier, 'free'), COALESCE(role, 'user')
-		FROM users WHERE id=$1 AND deleted_at IS NULL
+		SELECT `+EffectiveTierSQL+`, COALESCE(u.role, 'user')
+		FROM users u WHERE u.id=$1 AND u.deleted_at IS NULL
 	`, userID).Scan(&planTier, &role)
 	return planTier, role, err
 }

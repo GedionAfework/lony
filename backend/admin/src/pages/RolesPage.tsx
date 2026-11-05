@@ -29,6 +29,7 @@ const AREAS: { id: string; label: string; hint: string }[] = [
   { id: 'users', label: 'Users', hint: 'Accounts, plans and sessions' },
   { id: 'access', label: 'Admin access', hint: 'The admin team and its roles' },
   { id: 'system', label: 'System & controls', hint: 'Health, jobs and platform switches' },
+  { id: 'billing', label: 'Billing', hint: 'Revenue, subscriptions and plan limits' },
   { id: 'audit', label: 'Audit', hint: 'The record of admin actions' },
   { id: 'content', label: 'Content', hint: 'Catalogs, themes and languages' },
 ];
@@ -38,13 +39,13 @@ const TEMPLATES: { id: string; label: string; hint: string; perms: string[] }[] 
     id: 'viewer',
     label: 'Read-only',
     hint: 'Can look at everything, change nothing',
-    perms: ['overview.read', 'system.read', 'users.read', 'roles.read', 'audit.read', 'categories.read', 'themes.read', 'localization.read'],
+    perms: ['overview.read', 'system.read', 'users.read', 'roles.read', 'audit.read', 'billing.read', 'categories.read', 'themes.read', 'localization.read'],
   },
   {
     id: 'support',
     label: 'Support',
     hint: 'Help users: suspend, sign out, change plans',
-    perms: ['overview.read', 'users.read', 'users.suspend', 'users.sessions', 'users.plan', 'audit.read'],
+    perms: ['overview.read', 'users.read', 'users.suspend', 'users.sessions', 'users.plan', 'billing.read', 'audit.read'],
   },
   {
     id: 'content',
@@ -62,7 +63,7 @@ const TEMPLATES: { id: string; label: string; hint: string; perms: string[] }[] 
     id: 'auditor',
     label: 'Auditor',
     hint: 'Review and export the audit trail',
-    perms: ['overview.read', 'audit.read', 'audit.export', 'roles.read', 'users.read'],
+    perms: ['overview.read', 'audit.read', 'audit.export', 'roles.read', 'users.read', 'billing.read'],
   },
 ];
 

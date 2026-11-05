@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react
 import { useNavigate } from 'react-router-dom';
 import {
   AlertTriangle,
-  ArrowDownCircle,
   ChevronLeft,
   ChevronRight,
   Copy,
@@ -17,7 +16,8 @@ import {
   UserCheck,
   Users as UsersIcon,
 } from 'lucide-react';
-import { api, type AdminUser, type AuditEntry } from '../api';
+import { api, type AdminUser, type AuditEntry, type PlanTier } from '../api';
+import { PlanBadge, TIER_LABEL, tierOf } from '../components/PlanBadge';
 import { useAuth } from '../auth';
 import { Button } from '../components/Button';
 import { Modal } from '../components/Modal';
@@ -30,7 +30,7 @@ import { actorName, describe, relativeTime } from '../lib/audit';
 
 const LIMIT = 20;
 
-type ConfirmKind = 'suspend' | 'plan' | 'sessions';
+type ConfirmKind = 'suspend' | 'sessions';
 
 const HUES = ['#159E9E', '#E07B12', '#2F7DD3', '#8B5CF6', '#E0457B', '#0E8A6A', '#C9A227', '#5B6B82'];
 
@@ -72,6 +72,7 @@ function UsersPanel() {
   const canSuspend = hasPerm('users.suspend');
   const canPlan = hasPerm('users.plan');
   const canSessions = hasPerm('users.sessions');
+  const [planFor, setPlanFor] = useState<AdminUser | null>(null);
   // The user whose details are open, loaded fresh from the server.
   const [detail, setDetail] = useState<AdminUser | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -132,21 +133,6 @@ function UsersPanel() {
     }
   }
 
-  async function togglePlan(user: AdminUser) {
-    if (!token) return;
-    const next = (user.plan_tier || 'free') === 'premium' ? 'free' : 'premium';
-    setBusyId(user.id);
-    setError(null);
-    try {
-      const res = await api.setPlanTier(token, user.id, next);
-      applyUser({ id: res.user.id, plan_tier: res.user.plan_tier });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not update plan');
-    } finally {
-      setBusyId(null);
-    }
-  }
-
   async function signOut(user: AdminUser) {
     if (!token) return;
     setBusyId(user.id);
@@ -186,12 +172,7 @@ function UsersPanel() {
       {
         key: 'plan',
         header: 'Plan',
-        render: (u) => (
-          <span className={`badge ${(u.plan_tier || 'free') === 'premium' ? 'badge-primary' : ''}`}>
-            {(u.plan_tier || 'free') === 'premium' ? <Crown size={12} strokeWidth={2} /> : null}
-            {u.plan_tier || 'free'}
-          </span>
-        ),
+        render: (u) => <PlanBadge plan={u} />,
       },
       {
         key: 'role',
@@ -230,11 +211,11 @@ function UsersPanel() {
             {canPlan ? (
               <IconButton
                 size="sm"
-                icon={(u.plan_tier || 'free') === 'premium' ? ArrowDownCircle : Crown}
-                label={(u.plan_tier || 'free') === 'premium' ? 'Downgrade to Free' : 'Upgrade to Premium'}
+                icon={Crown}
+                label="Change plan"
                 variant="ghost"
                 disabled={busyId === u.id}
-                onClick={() => setConfirm({ kind: 'plan', user: u })}
+                onClick={() => setPlanFor(u)}
               />
             ) : null}
             {canSessions ? (
@@ -351,7 +332,7 @@ function UsersPanel() {
         loading={detailLoading}
         busy={Boolean(detail && busyId === detail.id)}
         onClose={() => setDetail(null)}
-        onPlan={(u) => setConfirm({ kind: 'plan', user: u })}
+        onPlan={(u) => setPlanFor(u)}
         onSuspend={(u) => setConfirm({ kind: 'suspend', user: u })}
         onSignOut={(u) => setConfirm({ kind: 'sessions', user: u })}
       />
@@ -363,11 +344,22 @@ function UsersPanel() {
         onConfirm={async () => {
           if (!confirm) return;
           if (confirm.kind === 'suspend') await toggleSuspend(confirm.user);
-          else if (confirm.kind === 'sessions') await signOut(confirm.user);
-          else await togglePlan(confirm.user);
+          else await signOut(confirm.user);
           setConfirm(null);
         }}
       />
+
+      {planFor ? (
+        <PlanModal
+          user={planFor}
+          onClose={() => setPlanFor(null)}
+          onSaved={(next) => {
+            applyUser({ id: next.id, plan_tier: next.plan_tier, plan_source: next.plan_source, plan_expires_at: next.plan_expires_at });
+            setNotice(`${next.display_name || next.email} is now on ${TIER_LABEL[tierOf(next)] ?? next.plan_tier}.`);
+            setPlanFor(null);
+          }}
+        />
+      ) : null}
     </>
   );
 }
@@ -407,24 +399,11 @@ function ConfirmModal({
       </Modal>
     );
   }
-  const suspending = confirm.kind === 'suspend' && u.status !== 'suspended';
-  const toPremium = confirm.kind === 'plan' && (u.plan_tier || 'free') !== 'premium';
-  const title =
-    confirm.kind === 'suspend'
-      ? suspending
-        ? `Suspend ${u.display_name}?`
-        : `Unsuspend ${u.display_name}?`
-      : toPremium
-        ? `Upgrade ${u.display_name} to Premium?`
-        : `Downgrade ${u.display_name} to Free?`;
-  const body =
-    confirm.kind === 'suspend'
-      ? suspending
-        ? 'They are signed out and cannot use Lony until you unsuspend them. Their data stays.'
-        : 'They can sign in and use Lony again.'
-      : toPremium
-        ? 'They get Premium features (AI, voice, receipt scan, reports) right away.'
-        : 'They lose Premium features right away. Their data stays.';
+  const suspending = u.status !== 'suspended';
+  const title = suspending ? `Suspend ${u.display_name}?` : `Unsuspend ${u.display_name}?`;
+  const body = suspending
+    ? 'They are signed out and cannot use Lony until you unsuspend them. Their data stays.'
+    : 'They can sign in and use Lony again.';
   return (
     <Modal
       open
@@ -437,7 +416,7 @@ function ConfirmModal({
             Cancel
           </Button>
           <Button size="sm" variant={suspending ? 'danger' : 'primary'} onClick={() => void onConfirm()} disabled={busy}>
-            {busy ? 'Working…' : confirm.kind === 'suspend' ? (suspending ? 'Suspend' : 'Unsuspend') : toPremium ? 'Upgrade' : 'Downgrade'}
+            {busy ? 'Working…' : suspending ? 'Suspend' : 'Unsuspend'}
           </Button>
         </ButtonGroup>
       }
@@ -503,7 +482,6 @@ function UserDrawer({
 
   if (!u) return null;
   const name = u.display_name || u.email;
-  const premium = (u.plan_tier || 'free') === 'premium';
   const fmtDate = (v?: string | null) => (v ? new Date(v).toLocaleString() : '—');
   const canPlan = hasPerm('users.plan');
   const canSuspend = hasPerm('users.suspend');
@@ -568,13 +546,8 @@ function UserDrawer({
               </Button>
             ) : null}
             {canPlan ? (
-              <Button
-                variant="secondary"
-                disabled={busy}
-                icon={premium ? <ArrowDownCircle size={15} strokeWidth={2} /> : <Crown size={15} strokeWidth={2} />}
-                onClick={() => onPlan(u)}
-              >
-                {premium ? 'Downgrade' : 'Upgrade'}
+              <Button variant="secondary" disabled={busy} icon={<Crown size={15} strokeWidth={2} />} onClick={() => onPlan(u)}>
+                Change plan
               </Button>
             ) : null}
             {canSuspend ? (
@@ -595,10 +568,7 @@ function UserDrawer({
       <div className="user-hero">
         <div className="user-hero-badges">
           <span className={`badge badge-${statusTone(u.status)}`}>{u.status.replace('_', ' ')}</span>
-          <span className={`badge ${premium ? 'badge-primary' : ''}`}>
-            {premium ? <Crown size={12} strokeWidth={2} /> : null}
-            {u.plan_tier || 'free'}
-          </span>
+          <PlanBadge plan={u} />
           {u.role === 'admin' ? <span className="badge badge-warning">admin</span> : null}
         </div>
         <div className="user-hero-contact">
@@ -683,5 +653,123 @@ function UserDrawer({
         ) : null}
       </div>
     </Drawer>
+  );
+}
+
+/* ------------------------------------------------------------ plan picker */
+
+const DURATIONS: { id: string; label: string; days: number | null }[] = [
+  { id: 'forever', label: 'No end date', days: null },
+  { id: '7', label: '7 days', days: 7 },
+  { id: '30', label: '30 days', days: 30 },
+  { id: '90', label: '3 months', days: 90 },
+  { id: '365', label: '1 year', days: 365 },
+  { id: 'custom', label: 'Until a date…', days: null },
+];
+
+function PlanModal({ user: u, onClose, onSaved }: { user: AdminUser; onClose: () => void; onSaved: (u: AdminUser) => void }) {
+  const { token } = useAuth();
+  const current = tierOf(u) as PlanTier;
+  const [tier, setTier] = useState<PlanTier>(current === 'free' ? 'pro' : current);
+  const [duration, setDuration] = useState('30');
+  const [date, setDate] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  function expiry(): string | null {
+    if (tier === 'free') return null;
+    if (duration === 'custom') return date ? new Date(`${date}T23:59:59`).toISOString() : null;
+    const d = DURATIONS.find((x) => x.id === duration)?.days;
+    return d ? new Date(Date.now() + d * 86_400_000).toISOString() : null;
+  }
+
+  async function save() {
+    if (!token) return;
+    if (tier !== 'free' && duration === 'custom' && !date) {
+      setErr('Pick an end date.');
+      return;
+    }
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await api.setPlanTier(token, u.id, tier, expiry());
+      onSaved({ ...u, ...res.user });
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Could not change plan');
+      setBusy(false);
+    }
+  }
+
+  const options: { id: PlanTier; hint: string }[] = [
+    { id: 'free', hint: 'Removes any comp or trial' },
+    { id: 'plus', hint: 'Everyday AI and captures' },
+    { id: 'pro', hint: 'Everything, including bank linking' },
+  ];
+
+  return (
+    <Modal
+      open
+      title={`Change ${u.display_name || u.email}’s plan`}
+      subtitle={u.email}
+      onClose={onClose}
+      footer={
+        <ButtonGroup>
+          <Button size="sm" variant="secondary" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button size="sm" busy={busy} onClick={() => void save()}>
+            Save plan
+          </Button>
+        </ButtonGroup>
+      }
+    >
+      <div className="stack">
+        {err ? (
+          <div className="alert alert-error">
+            <AlertTriangle size={16} strokeWidth={2} />
+            <span>{err}</span>
+          </div>
+        ) : null}
+        <div className="muted" style={{ fontSize: 13 }}>
+          Now: <PlanBadge plan={u} />
+        </div>
+        {u.plan_source === 'polar' ? (
+          <div className="alert alert-warning">
+            <AlertTriangle size={16} strokeWidth={2} />
+            <span>They pay through Polar. A manual change is replaced by their next billing event. To cancel a subscription, use the Polar dashboard.</span>
+          </div>
+        ) : null}
+        <div className="role-pick">
+          {options.map((o) => (
+            <label key={o.id} className={`role-pick-item${tier === o.id ? ' on' : ''}`}>
+              <input type="radio" name="tier" checked={tier === o.id} onChange={() => setTier(o.id)} />
+              <span className="cell-stack" style={{ flex: 1 }}>
+                <span>{TIER_LABEL[o.id]}</span>
+                <small className="muted">{o.hint}</small>
+              </span>
+              {current === o.id ? <span className="badge badge-muted">current</span> : null}
+            </label>
+          ))}
+        </div>
+        {tier !== 'free' ? (
+          <label className="field">
+            <span className="field-label">How long</span>
+            <select value={duration} onChange={(e) => setDuration(e.target.value)}>
+              {DURATIONS.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.label}
+                </option>
+              ))}
+            </select>
+            {duration === 'custom' ? (
+              <input type="date" value={date} min={new Date().toISOString().slice(0, 10)} onChange={(e) => setDate(e.target.value)} />
+            ) : null}
+            <span className="muted" style={{ fontSize: 12 }}>
+              {duration === 'forever' ? 'Stays until you change it.' : 'Falls back to Free automatically when it ends.'}
+            </span>
+          </label>
+        ) : null}
+      </div>
+    </Modal>
   );
 }

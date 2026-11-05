@@ -27,8 +27,8 @@ func (a adminStoreAdapter) GetUser(ctx context.Context, id uuid.UUID) (admin.Use
 func (a adminStoreAdapter) SetUserStatus(ctx context.Context, id uuid.UUID, status string) error {
 	return a.Inner.AdminSetUserStatus(ctx, id, status)
 }
-func (a adminStoreAdapter) SetUserPlanTier(ctx context.Context, id uuid.UUID, planTier string) error {
-	return a.Inner.AdminSetUserPlanTier(ctx, id, planTier)
+func (a adminStoreAdapter) SetUserPlanTier(ctx context.Context, id uuid.UUID, planTier, source string, expires *time.Time) error {
+	return a.Inner.AdminSetUserPlanTier(ctx, id, planTier, source, expires)
 }
 func (a adminStoreAdapter) RevokeUserSessions(ctx context.Context, id uuid.UUID) error {
 	return a.Inner.AdminRevokeUserSessions(ctx, id)
@@ -123,11 +123,14 @@ func (s *SQLStore) AdminOverview(ctx context.Context) (admin.Overview, error) {
 	}
 	_ = s.pool.QueryRow(ctx, `
 		SELECT
-			COUNT(*) FILTER (WHERE deleted_at IS NULL AND plan_tier = 'premium')::int,
-			COUNT(*) FILTER (WHERE deleted_at IS NULL AND status = 'deletion_pending')::int,
-			COUNT(*) FILTER (WHERE deleted_at IS NULL AND created_at >= now() - interval '14 days' AND created_at < now() - interval '7 days')::int
-		FROM users
-	`).Scan(&out.PremiumUsers, &out.DeletionPending, &out.SignupsPrev7d)
+			COUNT(*) FILTER (WHERE u.deleted_at IS NULL AND `+EffectiveTierSQL+` <> 'free')::int,
+			COUNT(*) FILTER (WHERE u.deleted_at IS NULL AND `+EffectiveTierSQL+` = 'plus')::int,
+			COUNT(*) FILTER (WHERE u.deleted_at IS NULL AND `+EffectiveTierSQL+` = 'pro')::int,
+			COUNT(*) FILTER (WHERE u.deleted_at IS NULL AND u.plan_source = 'trial' AND u.plan_expires_at > now())::int,
+			COUNT(*) FILTER (WHERE u.deleted_at IS NULL AND u.status = 'deletion_pending')::int,
+			COUNT(*) FILTER (WHERE u.deleted_at IS NULL AND u.created_at >= now() - interval '14 days' AND u.created_at < now() - interval '7 days')::int
+		FROM users u
+	`).Scan(&out.PremiumUsers, &out.PlusUsers, &out.ProUsers, &out.TrialUsers, &out.DeletionPending, &out.SignupsPrev7d)
 	_ = s.pool.QueryRow(ctx, `
 		SELECT COUNT(DISTINCT user_id)::int FROM user_sessions
 		WHERE revoked_at IS NULL AND last_used_at >= now() - interval '30 days'
@@ -198,7 +201,8 @@ func (s *SQLStore) AdminListUsers(ctx context.Context, q, status string, limit, 
 	}
 	rows, err := s.pool.Query(ctx, `
 		SELECT u.id, u.email::text, u.display_name, u.username, u.status, COALESCE(u.role,'user'),
-		       COALESCE(u.plan_tier,'free'), u.admin_role_id, r.name, u.country_code, u.created_at,
+		       `+EffectiveTierSQL+`, `+EffectiveSourceSQL+`, CASE WHEN u.plan_expires_at > now() THEN u.plan_expires_at END,
+		       u.admin_role_id, r.name, u.country_code, u.created_at,
 		       (
 		         SELECT MAX(s.last_used_at) FROM user_sessions s
 		         WHERE s.user_id = u.id AND s.revoked_at IS NULL
@@ -225,7 +229,7 @@ func (s *SQLStore) AdminListUsers(ctx context.Context, q, status string, limit, 
 		var item admin.UserListItem
 		if err := rows.Scan(
 			&item.ID, &item.Email, &item.DisplayName, &item.Username, &item.Status, &item.Role,
-			&item.PlanTier, &item.AdminRoleID, &item.AdminRoleName, &item.CountryCode, &item.CreatedAt, &item.LastActiveAt,
+			&item.PlanTier, &item.PlanSource, &item.PlanExpiresAt, &item.AdminRoleID, &item.AdminRoleName, &item.CountryCode, &item.CreatedAt, &item.LastActiveAt,
 		); err != nil {
 			return nil, 0, err
 		}
@@ -239,7 +243,8 @@ func (s *SQLStore) AdminGetUser(ctx context.Context, id uuid.UUID) (admin.UserDe
 	var verifiedAt *time.Time
 	err := s.pool.QueryRow(ctx, `
 		SELECT u.id, u.email::text, u.display_name, u.username, u.status, COALESCE(u.role,'user'),
-		       COALESCE(u.plan_tier,'free'), u.admin_role_id, r.name, u.country_code, u.created_at, u.phone_e164, u.locale, u.timezone, u.default_currency_code,
+		       `+EffectiveTierSQL+`, `+EffectiveSourceSQL+`, CASE WHEN u.plan_expires_at > now() THEN u.plan_expires_at END,
+		       u.admin_role_id, r.name, u.country_code, u.created_at, u.phone_e164, u.locale, u.timezone, u.default_currency_code,
 		       u.email_verified_at,
 		       (
 		         SELECT MAX(s.last_used_at) FROM user_sessions s
@@ -250,7 +255,7 @@ func (s *SQLStore) AdminGetUser(ctx context.Context, id uuid.UUID) (admin.UserDe
 		WHERE u.id = $1 AND u.deleted_at IS NULL
 	`, id).Scan(
 		&d.ID, &d.Email, &d.DisplayName, &d.Username, &d.Status, &d.Role,
-		&d.PlanTier, &d.AdminRoleID, &d.AdminRoleName, &d.CountryCode, &d.CreatedAt, &d.PhoneE164, &d.Locale, &d.Timezone, &d.DefaultCurrencyCode,
+		&d.PlanTier, &d.PlanSource, &d.PlanExpiresAt, &d.AdminRoleID, &d.AdminRoleName, &d.CountryCode, &d.CreatedAt, &d.PhoneE164, &d.Locale, &d.Timezone, &d.DefaultCurrencyCode,
 		&verifiedAt, &d.LastActiveAt,
 	)
 	if err != nil {
@@ -305,8 +310,8 @@ func (s *SQLStore) AdminSetUserStatus(ctx context.Context, id uuid.UUID, status 
 	return err
 }
 
-func (s *SQLStore) AdminSetUserPlanTier(ctx context.Context, id uuid.UUID, planTier string) error {
-	_, err := s.pool.Exec(ctx, `UPDATE users SET plan_tier=$2, updated_at=now() WHERE id=$1 AND deleted_at IS NULL`, id, planTier)
+func (s *SQLStore) AdminSetUserPlanTier(ctx context.Context, id uuid.UUID, planTier, source string, expires *time.Time) error {
+	_, err := s.pool.Exec(ctx, `UPDATE users SET plan_tier=$2, plan_source=$3, plan_expires_at=$4, updated_at=now() WHERE id=$1 AND deleted_at IS NULL`, id, planTier, source, expires)
 	return err
 }
 

@@ -14,7 +14,7 @@ func (s *SQLStore) hydrateUser(ctx context.Context, u auth.UserRecord) (auth.Use
 	var netCurr *string
 	err := s.pool.QueryRow(ctx, `
 SELECT first_name, middle_name, last_name, country_code, preferred_auth_provider, tos_version, tos_accepted_at,
-       COALESCE(role, 'user'), COALESCE(plan_tier, 'free'),
+       COALESCE(role, 'user'), (CASE WHEN plan_expires_at IS NOT NULL AND plan_expires_at <= now() THEN 'free' ELSE COALESCE(plan_tier, 'free') END),
        COALESCE(calendar_id, 'gregorian'), COALESCE(hour_cycle, '24h'),
        COALESCE(loan_require_approval, true),
        COALESCE(ask_recurring_received, true),

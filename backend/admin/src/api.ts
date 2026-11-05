@@ -28,6 +28,9 @@ export type Overview = {
   ai_tokens_7d?: number;
   ai_requests_today?: number;
   premium_users?: number;
+  plus_users?: number;
+  pro_users?: number;
+  trial_users?: number;
   deletion_pending?: number;
   signups_prev_7d?: number;
   mau?: number;
@@ -53,6 +56,8 @@ export type AdminUser = {
   status: string;
   role: string;
   plan_tier?: string;
+  plan_source?: 'free' | 'trial' | 'admin' | 'polar' | string;
+  plan_expires_at?: string | null;
   admin_role_id?: string | null;
   admin_role_name?: string | null;
   country_code?: string | null;
@@ -73,6 +78,82 @@ export type AdminUser = {
   trust_band?: string | null;
   trust_thin_history?: boolean | null;
   friends_count?: number;
+};
+
+export type PlanTier = 'free' | 'plus' | 'pro';
+
+export type PlanLimits = {
+  ai_monthly: number;
+  ai_daily: number;
+  captures_monthly: number;
+  insights_every_days: number;
+  reports: boolean;
+  bank_links: number;
+  trips: boolean;
+};
+
+export type BillingSubscription = {
+  id: string;
+  provider: string;
+  user_id?: string | null;
+  user_email?: string;
+  user_name?: string;
+  customer_id?: string;
+  product_id?: string;
+  plan_key?: string;
+  tier?: string;
+  status: string;
+  amount_cents: number;
+  currency: string;
+  interval?: string;
+  current_period_end?: string | null;
+  cancel_at_period_end: boolean;
+  trial_end?: string | null;
+  started_at?: string | null;
+  canceled_at?: string | null;
+  ended_at?: string | null;
+  updated_at: string;
+};
+
+export type BillingEvent = {
+  id: string;
+  type: string;
+  subscription_id?: string;
+  user_id?: string | null;
+  user_email?: string;
+  error?: string;
+  processed_at?: string | null;
+  received_at: string;
+};
+
+export type BillingOverview = {
+  stats: {
+    mrr: { currency: string; cents: number }[];
+    active_subscriptions: number;
+    trialing_subscriptions: number;
+    past_due: number;
+    canceling: number;
+    churned_30d: number;
+    new_30d: number;
+    trials_active: number;
+    trials_ending_7d: number;
+    comped: number;
+    total_users: number;
+    tiers: { tier: string; source: string; users: number }[];
+  };
+  limits: Record<PlanTier, PlanLimits>;
+  trial_days: number;
+  trial_tier: 'plus' | 'pro';
+  setup: {
+    configured: boolean;
+    server: string;
+    webhook_secret_set: boolean;
+    success_url: string;
+    products: Record<string, string>;
+    webhook_path: string;
+  };
+  subscriptions: BillingSubscription[];
+  events: BillingEvent[];
 };
 
 export type AuditEntry = {
@@ -470,14 +551,30 @@ export const api = {
       { method: 'POST', headers: { 'Idempotency-Key': idem() }, body: '{}' },
       token,
     ),
-  setPlanTier: (token: string, id: string, plan_tier: 'free' | 'premium') =>
+  setPlanTier: (token: string, id: string, plan_tier: PlanTier, expires_at?: string | null) =>
     request<{ user: AdminUser }>(
       `/api/v1/admin/users/${id}/plan`,
       {
         method: 'PATCH',
         headers: { 'Idempotency-Key': idem() },
-        body: JSON.stringify({ plan_tier }),
+        body: JSON.stringify({ plan_tier, expires_at: expires_at ?? null }),
       },
+      token,
+    ),
+  billing: (token: string) => request<BillingOverview>('/api/v1/admin/billing', { method: 'GET' }, token),
+  billingSubscriptions: (token: string, status = '') =>
+    request<{ subscriptions: BillingSubscription[] }>(
+      `/api/v1/admin/billing/subscriptions?${new URLSearchParams({ status, limit: '100' })}`,
+      { method: 'GET' },
+      token,
+    ),
+  updateBillingSettings: (
+    token: string,
+    body: { limits?: Record<PlanTier, PlanLimits>; trial_days?: number; trial_tier?: 'plus' | 'pro' },
+  ) =>
+    request<BillingOverview>(
+      '/api/v1/admin/billing/settings',
+      { method: 'PATCH', headers: { 'Idempotency-Key': idem() }, body: JSON.stringify(body) },
       token,
     ),
   setAdminAccess: (token: string, id: string, admin: boolean, role_id?: string | null) =>

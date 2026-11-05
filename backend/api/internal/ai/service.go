@@ -101,6 +101,22 @@ type Gate interface {
 	UserCanUseAI(ctx context.Context, userID uuid.UUID) (bool, error)
 }
 
+// PlanLimits is what the user's plan allows for AI (see internal/billing).
+// -1 means unlimited, 0 means not included.
+type PlanLimits struct {
+	AIMonthly         int
+	AIDaily           int
+	CapturesMonthly   int
+	InsightsEveryDays int
+	Reports           bool
+}
+
+// Plans supplies per-user plan limits. When unset, the older Premium-only gate applies.
+type Plans interface {
+	AILimits(ctx context.Context, userID uuid.UUID) (PlanLimits, error)
+	AIUsedThisMonth(ctx context.Context, userID uuid.UUID) (int, error)
+}
+
 type InsightsAPI interface {
 	Overview(ctx context.Context, userID uuid.UUID, currency string, monthsBack int) (insights.Overview, error)
 	CashflowSeries(ctx context.Context, userID uuid.UUID, currency string, months int) ([]insights.MonthPoint, error)
@@ -126,6 +142,7 @@ type Service struct {
 	// Voice/receipt capture allowance for free users (see capture.go).
 	captures     CaptureCounter
 	freeCaptures int
+	plans        Plans
 }
 
 func NewService(store Store) *Service {
@@ -135,6 +152,45 @@ func NewService(store Store) *Service {
 func (s *Service) SetInsights(i InsightsAPI) { s.data = i }
 func (s *Service) SetScore(sc ScoreAPI)     { s.score = sc }
 func (s *Service) SetGate(g Gate)           { s.gate = g }
+func (s *Service) SetPlans(p Plans)         { s.plans = p }
+
+// dailyCapFor is the per-day AI request ceiling for this user's plan.
+func (s *Service) dailyCapFor(ctx context.Context, userID uuid.UUID) int {
+	if s.plans == nil {
+		return s.dailyCap
+	}
+	l, err := s.plans.AILimits(ctx, userID)
+	if err != nil {
+		return s.dailyCap
+	}
+	if l.AIDaily < 0 {
+		return 100000
+	}
+	return l.AIDaily
+}
+
+// checkMonthlyAI stops a request once the plan's monthly AI allowance is used.
+func (s *Service) checkMonthlyAI(ctx context.Context, userID uuid.UUID) error {
+	if s.plans == nil {
+		return nil
+	}
+	l, err := s.plans.AILimits(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if l.AIMonthly < 0 {
+		return nil
+	}
+	used, err := s.plans.AIUsedThisMonth(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if used >= l.AIMonthly {
+		return httpx.E(http.StatusPaymentRequired, "AI_MONTHLY_LIMIT", fmt.Sprintf(
+			"You've used the %d AI requests in your plan this month. Upgrade for more.", l.AIMonthly))
+	}
+	return nil
+}
 func (s *Service) SetGoalPrices(r GoalPriceRefresher) { s.prices = r }
 func (s *Service) SetLLM(c *llm.Client, dailyCap int) {
 	s.llm = c
@@ -152,12 +208,22 @@ func (s *Service) ensureAIEnabled(ctx context.Context, userID uuid.UUID) error {
 		if off {
 			return httpx.E(http.StatusServiceUnavailable, "AI_DISABLED", "AI features are temporarily disabled")
 		}
+		if s.plans != nil {
+			l, err := s.plans.AILimits(ctx, userID)
+			if err != nil {
+				return err
+			}
+			if l.AIMonthly == 0 {
+				return httpx.E(http.StatusPaymentRequired, "PLAN_REQUIRED", "AI features aren't included in your plan. Upgrade to unlock them.")
+			}
+			return nil
+		}
 		ok, err := s.gate.UserCanUseAI(ctx, userID)
 		if err != nil {
 			return err
 		}
 		if !ok {
-			return httpx.E(http.StatusPaymentRequired, "AI_PREMIUM_REQUIRED", "AI features require a Premium plan")
+			return httpx.E(http.StatusPaymentRequired, "AI_PREMIUM_REQUIRED", "AI features require a paid plan")
 		}
 	}
 	return nil
@@ -180,6 +246,9 @@ func (s *Service) ListInsights(ctx context.Context, userID uuid.UUID) ([]Insight
 
 func (s *Service) RefreshInsights(ctx context.Context, userID uuid.UUID, currency string) ([]InsightDTO, error) {
 	if err := s.ensureAIEnabled(ctx, userID); err != nil {
+		return nil, err
+	}
+	if err := s.checkInsightsCooldown(ctx, userID); err != nil {
 		return nil, err
 	}
 	currency = strings.ToUpper(strings.TrimSpace(currency))
@@ -312,6 +381,15 @@ func (s *Service) ClearHistory(ctx context.Context, userID uuid.UUID) (int64, er
 func (s *Service) Report(ctx context.Context, userID uuid.UUID, currency string, months int) (Report, error) {
 	if err := s.ensureAIEnabled(ctx, userID); err != nil {
 		return Report{}, err
+	}
+	if s.plans != nil {
+		l, err := s.plans.AILimits(ctx, userID)
+		if err != nil {
+			return Report{}, err
+		}
+		if !l.Reports {
+			return Report{}, httpx.E(http.StatusPaymentRequired, "PLAN_REQUIRED", "Analytics reports aren't included in your plan. Upgrade to unlock them.")
+		}
 	}
 	currency = strings.ToUpper(strings.TrimSpace(currency))
 	if len(currency) != 3 {
@@ -497,4 +575,25 @@ func decimalParse(raw string) (float64, error) {
 	var d float64
 	_, err := fmt.Sscanf(strings.TrimSpace(raw), "%f", &d)
 	return d, err
+}
+
+// checkInsightsCooldown enforces the plan's minimum gap between insight refreshes.
+func (s *Service) checkInsightsCooldown(ctx context.Context, userID uuid.UUID) error {
+	if s.plans == nil {
+		return nil
+	}
+	l, err := s.plans.AILimits(ctx, userID)
+	if err != nil || l.InsightsEveryDays <= 0 {
+		return err
+	}
+	rows, err := s.store.ListInsights(ctx, userID, 1)
+	if err != nil || len(rows) == 0 {
+		return err
+	}
+	next := rows[0].CreatedAt.Add(time.Duration(l.InsightsEveryDays) * 24 * time.Hour)
+	if s.now().Before(next) {
+		return httpx.E(http.StatusTooManyRequests, "INSIGHTS_COOLDOWN", fmt.Sprintf(
+			"Your plan refreshes insights every %d day(s). Next refresh: %s. Upgrade for more often.", l.InsightsEveryDays, next.UTC().Format("Jan 2, 15:04 MST")))
+	}
+	return nil
 }

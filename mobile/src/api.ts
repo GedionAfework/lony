@@ -32,7 +32,8 @@ export type User = {
 };
 
 export function isPremiumPlan(user?: Pick<User, 'plan_tier' | 'role'> | null): boolean {
-  return user?.plan_tier === 'premium' || user?.role === 'admin';
+  const t = user?.plan_tier;
+  return t === 'plus' || t === 'pro' || t === 'premium' || user?.role === 'admin';
 }
 
 export type AppLocale = {

@@ -268,7 +268,8 @@ func CanUseAI(planTier, role string) bool {
 	if strings.EqualFold(strings.TrimSpace(role), "admin") {
 		return true
 	}
-	return strings.EqualFold(strings.TrimSpace(planTier), "premium")
+	t := strings.ToLower(strings.TrimSpace(planTier))
+	return t == "plus" || t == "pro" || t == "premium"
 }
 
 func (s *Service) UserCanUseAI(ctx context.Context, userID uuid.UUID) (bool, error) {

@@ -42,7 +42,14 @@ func monthStart(t time.Time) time.Time {
 func (s *Service) CaptureAllowance(ctx context.Context, userID uuid.UUID) (CaptureAllowance, error) {
 	month := monthStart(s.now())
 	out := CaptureAllowance{Limit: s.freeCaptures, ResetsAt: month.AddDate(0, 1, 0)}
-	if s.gate != nil {
+	if s.plans != nil {
+		l, err := s.plans.AILimits(ctx, userID)
+		if err != nil {
+			return CaptureAllowance{}, err
+		}
+		out.Limit = l.CapturesMonthly
+		out.Unlimited = l.CapturesMonthly < 0
+	} else if s.gate != nil {
 		premium, err := s.gate.UserCanUseAI(ctx, userID)
 		if err != nil {
 			return CaptureAllowance{}, err
@@ -73,12 +80,12 @@ func (s *Service) BeginCapture(ctx context.Context, userID uuid.UUID) error {
 	}
 	if !allowance.Unlimited && allowance.Used >= allowance.Limit {
 		return httpx.E(http.StatusPaymentRequired, "CAPTURE_LIMIT", fmt.Sprintf(
-			"You've used your %d free voice and receipt captures this month. Upgrade to Premium for unlimited, or type it in.", allowance.Limit))
+			"You've used the %d voice and receipt captures in your plan this month. Upgrade for more, or type it in.", allowance.Limit))
 	}
 	return nil
 }
 
-// FinishCapture counts one successful capture for a free user.
+// FinishCapture counts one successful capture against the monthly allowance.
 func (s *Service) FinishCapture(ctx context.Context, userID uuid.UUID) error {
 	allowance, err := s.CaptureAllowance(ctx, userID)
 	if err != nil || allowance.Unlimited || s.captures == nil {

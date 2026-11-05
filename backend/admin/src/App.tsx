@@ -14,6 +14,7 @@ const AuditPage = lazy(() => import('./pages/AuditPage').then((m) => ({ default:
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })));
 const SystemPage = lazy(() => import('./pages/SystemPage').then((m) => ({ default: m.SystemPage })));
 const ControlsPage = lazy(() => import('./pages/ControlsPage').then((m) => ({ default: m.ControlsPage })));
+const BillingPage = lazy(() => import('./pages/BillingPage').then((m) => ({ default: m.BillingPage })));
 const TeamPage = lazy(() => import('./pages/RolesPage').then((m) => ({ default: m.TeamPage })));
 const LocalizationPage = lazy(() => import('./pages/LocalizationPage').then((m) => ({ default: m.LocalizationPage })));
 
@@ -68,6 +69,7 @@ function AppRoutes() {
         <Route path="system" element={page(<SystemPage />)} />
         <Route path="controls" element={page(<ControlsPage />)} />
         <Route path="team" element={page(<TeamPage />)} />
+        <Route path="billing" element={page(<BillingPage />)} />
         <Route path="roles" element={<Navigate to="/team?tab=roles" replace />} />
         <Route path="localization" element={page(<LocalizationPage />)} />
       </Route>

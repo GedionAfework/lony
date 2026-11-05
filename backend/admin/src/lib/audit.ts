@@ -36,6 +36,7 @@ export const AUDIT_CATEGORIES: AuditCategory[] = [
   { id: 'role', prefix: 'role.', label: 'Roles', color: '#7c6cf6' },
   { id: 'admin', prefix: 'admin.', label: 'Admin team', color: '#7c6cf6' },
   { id: 'system', prefix: 'system.', label: 'System', color: '#64748b' },
+  { id: 'billing', prefix: 'billing.', label: 'Billing', color: '#64748b' },
   { id: 'settings', prefix: 'settings.', label: 'Settings', color: '#f59e0b' },
   { id: 'catalog', prefix: 'catalog.', label: 'Catalogs', color: '#0891b2' },
   { id: 'category', prefix: 'category.', label: 'Categories', color: '#2563eb' },
@@ -54,6 +55,7 @@ export const ACTION_LABELS: Record<string, string> = {
   'role.delete': 'Role deleted',
   'settings.controls_update': 'Platform controls changed',
   'system.jobs_retry': 'Failed jobs retried',
+  'billing.settings_update': 'Plan limits changed',
   'settings.ai_disable': 'AI turned off',
   'settings.ai_enable': 'AI turned on',
   'catalog.create': 'Catalog item added',
@@ -160,8 +162,15 @@ export function describe(e: AuditEntry): string {
       return `suspended ${t}`;
     case 'user.unsuspend':
       return `reactivated ${t}`;
-    case 'user.set_plan_tier':
-      return `moved ${t} to the ${str(m.plan_tier) || 'new'} plan`;
+    case 'user.set_plan_tier': {
+      const tier = str(m.plan_tier) || 'new';
+      const until = m.expires_at ? ` until ${new Date(str(m.expires_at)).toLocaleDateString()}` : '';
+      return `moved ${t} to the ${tier.charAt(0).toUpperCase() + tier.slice(1)} plan${until}`;
+    }
+    case 'billing.settings_update': {
+      const parts = [m.limits ? 'plan limits' : '', m.trial_days !== undefined ? 'the sign-up trial' : ''].filter(Boolean);
+      return `changed ${parts.join(' and ') || 'billing settings'}`;
+    }
     case 'settings.ai_disable':
       return 'turned AI off for everyone';
     case 'settings.ai_enable':
@@ -229,7 +238,12 @@ export function describe(e: AuditEntry): string {
 export function changes(e: AuditEntry): { field: string; from?: string; to: string }[] {
   const m = (e.meta ?? {}) as Record<string, unknown>;
   const out: { field: string; from?: string; to: string }[] = [];
-  if (e.action === 'user.set_plan_tier') out.push({ field: 'Plan', from: str(m.previous) || 'free', to: str(m.plan_tier) });
+  if (e.action === 'user.set_plan_tier') {
+    out.push({ field: 'Plan', from: str(m.previous) || 'free', to: str(m.plan_tier) });
+    if (m.expires_at) out.push({ field: 'Until', to: new Date(str(m.expires_at)).toLocaleString() });
+  }
+  if (e.action === 'billing.settings_update' && m.trial_days !== undefined)
+    out.push({ field: 'Trial', to: `${str(m.trial_days)} days${m.trial_tier ? ` of ${str(m.trial_tier)}` : ''}` });
   if (e.action === 'user.suspend') out.push({ field: 'Status', from: str(m.previous_status) || 'active', to: 'suspended' });
   if (e.action === 'user.unsuspend') out.push({ field: 'Status', from: str(m.previous_status) || 'suspended', to: 'active' });
   if (e.action.startsWith('settings.ai_')) out.push({ field: 'AI', from: m.ai_disabled ? 'on' : 'off', to: m.ai_disabled ? 'off' : 'on' });

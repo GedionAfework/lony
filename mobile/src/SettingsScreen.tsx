@@ -456,7 +456,7 @@ export function SettingsScreen(props: Props) {
   }
 
   const L = props.locale;
-  const premium = props.isAdmin || props.planTier === 'premium';
+  const premium = props.isAdmin || props.planTier === 'plus' || props.planTier === 'pro' || props.planTier === 'premium';
   const languageName = locales.find((l) => l.code === props.locale)?.name || props.locale || 'English';
   const lockLabel =
     lockMethod === 'biometrics' || biometricsLock

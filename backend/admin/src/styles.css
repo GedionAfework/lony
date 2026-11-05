@@ -1954,3 +1954,63 @@ a.ov-list-row:hover, button.ov-list-row:hover { background: var(--surface-hover)
   .ov-metric-value { font-size: 24px; }
   .page-header-actions .ov-updated { display: none; }
 }
+
+/* ------------------------------------------------------------ billing */
+
+.alert-warning { color: var(--warning); background: var(--warning-soft); border-color: color-mix(in srgb, var(--warning) 25%, transparent); }
+.plan-badge { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.plan-badge small { font-size: 12px; }
+.bill-h3 { font-size: 14px; font-weight: 600; }
+.bill-user { text-decoration: none !important; color: var(--text); }
+.bill-user:hover span:first-child { text-decoration: underline; }
+.bill-user small { font-size: 12px; }
+.bill-mix-note { display: block; margin-top: 4px; font-size: 12px; }
+.bill-setup { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.bill-setup li { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
+.bill-setup small { margin-left: auto; font-family: var(--font-mono); font-size: 11.5px; max-width: 55%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bill-ok { color: var(--success); flex: none; }
+.bill-bad { color: var(--error); flex: none; }
+.bill-hook { display: flex; flex-direction: column; gap: 5px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.bill-hook small { font-size: 12px; }
+.bill-hook-url {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  background: var(--surface-muted);
+  color: var(--text-soft);
+  font-size: 12px;
+  text-align: left;
+}
+.bill-hook-url span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bill-hook-url:hover { border-color: var(--line-strong); color: var(--text); }
+.bill-limits td.num, .bill-limits th.num { text-align: right; }
+.bill-limits small { font-size: 12px; }
+.bill-limit { display: inline-flex; align-items: center; gap: 6px; justify-content: flex-end; }
+.bill-limit input, .bill-trial input { width: 76px !important; height: 30px !important; text-align: right; font-variant-numeric: tabular-nums; }
+.bill-inf { display: inline-flex; align-items: center; justify-content: flex-end; width: 76px; height: 30px; font-size: 13px; color: var(--text-soft); }
+.bill-inf-toggle {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--faint);
+  font-size: 15px;
+  line-height: 1;
+}
+.bill-inf-toggle:hover:not(:disabled) { color: var(--text); border-color: var(--line-strong); }
+.bill-inf-toggle.on { color: var(--text); background: var(--surface-muted); border-color: var(--line-strong); }
+.bill-inf-toggle:disabled { opacity: 0.5; cursor: not-allowed; }
+.bill-trial { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; }
+.bill-trial select { width: auto !important; height: 30px !important; }
+.bill-events { list-style: none; margin: 0; padding: 0; }
+.bill-events li { display: flex; align-items: center; gap: 10px; padding: 8px 0; font-size: 13px; }
+.bill-events li + li { border-top: 1px solid var(--line); }
+.bill-events code { font-family: var(--font-mono); font-size: 12px; color: var(--text-soft); }
+.bill-event-user { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bill-event-err { max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--error); font-size: 12px; }
+.bill-events time { flex: none; font-size: 12px; }

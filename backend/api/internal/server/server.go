@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 	"equilend/api/internal/ai/llm"
 	"equilend/api/internal/auth"
 	"equilend/api/internal/banklink"
+	"equilend/api/internal/billing"
 	"equilend/api/internal/banks"
 	"equilend/api/internal/chat"
 	"equilend/api/internal/config"
@@ -93,6 +95,8 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 		integration("ai", "AI provider", cfg.OpenAIAPIKey != "", cfg.OpenAIModel),
 		integration("plaid", "Bank linking (Plaid)", cfg.PlaidClientID != "" && cfg.PlaidSecret != "", cfg.PlaidEnv),
 		integration("telegram", "Telegram sign-in", cfg.TelegramBotToken != "", cfg.TelegramBotUsername),
+		integration("polar", "Payments (Polar)", cfg.PolarAccessToken != "" && cfg.PolarWebhookSecret != "" && len(cfg.PolarProducts) > 0,
+			fmt.Sprintf("%s · %d plans", cfg.PolarServer, len(cfg.PolarProducts))),
 	})
 	if n, err := adminSvc.BootstrapAdmins(context.Background(), cfg.AdminEmails); err != nil {
 		panic(err)
@@ -115,7 +119,15 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 	locH := localization.NewHandler(locSvc)
 	privacySvc := privacy.NewService(store.PrivacyAdapter(sqlStore))
 	privacyH := privacy.NewHandler(privacySvc)
+	billingSvc := billing.NewService(store.BillingAdapter(sqlStore), billing.NewPolar(cfg.PolarAccessToken, cfg.PolarServer), billing.Config{
+		WebhookSecret: cfg.PolarWebhookSecret,
+		SuccessURL:    cfg.PolarSuccessURL,
+		Products:      cfg.PolarProducts,
+	})
+	billingSvc.SetAudit(adminSvc.RecordAudit)
+	billingH := billing.NewHandler(billingSvc)
 	aiSvc := ai.NewService(store.AIAdapter(sqlStore))
+	aiSvc.SetPlans(aiPlans{billingSvc})
 	aiSvc.SetInsights(insightsSvc)
 	aiSvc.SetScore(scoreSvc)
 	aiSvc.SetGate(privacySvc)
@@ -261,6 +273,8 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 			r.With(idem.Handler("auth.oauth")).Post("/auth/oauth", authH.OAuth)
 		})
 		r.With(refreshLimit.Middleware, idem.Handler("auth.refresh")).Post("/auth/refresh", authH.Refresh)
+		r.Post("/billing/webhooks/polar", billingH.PolarWebhook)
+		r.Get("/billing/plans", billingH.Catalog)
 		// Public lists every app loads at start: the general limit, not the sign-in one.
 		r.Group(func(r chi.Router) {
 			r.Use(apiLimit.Middleware)
@@ -278,6 +292,9 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 			r.Post("/auth/logout", authH.Logout)
 			r.With(idem.Handler("auth.password")).Post("/me/password", authH.ChangePassword)
 			r.Get("/me", authH.Me)
+			r.Get("/billing/me", billingH.Me)
+			r.With(idem.Handler("billing.checkout")).Post("/billing/checkout", billingH.Checkout)
+			r.Post("/billing/portal", billingH.Portal)
 			r.Patch("/me", authH.PatchMe)
 			r.Get("/me/export", privacyH.Export)
 			r.With(idem.Handler("auth.delete")).Post("/me/delete", privacyH.DeleteAccount)
@@ -325,7 +342,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 			r.With(idem.Handler("budgets.payday")).Put("/budgets/payday", expensesH.UpsertPayday)
 			r.With(idem.Handler("budgets.delete")).Delete("/budgets/{id}", expensesH.DeleteBudget)
 			r.Get("/trips", expensesH.ListTrips)
-			r.With(idem.Handler("trips.create")).Post("/trips", expensesH.CreateTrip)
+			r.With(billingSvc.RequireFeature("Trip budgets", func(l billing.Limits) bool { return l.Trips }, auth.UserIDFrom), idem.Handler("trips.create")).Post("/trips", expensesH.CreateTrip)
 			r.Patch("/trips/{id}", expensesH.UpdateTrip)
 			r.With(idem.Handler("trips.delete")).Delete("/trips/{id}", expensesH.DeleteTrip)
 			r.Get("/cashflow/bills", expensesH.ListBills)
@@ -391,6 +408,9 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 				r.With(admin.RequireAnyPerm(adminSvc, admin.PermSettingsAI, admin.PermSettingsPlatform, admin.PermSystemRead)).Get("/controls", adminH.GetControls)
 				r.With(admin.RequirePerm(adminSvc, admin.PermSettingsPlatform), idem.Handler("admin.controls")).Patch("/controls", adminH.SetControls)
 				r.With(admin.RequirePerm(adminSvc, admin.PermSystemRead)).Get("/system", adminH.System)
+				r.With(admin.RequirePerm(adminSvc, admin.PermBillingRead)).Get("/billing", billingH.AdminOverview)
+				r.With(admin.RequirePerm(adminSvc, admin.PermBillingRead)).Get("/billing/subscriptions", billingH.AdminSubscriptions)
+				r.With(admin.RequirePerm(adminSvc, admin.PermBillingManage), idem.Handler("admin.billing")).Patch("/billing/settings", billingH.AdminUpdateSettings)
 				r.With(admin.RequirePerm(adminSvc, admin.PermSystemJobs), idem.Handler("admin.jobs.retry")).Post("/system/jobs/retry", adminH.RetryFailedJobs)
 				r.With(admin.RequirePerm(adminSvc, admin.PermSettingsAI), idem.Handler("admin.ai")).Post("/settings/ai", adminH.SetAIDisabled)
 				r.With(admin.RequirePerm(adminSvc, admin.PermCategoriesRead)).Get("/catalogs/types", adminH.ListCatalogTypesAdmin)
@@ -433,8 +453,8 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 			r.With(idem.Handler("ai.extract_account")).Post("/bank-profiles/extract", aiH.ExtractAccount)
 			r.Get("/bank-links/status", bankLinkH.Status)
 			r.Get("/bank-links", bankLinkH.List)
-			r.With(idem.Handler("banklink.session")).Post("/bank-links/session", bankLinkH.CreateSession)
-			r.With(idem.Handler("banklink.exchange")).Post("/bank-links/exchange", bankLinkH.Exchange)
+			r.With(billingSvc.RequireBankLinkSlot(auth.UserIDFrom), idem.Handler("banklink.session")).Post("/bank-links/session", bankLinkH.CreateSession)
+			r.With(billingSvc.RequireBankLinkSlot(auth.UserIDFrom), idem.Handler("banklink.exchange")).Post("/bank-links/exchange", bankLinkH.Exchange)
 			r.With(idem.Handler("banklink.disconnect")).Post("/bank-links/{id}/disconnect", bankLinkH.Disconnect)
 			r.With(idem.Handler("banklink.sync")).Post("/bank-links/{id}/sync", bankLinkH.Sync)
 			r.With(idem.Handler("loans.create")).Post("/loans", loansH.Create)
@@ -489,4 +509,22 @@ func integration(key, label string, configured bool, detail string) admin.Integr
 		out.Status, out.Detail = "ok", detail
 	}
 	return out
+}
+
+// aiPlans lets the AI service read plan limits without importing billing.
+type aiPlans struct{ svc *billing.Service }
+
+func (p aiPlans) AILimits(ctx context.Context, userID uuid.UUID) (ai.PlanLimits, error) {
+	l, err := p.svc.LimitsFor(ctx, userID)
+	if err != nil {
+		return ai.PlanLimits{}, err
+	}
+	return ai.PlanLimits{
+		AIMonthly: l.AIMonthly, AIDaily: l.AIDaily, CapturesMonthly: l.CapturesMonthly,
+		InsightsEveryDays: l.InsightsEveryDays, Reports: l.Reports,
+	}, nil
+}
+
+func (p aiPlans) AIUsedThisMonth(ctx context.Context, userID uuid.UUID) (int, error) {
+	return p.svc.AIUsedThisMonth(ctx, userID)
 }

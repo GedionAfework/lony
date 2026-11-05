@@ -44,6 +44,15 @@ type Config struct {
 	PlaidEnv            string
 	PlaidRedirectURI    string
 	PublicBaseURL       string
+	// Polar billing. POLAR_PRODUCTS maps plan keys to Polar product IDs, e.g.
+	// "plus_month=prod_1,plus_year=prod_2,pro_month=prod_3,pro_year=prod_4".
+	// Keys start with the tier (plus_ / pro_) so regional products like
+	// "pro_month_eur=..." also work.
+	PolarAccessToken   string
+	PolarWebhookSecret string
+	PolarServer        string
+	PolarSuccessURL    string
+	PolarProducts      map[string]string
 	// ExposeAuthCodes puts sign-up codes in API responses so local testing works without
 	// email. Opt-in only (DEV_EXPOSE_CODES=1) and never on a hosted server.
 	ExposeAuthCodes bool
@@ -86,6 +95,11 @@ func Load() (Config, error) {
 		PlaidRedirectURI:    strings.TrimSpace(os.Getenv("PLAID_REDIRECT_URI")),
 		PublicBaseURL:       strings.TrimRight(strings.TrimSpace(os.Getenv("PUBLIC_BASE_URL")), "/"),
 		ExposeAuthCodes:     exposeAuthCodes(),
+		PolarAccessToken:    strings.TrimSpace(os.Getenv("POLAR_ACCESS_TOKEN")),
+		PolarWebhookSecret:  strings.TrimSpace(os.Getenv("POLAR_WEBHOOK_SECRET")),
+		PolarServer:         getenv("POLAR_SERVER", "sandbox"),
+		PolarSuccessURL:     strings.TrimSpace(os.Getenv("POLAR_SUCCESS_URL")),
+		PolarProducts:       parsePairs(os.Getenv("POLAR_PRODUCTS")),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -195,5 +209,18 @@ func googleAudiences() []string {
 	}
 	add(os.Getenv("GOOGLE_IOS_CLIENT_ID"))
 	add(os.Getenv("GOOGLE_ANDROID_CLIENT_ID"))
+	return out
+}
+
+// parsePairs reads "a=1,b=2" into a map, ignoring blanks.
+func parsePairs(raw string) map[string]string {
+	out := map[string]string{}
+	for _, part := range strings.Split(raw, ",") {
+		k, v, ok := strings.Cut(strings.TrimSpace(part), "=")
+		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+		if ok && k != "" && v != "" {
+			out[strings.ToLower(k)] = v
+		}
+	}
 	return out
 }

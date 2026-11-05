@@ -106,7 +106,10 @@ func (s *Service) allowLLM(ctx context.Context, userID uuid.UUID) error {
 	if s.llm == nil || !s.llm.Available() {
 		return fmt.Errorf("unavailable")
 	}
-	_, ok, err := s.store.IncrementUsage(ctx, userID, s.now().UTC(), s.dailyCap)
+	if err := s.checkMonthlyAI(ctx, userID); err != nil {
+		return err
+	}
+	_, ok, err := s.store.IncrementUsage(ctx, userID, s.now().UTC(), s.dailyCapFor(ctx, userID))
 	if err != nil {
 		return err
 	}
@@ -318,7 +321,10 @@ func (s *Service) enrichInsightsLLM(ctx context.Context, userID uuid.UUID, curre
 	if s.llm == nil || !s.llm.Available() || len(rows) == 0 {
 		return rows
 	}
-	if _, ok, err := s.store.IncrementUsage(ctx, userID, s.now().UTC(), s.dailyCap); err != nil || !ok {
+	if s.checkMonthlyAI(ctx, userID) != nil {
+		return rows
+	}
+	if _, ok, err := s.store.IncrementUsage(ctx, userID, s.now().UTC(), s.dailyCapFor(ctx, userID)); err != nil || !ok {
 		return rows
 	}
 	snap, err := s.snapshotJSON(ctx, userID, currency)
@@ -388,7 +394,10 @@ func (s *Service) enrichReportLLM(ctx context.Context, userID uuid.UUID, rep Rep
 	if s.llm == nil || !s.llm.Available() {
 		return rep
 	}
-	if _, ok, err := s.store.IncrementUsage(ctx, userID, s.now().UTC(), s.dailyCap); err != nil || !ok {
+	if s.checkMonthlyAI(ctx, userID) != nil {
+		return rep
+	}
+	if _, ok, err := s.store.IncrementUsage(ctx, userID, s.now().UTC(), s.dailyCapFor(ctx, userID)); err != nil || !ok {
 		return rep
 	}
 	type chartIn struct {

@@ -131,11 +131,21 @@ func (s *Service) Unsuspend(ctx context.Context, actor, target uuid.UUID) (UserD
 	return s.store.GetUser(ctx, target)
 }
 
-func (s *Service) SetPlanTier(ctx context.Context, actor, target uuid.UUID, planTier string) (UserDetail, error) {
+// SetPlanTier grants a plan by hand. With expires set it is a time-limited
+// comp that falls back to Free; Free clears any comp or trial.
+func (s *Service) SetPlanTier(ctx context.Context, actor, target uuid.UUID, planTier string, expires *time.Time) (UserDetail, error) {
 	planTier = strings.ToLower(strings.TrimSpace(planTier))
-	if planTier != "free" && planTier != "premium" {
+	if planTier == "premium" {
+		planTier = "pro"
+	}
+	if planTier != "free" && planTier != "plus" && planTier != "pro" {
 		return UserDetail{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
-			"plan_tier": "must be free or premium",
+			"plan_tier": "must be free, plus or pro",
+		})
+	}
+	if expires != nil && !expires.After(time.Now()) {
+		return UserDetail{}, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{
+			"expires_at": "must be in the future",
 		})
 	}
 	detail, err := s.store.GetUser(ctx, target)
@@ -145,10 +155,21 @@ func (s *Service) SetPlanTier(ctx context.Context, actor, target uuid.UUID, plan
 	if err != nil {
 		return UserDetail{}, err
 	}
-	if err := s.store.SetUserPlanTier(ctx, target, planTier); err != nil {
+	source := "admin"
+	if planTier == "free" {
+		source, expires = "free", nil
+	}
+	if err := s.store.SetUserPlanTier(ctx, target, planTier, source, expires); err != nil {
 		return UserDetail{}, err
 	}
-	meta, _ := json.Marshal(map[string]any{"previous": detail.PlanTier, "plan_tier": planTier})
+	m := map[string]any{"previous": detail.PlanTier, "previous_source": detail.PlanSource, "plan_tier": planTier}
+	if expires != nil {
+		m["expires_at"] = expires.UTC().Format(time.RFC3339)
+	}
+	if detail.PlanSource == "polar" {
+		m["overrode_subscription"] = true
+	}
+	meta, _ := json.Marshal(m)
 	s.audit(ctx, actor, ActionSetPlanTier, &target, meta)
 	return s.store.GetUser(ctx, target)
 }

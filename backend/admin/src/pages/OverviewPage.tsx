@@ -214,11 +214,17 @@ export function OverviewPage() {
           }
         />
         <Metric
-          label="Premium"
+          label="On a paid plan"
           value={nf.format(premium)}
           foot={
             <>
               <b>{pct(premium, o.total_users)}%</b> of users
+              {o.plus_users != null ? (
+                <span className="muted">
+                  · {nf.format(o.plus_users)} Plus · {nf.format(o.pro_users ?? 0)} Pro
+                  {o.trial_users ? ` · ${nf.format(o.trial_users)} on trial` : ''}
+                </span>
+              ) : null}
             </>
           }
         />
@@ -488,6 +494,7 @@ function Shortcuts() {
   const items = [
     { label: 'Find a user', hint: 'Search accounts', to: '/users', ok: hasPerm('users.read') },
     { label: 'Manage admin access', hint: 'Team, roles and permissions', to: '/team', ok: hasPerm('roles.read') },
+    { label: 'Billing', hint: 'Revenue, subscriptions, plan limits', to: '/billing', ok: hasPerm('billing.read') },
     { label: 'Platform controls', hint: 'Maintenance, sign-ups, features', to: '/controls', ok: hasPerm('settings.platform') || hasPerm('settings.ai') },
     { label: 'System health', hint: 'Database, jobs, integrations', to: '/system', ok: hasPerm('system.read') },
   ].filter((i) => i.ok);

@@ -145,13 +145,14 @@ func (h *Handler) SetPlanTier(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		PlanTier string `json:"plan_tier"`
+		PlanTier  string     `json:"plan_tier"`
+		ExpiresAt *time.Time `json:"expires_at"`
 	}
 	if err := httpx.Decode(r, &body); err != nil {
 		httpx.Error(w, err)
 		return
 	}
-	out, err := h.svc.SetPlanTier(r.Context(), auth.UserIDFrom(r.Context()), id, body.PlanTier)
+	out, err := h.svc.SetPlanTier(r.Context(), auth.UserIDFrom(r.Context()), id, body.PlanTier, body.ExpiresAt)
 	if err != nil {
 		httpx.Error(w, err)
 		return

@@ -61,6 +61,8 @@ const (
 	PermThemesWrite      = "themes.write"
 	PermLocalizationRead = "localization.read"
 	PermLocalization     = "localization.manage"
+	PermBillingRead      = "billing.read"
+	PermBillingManage    = "billing.manage"
 
 	SuperAdminRole = "Super Admin"
 )
@@ -78,6 +80,7 @@ var permRequires = map[string][]string{
 	PermCategoriesWrite: {PermCategoriesRead},
 	PermThemesWrite:     {PermThemesRead},
 	PermLocalization:    {PermLocalizationRead},
+	PermBillingManage:   {PermBillingRead},
 }
 
 type Permission struct {
@@ -183,6 +186,9 @@ type Overview struct {
 	AITokens7d        int `json:"ai_tokens_7d"`
 	AIRequestsToday   int `json:"ai_requests_today"`
 	PremiumUsers      int `json:"premium_users"`
+	PlusUsers         int `json:"plus_users"`
+	ProUsers          int `json:"pro_users"`
+	TrialUsers        int `json:"trial_users"`
 	DeletionPending   int `json:"deletion_pending"`
 	SignupsPrev7d     int `json:"signups_prev_7d"`
 	MAU               int `json:"mau"`
@@ -203,6 +209,8 @@ type UserListItem struct {
 	Status        string     `json:"status"`
 	Role          string     `json:"role"`
 	PlanTier      string     `json:"plan_tier"`
+	PlanSource    string     `json:"plan_source"`
+	PlanExpiresAt *time.Time `json:"plan_expires_at,omitempty"`
 	AdminRoleID   *uuid.UUID `json:"admin_role_id,omitempty"`
 	AdminRoleName *string    `json:"admin_role_name,omitempty"`
 	CountryCode   *string    `json:"country_code,omitempty"`
@@ -249,7 +257,7 @@ type Store interface {
 	ListUsers(ctx context.Context, q, status string, limit, offset int) ([]UserListItem, int, error)
 	GetUser(ctx context.Context, id uuid.UUID) (UserDetail, error)
 	SetUserStatus(ctx context.Context, id uuid.UUID, status string) error
-	SetUserPlanTier(ctx context.Context, id uuid.UUID, planTier string) error
+	SetUserPlanTier(ctx context.Context, id uuid.UUID, planTier, source string, expires *time.Time) error
 	RevokeUserSessions(ctx context.Context, id uuid.UUID) error
 	InsertAudit(ctx context.Context, actorID uuid.UUID, action string, target *uuid.UUID, meta json.RawMessage) error
 	ListAudit(ctx context.Context, limit int) ([]AuditEntry, error)

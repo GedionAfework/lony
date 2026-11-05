@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -36,7 +37,7 @@ func (m *memStore) SetUserStatus(_ context.Context, id uuid.UUID, status string)
 	m.users[id] = u
 	return nil
 }
-func (m *memStore) SetUserPlanTier(_ context.Context, id uuid.UUID, planTier string) error {
+func (m *memStore) SetUserPlanTier(_ context.Context, id uuid.UUID, planTier, _ string, _ *time.Time) error {
 	u := m.users[id]
 	u.PlanTier = planTier
 	m.users[id] = u

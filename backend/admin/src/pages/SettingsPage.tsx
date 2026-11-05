@@ -2,8 +2,6 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Check,
-  CircleX,
-  Crown,
   Info,
   KeyRound,
   LogOut,
@@ -16,7 +14,6 @@ import {
   SlidersHorizontal,
   Sun,
   UserRound,
-  Wallet,
   type LucideIcon,
 } from 'lucide-react';
 import { useAuth } from '../auth';
@@ -30,13 +27,12 @@ import { relativeTime } from '../lib/audit';
 const NOTES_KEY = 'lony_admin_ops_notes';
 const NOTES_AT_KEY = 'lony_admin_ops_notes_at';
 
-type SectionId = 'account' | 'appearance' | 'notes' | 'billing' | 'about';
+type SectionId = 'account' | 'appearance' | 'notes' | 'about';
 
 const SECTIONS: { id: SectionId; label: string; icon: LucideIcon; hint: string; perm?: string }[] = [
   { id: 'account', label: 'Your account', icon: UserRound, hint: 'Profile & permissions' },
   { id: 'appearance', label: 'Appearance', icon: Paintbrush, hint: 'Theme & density' },
   { id: 'notes', label: 'Ops notes', icon: NotebookPen, hint: 'On-call scratchpad' },
-  { id: 'billing', label: 'Plans & billing', icon: Wallet, hint: 'Free vs Premium' },
   { id: 'about', label: 'About', icon: Info, hint: 'Build & environment' },
 ];
 
@@ -73,6 +69,13 @@ const PERMISSION_GROUPS: { label: string; perms: [string, string][] }[] = [
       ['settings.platform', 'Maintenance, sign-ups & features'],
       ['settings.ai', 'AI switch'],
       ['system.jobs', 'Retry background jobs'],
+    ],
+  },
+  {
+    label: 'Billing',
+    perms: [
+      ['billing.read', 'View billing'],
+      ['billing.manage', 'Edit plan limits & trial'],
     ],
   },
   {
@@ -133,7 +136,6 @@ export function SettingsPage() {
           {current?.id === 'account' ? <AccountSection /> : null}
           {current?.id === 'appearance' ? <AppearanceSection /> : null}
           {current?.id === 'notes' ? <NotesSection /> : null}
-          {current?.id === 'billing' ? <BillingSection /> : null}
           {current?.id === 'about' ? <AboutSection /> : null}
         </div>
       </div>
@@ -408,58 +410,6 @@ function NotesSection() {
 
 /* --------------------------------------------------------------- billing */
 
-function BillingSection() {
-  const navigate = useNavigate();
-  const { hasPerm } = useAuth();
-  return (
-    <div className="stack-lg">
-      <div className="plan-grid">
-        <div className="card plan-card">
-          <span className="plan-name">Free</span>
-          <ul>
-            <li>
-              <Check size={14} /> Loans, cashflow, accounts & goals
-            </li>
-            <li>
-              <Check size={14} /> Friends, chat & trust score
-            </li>
-            <li className="off">
-              <CircleX size={14} /> No AI features
-            </li>
-          </ul>
-        </div>
-        <div className="card plan-card plan-card-premium">
-          <span className="plan-name">
-            <Crown size={15} /> Premium
-          </span>
-          <ul>
-            <li>
-              <Check size={14} /> Everything in Free
-            </li>
-            <li>
-              <Check size={14} /> AI insights, coach & plan chat
-            </li>
-            <li>
-              <Check size={14} /> Smart capture & analytics reports
-            </li>
-          </ul>
-        </div>
-      </div>
-      <Panel
-        title="How plans are assigned"
-        description="Checkout isn’t wired up yet, so plans are switched by hand from a user’s profile."
-        icon={Wallet}
-        aside={
-          hasPerm('users.plan') ? (
-            <Button size="sm" variant="secondary" onClick={() => navigate('/users')}>
-              Go to users
-            </Button>
-          ) : null
-        }
-      />
-    </div>
-  );
-}
 
 /* ----------------------------------------------------------------- about */
 

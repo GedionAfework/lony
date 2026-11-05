@@ -21,6 +21,7 @@ import {
   Activity,
   SlidersHorizontal,
   KeyRound,
+  CreditCard,
   type LucideIcon,
 } from 'lucide-react';
 import { useAuth } from '../auth';
@@ -46,6 +47,7 @@ const NAV: NavItem[] = [
   { to: '/audit', label: 'Audit log', icon: ScrollText, perm: 'audit.read', group: 'Monitor', keywords: 'history events activity' },
   { to: '/users', label: 'Users', icon: Users, perm: 'users.read', group: 'Manage', keywords: 'accounts members suspend plan' },
   { to: '/team', label: 'Admins & roles', icon: KeyRound, perm: 'roles.read', group: 'Manage', keywords: 'rbac permissions team access roles' },
+  { to: '/billing', label: 'Billing', icon: CreditCard, perm: 'billing.read', group: 'Manage', keywords: 'plans subscriptions revenue mrr polar payments limits trial' },
   { to: '/controls', label: 'Controls', icon: SlidersHorizontal, anyPerm: ['settings.platform', 'settings.ai'], group: 'Manage', keywords: 'maintenance signups features kill switch ai' },
   { to: '/categories', label: 'Categories', icon: Layers, perm: 'categories.read', group: 'Content', keywords: 'catalog institutions banks' },
   { to: '/themes', label: 'Themes', icon: Palette, perm: 'themes.read', group: 'Content', keywords: 'colors appearance' },
