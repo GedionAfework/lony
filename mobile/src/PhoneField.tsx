@@ -40,7 +40,7 @@ export function PhoneField({
   const [query, setQuery] = useState('');
 
   const dialOpts = useMemo(() => dialOptionsForCountries(COUNTRIES), []);
-  const parsed = useMemo(() => splitE164(value, country || 'ET'), [value, country]);
+  const parsed = useMemo(() => splitE164(value, country || 'US'), [value, country]);
   const activeCountry = country || parsed.country;
   const dial = dialForCountry(activeCountry) || parsed.dial;
   const national = value ? parsed.national : '';

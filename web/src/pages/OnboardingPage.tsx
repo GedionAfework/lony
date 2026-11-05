@@ -18,7 +18,7 @@ export function OnboardingPage() {
   const [lastName, setLastName] = useState(user?.last_name ?? '');
   const [phone, setPhone] = useState(user?.phone_e164 ?? '');
   const [country, setCountry] = useState(user?.country_code ?? '');
-  const [currency, setCurrency] = useState(user?.default_currency_code ?? '');
+  const [currency, setCurrency] = useState(user?.default_currency_code || 'USD');
   // Unchecked on purpose: anyone here still has to accept the *current* terms,
   // including people who accepted an older version.
   const [tosAccepted, setTosAccepted] = useState(false);

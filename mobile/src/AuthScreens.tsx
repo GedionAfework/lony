@@ -200,7 +200,7 @@ function Register(p: Props) {
         onSubmitEditing={() => passwordRef.current?.focus()}
       />
       {p.onPhone && p.onPhoneCountry ? (
-        <PhoneField value={p.phone ?? ''} country={p.phoneCountry ?? 'ET'} onCountryChange={p.onPhoneCountry} onChange={p.onPhone} />
+        <PhoneField value={p.phone ?? ''} country={p.phoneCountry ?? 'US'} onCountryChange={p.onPhoneCountry} onChange={p.onPhone} />
       ) : (
         <AuthInput icon="id-badge" label="Display name" value={p.displayName} onChangeText={p.onDisplayName} />
       )}

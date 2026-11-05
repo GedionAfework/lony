@@ -53,6 +53,7 @@ import { AppLockScreen } from './src/AppLockScreen';
 import { SeasonRecapScreen } from './src/SeasonRecapScreen';
 import { BottomNav, type TabId } from './src/BottomNav';
 import { COUNTRIES, CURRENCIES } from './src/catalogs';
+import { deviceCountry } from './src/phone';
 import { ChatScreen } from './src/ChatScreen';
 import { ChatSearchScreen } from './src/ChatSearchScreen';
 import { DateField } from './src/DateField';
@@ -346,7 +347,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [regPhone, setRegPhone] = useState('');
-  const [regPhoneCountry, setRegPhoneCountry] = useState('ET');
+  const [regPhoneCountry, setRegPhoneCountry] = useState(deviceCountry);
   const [confirmPassword, setConfirmPassword] = useState('');
   const [code, setCode] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -391,10 +392,12 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     setProfileHourCycle(next.hour_cycle === 'ethiopian_6' ? '24h' : next.hour_cycle || '24h');
     setLoanRequireApproval(next.loan_require_approval !== false);
     setAskRecurringReceived(next.ask_recurring_received !== false);
-    setProfileCurrency(next.default_currency_code ?? '');
+    // Unless the person picked a currency, Lony uses US dollars.
+    setProfileCurrency(next.default_currency_code || 'USD');
     setProfileTimezone(next.timezone || 'UTC');
-    setCurrency((c) => c || next.default_currency_code || '');
+    setCurrency((c) => c || next.default_currency_code || 'USD');
     setDashCurrency((c) => c || next.default_currency_code || '');
+    setBankCountry((c) => c || next.country_code || '');
     // Incomplete profiles must accept the current terms again (they may have accepted an older version).
     setOnboardingTos(Boolean(next.profile_complete && next.tos_accepted_at));
     void loadLocalePack(next.locale || 'en');
@@ -893,6 +896,14 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     setPassword('');
     setAvatarLocalUri(null);
     setSettingsDetailOpen(false);
+    // Never carry one account's country, currency or language into the next sign-in.
+    setCurrency('');
+    setDashCurrency('');
+    setBankCountry('');
+    setProfileCountry('');
+    setProfileCurrency('');
+    setProfilePhone('');
+    setProfileLocale('en');
     setScreen('login');
   }
 

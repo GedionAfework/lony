@@ -434,7 +434,7 @@ function PhonePreview({ colors: c, compact }: { colors: ThemeColors; compact?: b
         </div>
         <div className="phone-card phone-balance">
           <small>Total balance</small>
-          <b>ETB 24,580</b>
+          <b>$24,580</b>
           <div className="phone-chips">
             <span className="up">+ 12%</span>
             <span>This month</span>
@@ -444,12 +444,12 @@ function PhonePreview({ colors: c, compact }: { colors: ThemeColors; compact?: b
           <div className="phone-card phone-mini">
             <i style={{ background: c.success }} />
             <small>Income</small>
-            <b>8,200</b>
+            <b>$8,200</b>
           </div>
           <div className="phone-card phone-mini">
             <i style={{ background: c.error }} />
             <small>Spent</small>
-            <b>3,140</b>
+            <b>$3,140</b>
           </div>
         </div>
         {!compact ? (

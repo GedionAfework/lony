@@ -12,11 +12,9 @@ import {
   KeyRound,
   Landmark,
   LogOut,
-  Moon,
   Palette,
   Shield,
   Sparkles,
-  Sun,
   Table,
   Trash2,
   Users,
@@ -26,7 +24,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { api, type AppCalendar, type AppLocale } from '../lib/api';
-import { COUNTRIES, TIMEZONES } from '../lib/catalogs';
+import { COUNTRIES, CURRENCIES, TIMEZONES } from '../lib/catalogs';
 import { TIER_LABEL, tierOf } from '../lib/plans';
 import { useTheme } from '../lib/theme';
 import { applyDocumentDirection, parseLocaleMessages, setActivePack, t } from '../i18n';
@@ -36,11 +34,13 @@ import { Field, SelectField } from '../components/Field';
 import { PhoneField } from '../components/PhoneField';
 import { Segmented } from '../components/Segmented';
 import { BillingPanel } from '../components/BillingPanel';
+import { ThemePicker } from '../components/ThemePicker';
+import { BanksPage } from './BanksPage';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/Confirm';
 
-type Section = 'profile' | 'plan' | 'region' | 'appearance' | 'notifications' | 'security' | 'privacy' | 'legal';
-const SECTIONS: Section[] = ['profile', 'plan', 'region', 'appearance', 'notifications', 'security', 'privacy', 'legal'];
+type Section = 'profile' | 'plan' | 'region' | 'appearance' | 'notifications' | 'payments' | 'security' | 'privacy' | 'legal';
+const SECTIONS: Section[] = ['profile', 'plan', 'region', 'appearance', 'notifications', 'payments', 'security', 'privacy', 'legal'];
 
 type Tint = 'teal' | 'blue' | 'orange' | 'violet' | 'pink' | 'green' | 'slate' | 'red' | 'gold';
 
@@ -129,7 +129,7 @@ function download(name: string, type: string, body: string) {
 
 export function SettingsPage() {
   const { user, token, setUser, logout, busy: authBusy } = useAuth();
-  const { mode, setMode } = useTheme();
+  const { themeId, presets, customThemes } = useTheme();
   const navigate = useNavigate();
   const params = useParams();
   const { showError, show } = useToast();
@@ -144,6 +144,7 @@ export function SettingsPage() {
   const [displayName, setDisplayName] = useState(user?.display_name || '');
   const [country, setCountry] = useState(user?.country_code || '');
   const [phone, setPhone] = useState(user?.phone_e164 || '');
+  const [currency, setCurrency] = useState((user?.default_currency_code || 'USD').toUpperCase());
   const [locale, setLocale] = useState(user?.locale || 'en');
   const [timezone, setTimezone] = useState(user?.timezone || 'UTC');
   const [calendarId, setCalendarId] = useState(user?.calendar_id || 'gregorian');
@@ -204,6 +205,14 @@ export function SettingsPage() {
     applyDocumentDirection(user.locale);
   }, [user?.locale, user?.timezone, user?.calendar_id, user?.hour_cycle]);
 
+  // Forms always start from what is saved on the account.
+  useEffect(() => {
+    if (!user) return;
+    setCountry(user.country_code || '');
+    setCurrency((user.default_currency_code || 'USD').toUpperCase());
+    setPhone(user.phone_e164 || '');
+  }, [user?.country_code, user?.default_currency_code, user?.phone_e164]);
+
   async function onSaveProfile() {
     if (!token) return;
     setBusy(true);
@@ -216,7 +225,6 @@ export function SettingsPage() {
         last_name: lastName.trim(),
         phone_e164: phone.trim() || undefined,
         country_code: country.trim().toUpperCase() || undefined,
-        default_currency_code: (user?.default_currency_code || '').trim().toUpperCase() || undefined,
         preferred_auth_provider: authPref,
       });
       setUser(res.user);
@@ -234,6 +242,8 @@ export function SettingsPage() {
     try {
       const res = await api.patchMe(token, {
         locale: locale.trim() || 'en',
+        country_code: country.trim().toUpperCase() || undefined,
+        default_currency_code: currency.trim().toUpperCase() || 'USD',
         timezone: timezone.trim() || 'UTC',
         calendar_id: calendarId.trim() || 'gregorian',
         hour_cycle: hourCycle.trim() === 'ethiopian_6' ? '24h' : hourCycle.trim() || '24h',
@@ -386,6 +396,7 @@ export function SettingsPage() {
     region: 'Language & region',
     appearance: 'Appearance',
     notifications: t(locale, 'settings.notifications'),
+    payments: 'Payment methods',
     security: t(locale, 'settings.security'),
     privacy: t(locale, 'settings.privacy'),
     legal: 'About & legal',
@@ -478,6 +489,14 @@ export function SettingsPage() {
                 />
               </div>
             </Group>
+            <Group title="Money" footer="Amounts across Lony show in this currency unless an entry has its own.">
+              <div className="set-inset">
+                <div className="form-row">
+                  <SelectField label="Country" value={country} onChange={setCountry} options={COUNTRIES} placeholder="Select country" />
+                  <SelectField label="Currency" value={currency} onChange={setCurrency} options={CURRENCIES} />
+                </div>
+              </div>
+            </Group>
             <Group title="Dates & time">
               <div className="set-inset">
                 <div className="form-row">
@@ -500,26 +519,9 @@ export function SettingsPage() {
           </>
         );
       case 'appearance':
-        return (
-          <Group title="Theme">
-            <div className="set-inset">
-              <div className="theme-pick">
-                <button type="button" className={mode === 'light' ? 'active' : ''} onClick={() => setMode('light')}>
-                  <span className="theme-swatch light">
-                    <Sun size={18} />
-                  </span>
-                  Light
-                </button>
-                <button type="button" className={mode === 'dark' ? 'active' : ''} onClick={() => setMode('dark')}>
-                  <span className="theme-swatch dark">
-                    <Moon size={18} />
-                  </span>
-                  Dark
-                </button>
-              </div>
-            </div>
-          </Group>
-        );
+        return <ThemePicker />;
+      case 'payments':
+        return <BanksPage embedded />;
       case 'notifications':
         return (
           <Group title="Tell me about" footer="Applies to alerts on this device.">
@@ -613,12 +615,19 @@ export function SettingsPage() {
 
           <Group title="General">
             <NavRow icon={Globe} tint="blue" title="Language & region" value={`${languageName} · ${user?.default_currency_code || '—'}`} active={section === 'region'} onClick={() => go('region')} />
-            <NavRow icon={Palette} tint="pink" title="Appearance" value={mode === 'dark' ? 'Dark' : 'Light'} active={section === 'appearance'} onClick={() => go('appearance')} />
+            <NavRow
+              icon={Palette}
+              tint="pink"
+              title="Appearance"
+              value={[...presets, ...customThemes].find((x) => x.id === themeId)?.name}
+              active={section === 'appearance'}
+              onClick={() => go('appearance')}
+            />
             <NavRow icon={Bell} tint="red" title={t(locale, 'settings.notifications')} active={section === 'notifications'} onClick={() => go('notifications')} />
           </Group>
 
           <Group title="Money">
-            <NavRow icon={Landmark} tint="teal" title="Payment methods" onClick={() => navigate('/banks')} />
+            <NavRow icon={Landmark} tint="teal" title="Payment methods" active={section === 'payments'} onClick={() => go('payments')} />
           </Group>
 
           <Group title="Privacy">
@@ -644,7 +653,7 @@ export function SettingsPage() {
           </button>
           <h2>{TITLES[shown]}</h2>
         </div>
-        <div className={`settings-detail-body ${shown === 'plan' ? 'wide' : ''}`}>{detail(shown)}</div>
+        <div className={`settings-detail-body ${shown === 'plan' || shown === 'appearance' ? 'wide' : ''}`}>{detail(shown)}</div>
       </section>
     </div>
   );

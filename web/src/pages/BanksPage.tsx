@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Landmark, Pencil, Star, Trash2 } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { api, type BankProfile, type BankProfileShare, type Friendship, type PaymentRail } from '../lib/api';
-import { COUNTRIES } from '../lib/catalogs';
+import { COUNTRIES, CURRENCIES } from '../lib/catalogs';
 import { PageHeader } from '../components/PageHeader';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
@@ -23,8 +23,9 @@ const FALLBACK_RAILS: PaymentRail[] = [
   { code: 'other', label: 'Other', profile_type: 'other', category: 'other', identifier_hint: 'Identifier' },
 ];
 
-export function BanksPage() {
-  const { token } = useAuth();
+/** `embedded` renders inside Settings (no page frame or title). */
+export function BanksPage({ embedded = false }: { embedded?: boolean } = {}) {
+  const { token, user } = useAuth();
   const { showError, show } = useToast();
   const confirm = useConfirm();
 
@@ -38,13 +39,14 @@ export function BanksPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editLabel, setEditLabel] = useState('');
 
-  const [country, setCountry] = useState('');
+  // Start from the person's own country and currency; they can change them per profile.
+  const [country, setCountry] = useState((user?.country_code || '').toUpperCase());
   const [rail, setRail] = useState('');
   const [profileType, setProfileType] = useState('');
   const [label, setLabel] = useState('');
   const [institution, setInstitution] = useState('');
   const [identifier, setIdentifier] = useState('');
-  const [currency, setCurrency] = useState('');
+  const [currency, setCurrency] = useState((user?.default_currency_code || '').toUpperCase());
   const [shareFriendId, setShareFriendId] = useState('');
 
   const reload = useCallback(async () => {
@@ -196,8 +198,12 @@ export function BanksPage() {
   const activeShares = outgoingShares.filter((s) => !s.revoked_at);
 
   return (
-    <div className="page page-narrow">
-      <PageHeader title="Payment profiles" subtitle="Encrypted destinations for any rail worldwide — lists show last 4 only" />
+    <div className={embedded ? 'banks-embedded' : 'page page-narrow'}>
+      {embedded ? (
+        <p className="muted" style={{ fontSize: 13, margin: '0 12px' }}>How friends pay you back. Stored encrypted; lists show the last 4 digits only.</p>
+      ) : (
+        <PageHeader title="Payment profiles" subtitle="Encrypted destinations for any rail worldwide — lists show last 4 only" />
+      )}
 
       <Card>
         <div className="section-label">Your profiles</div>
@@ -269,7 +275,7 @@ export function BanksPage() {
         ) : (
           <Field label="Account or wallet number" value={identifier} onChange={setIdentifier} />
         )}
-        <Field label="Currency (optional)" value={currency} onChange={setCurrency} placeholder="USD" />
+        <SelectField label="Currency" value={currency} onChange={setCurrency} options={CURRENCIES} placeholder="Select currency" />
         <Button onClick={onCreate} disabled={busy || !identifier.trim() || !country || !rail} busy={busy} block>
           {busy ? 'Working…' : 'Save encrypted profile'}
         </Button>

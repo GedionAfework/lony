@@ -90,3 +90,15 @@ export function countryFlag(code: string): string {
   if (!/^[A-Z]{2}$/.test(cc)) return '🏳️';
   return String.fromCodePoint(...[...cc].map((c) => 127397 + c.charCodeAt(0)));
 }
+
+/** The phone's own region (e.g. "US" from en-US) when Lony knows its dial code; otherwise US. */
+export function deviceCountry(): string {
+  try {
+    const tag = Intl.DateTimeFormat().resolvedOptions().locale || '';
+    const region = tag.split(/[-_]/).find((p, i) => i > 0 && /^[A-Za-z]{2}$/.test(p))?.toUpperCase();
+    if (region && COUNTRY_DIAL[region]) return region;
+  } catch {
+    /* Intl missing */
+  }
+  return 'US';
+}

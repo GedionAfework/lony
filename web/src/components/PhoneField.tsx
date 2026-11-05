@@ -19,7 +19,7 @@ const DIAL_OPTIONS = dialOptionsForCountries(COUNTRIES);
 
 /** Country-code picker followed by the national number; reports E.164. */
 export function PhoneField({ label = 'Phone', hint, value, onChange, defaultCountry, placeholder = 'Phone number', disabled }: Props) {
-  const fallback = defaultCountry && dialForCountry(defaultCountry) ? defaultCountry : 'ET';
+  const fallback = defaultCountry && dialForCountry(defaultCountry) ? defaultCountry : 'US';
   const parsed = useMemo(() => splitE164(value, fallback), [value, fallback]);
   const [country, setCountry] = useState(parsed.country);
   const [national, setNational] = useState(parsed.national);

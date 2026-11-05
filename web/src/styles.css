@@ -3791,3 +3791,138 @@ button.premium-chip:hover { filter: brightness(0.97); }
   .rail.open { box-shadow: var(--shadow-lg); }
   .avatar-btn .avatar { width: 34px; height: 34px; }
 }
+
+/* ------------------------------------------------------------ themes */
+
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+  padding: 14px;
+}
+.theme-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  border-radius: 14px;
+}
+.theme-tile-pick,
+.theme-new {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  padding: 6px;
+  border: 2px solid transparent;
+  border-radius: 14px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.theme-tile-pick:hover { background: var(--surface-muted); }
+.theme-tile.active .theme-tile-pick { border-color: var(--primary); }
+.theme-tile-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px 2px;
+  font-size: 13.5px;
+  font-weight: 700;
+}
+.theme-tile.active .theme-tile-name { color: var(--primary); }
+.theme-tile-tools {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: flex;
+  gap: 4px;
+}
+.theme-tile-tools .icon-btn { background: var(--surface); box-shadow: var(--shadow-sm); }
+.theme-new { align-items: center; justify-content: center; min-height: 128px; border: 2px dashed var(--border-strong); }
+.theme-new:hover { border-color: var(--primary); color: var(--primary); }
+.theme-new-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+/* Palette preview: a tiny app window. */
+.pv {
+  display: flex;
+  height: 92px;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--pv-bg);
+  border: 1px solid color-mix(in srgb, var(--pv-text) 14%, transparent);
+}
+.pv-rail {
+  width: 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding-top: 8px;
+  background: var(--pv-nav);
+  border-right: 1px solid var(--pv-border);
+}
+.pv-rail i { width: 8px; height: 8px; border-radius: 3px; background: var(--pv-sub); opacity: 0.45; }
+.pv-rail i.on { background: var(--pv-primary); opacity: 1; }
+.pv-main { flex: 1; display: flex; flex-direction: column; gap: 5px; padding: 8px; }
+.pv-line { height: 6px; border-radius: 3px; background: var(--pv-text); opacity: 0.85; }
+.pv-line.sub { height: 4px; background: var(--pv-sub); opacity: 0.7; }
+.pv-line.w70 { width: 70%; }
+.pv-line.w45 { width: 45%; }
+.pv-card { flex: 1; border-radius: 6px; background: var(--pv-surface); border: 1px solid var(--pv-border); }
+.pv-btn { height: 12px; width: 55%; margin-left: auto; border-radius: 6px; background: var(--pv-primary); }
+
+.theme-editor-head { display: grid; grid-template-columns: 180px 1fr; gap: 14px; align-items: center; }
+.theme-colors { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+.theme-color {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  cursor: pointer;
+}
+.theme-color input[type='color'] {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: none;
+  cursor: pointer;
+}
+.theme-color input[type='color']::-webkit-color-swatch-wrapper { padding: 2px; }
+.theme-color input[type='color']::-webkit-color-swatch { border: none; border-radius: 7px; }
+.theme-color span { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.theme-color strong { font-size: 12.5px; }
+.theme-color .mono {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12.5px;
+  padding: 0;
+  outline: none;
+}
+
+@media (max-width: 560px) {
+  .theme-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .theme-editor-head { grid-template-columns: 1fr; }
+}
+
+/* ------------------------------------- payment methods inside settings */
+
+.banks-embedded { display: flex; flex-direction: column; gap: 14px; }
+.banks-embedded .card { border-radius: 16px; }

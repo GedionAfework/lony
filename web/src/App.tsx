@@ -29,7 +29,6 @@ import { InsightsPage } from './pages/InsightsPage';
 import { PlanPage } from './pages/PlanPage';
 import { BanksPage } from './pages/BanksPage';
 import { SettingsPage } from './pages/SettingsPage';
-import { ThemesPage } from './pages/ThemesPage';
 import { AdminPage } from './pages/AdminPage';
 
 function Splash() {
@@ -115,7 +114,7 @@ export function App() {
             <Route path="banks" element={<BanksPage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="settings/:section" element={<SettingsPage />} />
-            <Route path="themes" element={<ThemesPage />} />
+            <Route path="themes" element={<Navigate to="/settings/appearance" replace />} />
             <Route path="admin" element={<AdminPage />} />
           </Route>
 
