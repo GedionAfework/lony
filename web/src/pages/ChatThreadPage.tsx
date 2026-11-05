@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Banknote, Paperclip, Send, Smile, User as UserIcon } from 'lucide-react';
+import { useConfirm } from '../components/Confirm';
 import { useAuth } from '../auth/AuthContext';
 import { api, type ChatMessage, type Conversation, type ConversationMoney } from '../lib/api';
 import { formatMoney } from '../lib/format';
@@ -47,6 +48,7 @@ export function ChatThreadPage() {
   const navigate = useNavigate();
   const { user, token } = useAuth();
   const { showError } = useToast();
+  const confirm = useConfirm();
 
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -189,6 +191,37 @@ export function ChatThreadPage() {
     }
   }
 
+  /** Your own messages can go for everyone; any message can go for just you. */
+  async function onDeleteMessage(msg: ChatMessage) {
+    if (!token) return;
+    let scope: 'me' | 'everyone' = 'me';
+    if (msg.mine && !isSelfChat) {
+      const everyone = await confirm({
+        title: 'Delete for everyone?',
+        body: 'Both of you stop seeing it. Choose "Only for me" to remove it just from your view.',
+        confirmLabel: 'Delete for everyone',
+        cancelLabel: 'Only for me',
+        tone: 'danger',
+      });
+      scope = everyone ? 'everyone' : 'me';
+      if (!everyone) {
+        const ok = await confirm({ title: 'Delete for you?', body: 'It disappears from your view only.', confirmLabel: 'Delete', tone: 'danger' });
+        if (!ok) return;
+      }
+    } else {
+      const ok = await confirm({ title: 'Delete this message?', body: isSelfChat ? 'It will be removed.' : 'It disappears from your view only.', confirmLabel: 'Delete', tone: 'danger' });
+      if (!ok) return;
+    }
+    const before = messages;
+    setMessages((prev) => prev.filter((m) => m.id !== msg.id));
+    try {
+      await api.deleteMessage(token, msg.id, scope);
+    } catch (e) {
+      setMessages(before);
+      showError(e instanceof Error ? e.message : 'Could not delete message');
+    }
+  }
+
   async function react(msg: ChatMessage, emoji: string) {
     if (!token) return;
     try {
@@ -263,7 +296,14 @@ export function ChatThreadPage() {
             <div className="bubble-body">
               {msg.body ? msg.body : msg.attachment_kind === 'image' ? `Image · ${msg.attachment_name || 'Attachment'}` : msg.attachment_kind === 'file' ? `File · ${msg.attachment_name || 'Attachment'}` : ''}
               {msg.attachment_url && msg.attachment_kind === 'image' ? <img src={msg.attachment_url} alt={msg.attachment_name || 'Image'} className="chat-image" /> : null}
-              <div className="time-corner">{new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+              <div className="time-corner">
+                {new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                {msg.mine && !isSelfChat ? (
+                  <span className={`ticks ${msg.read ? 'read' : ''}`} title={msg.read ? 'Read' : 'Sent'}>
+                    {msg.read ? '✓✓' : '✓'}
+                  </span>
+                ) : null}
+              </div>
             </div>
             {msg.reactions?.length ? (
               <div className="reaction-row">
@@ -274,9 +314,11 @@ export function ChatThreadPage() {
                 ))}
               </div>
             ) : null}
-            <button className="reply-hint" onClick={() => setReplyTo(msg)}>
-              Reply
-            </button>
+            <div className="msg-actions">
+              <button onClick={() => setReplyTo(msg)}>Reply</button>
+              <button onClick={() => setReactFor(reactFor === msg.id ? null : msg.id)}>React</button>
+              <button className="danger" onClick={() => void onDeleteMessage(msg)}>Delete</button>
+            </div>
             {reactFor === msg.id ? (
               <div className="reaction-picker">
                 {REACTION_EMOJIS.map((e) => (

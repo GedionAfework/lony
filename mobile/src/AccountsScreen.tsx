@@ -15,7 +15,7 @@ import {
   institutionsForAccountType,
 } from './institutions';
 import { SearchSelect } from './SearchSelect';
-import { IconBalance, IconCopy, IconEdit, IconShare, IconTrash, IconUpload } from './icons';
+import { IconBalance, IconCopy, IconEdit, IconLoans, IconRepeat, IconShare, IconTrash, IconUpload } from './icons';
 import { fonts, radii, space, useTheme } from './theme';
 import { Card, CheckRow, EmptyState, Field, HeroCard, PrimaryButton, ScreenHeader, SecondaryButton, SectionLabel, Segmented } from './ui';
 
@@ -286,6 +286,9 @@ export function AccountsScreen({
     };
   }, [token]);
 
+  const homeCountry = (user.country_code || '').toUpperCase();
+  const countryRank = (cc?: string | null) => (cc && cc.toUpperCase() === homeCountry ? 0 : !cc ? 1 : 2);
+
   useEffect(() => {
     let cancelled = false;
     api
@@ -295,6 +298,8 @@ export function AccountsScreen({
         setRemoteInstitutions(
           (res.institutions ?? [])
             .filter((i) => i.active)
+            // Your own country first, then worldwide services, then everything else.
+            .sort((a, b) => countryRank(a.country_code) - countryRank(b.country_code))
             .map((i) => ({
               id: i.code,
               label: i.label,
@@ -1631,40 +1636,16 @@ export function AccountsScreen({
                   ) : null}
                 </View>
               ) : null}
-              <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 2, paddingTop: 6, borderTopWidth: 1, borderTopColor: colors.border }}>
                 {!a.bank_profile_id && a.account_type !== 'cash' && a.account_type !== 'credit_card' ? (
-                  <Pressable
-                    onPress={() => startAccept(a)}
-                    style={{
-                      paddingHorizontal: 12,
-                      paddingVertical: 8,
-                      borderRadius: radii.md,
-                      backgroundColor: colors.primarySoft,
-                      borderWidth: 1,
-                      borderColor: colors.primary,
-                    }}
-                  >
-                    <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 12 }}>
-                      {t(user.locale, 'accounts.accept') || 'Accept'}
-                    </Text>
-                  </Pressable>
+                  <IconAction accessibilityLabel={t(user.locale, 'accounts.accept')} label="Loans" onPress={() => startAccept(a)}>
+                    <IconLoans size={16} color={colors.primary} />
+                  </IconAction>
                 ) : null}
                 {a.account_type === 'credit_card' ? (
-                  <Pressable
-                    onPress={() => void openInstallments(a)}
-                    style={{
-                      paddingHorizontal: 12,
-                      paddingVertical: 8,
-                      borderRadius: radii.md,
-                      backgroundColor: colors.primarySoft,
-                      borderWidth: 1,
-                      borderColor: colors.primary,
-                    }}
-                  >
-                    <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 12 }}>
-                      {t(user.locale, 'accounts.installments')}
-                    </Text>
-                  </Pressable>
+                  <IconAction accessibilityLabel={t(user.locale, 'accounts.installments')} label="Plans" onPress={() => void openInstallments(a)}>
+                    <IconRepeat size={16} color={colors.primary} />
+                  </IconAction>
                 ) : null}
                 <IconAction
                   accessibilityLabel={t(user.locale, 'accounts.updateBalance')}
@@ -1694,14 +1675,14 @@ export function AccountsScreen({
                   <IconUpload size={16} color={colors.primary} />
                 </IconAction>
                 {a.account_number ? (
-                  <IconAction accessibilityLabel={t(user.locale, 'accounts.share')} onPress={() => openShare(a.id)}>
+                  <IconAction accessibilityLabel={t(user.locale, 'accounts.share')} label="Share" onPress={() => openShare(a.id)}>
                     <IconShare size={16} color={colors.primary} />
                   </IconAction>
                 ) : null}
-                <IconAction accessibilityLabel={t(user.locale, 'common.edit')} onPress={() => startEdit(a)}>
+                <IconAction accessibilityLabel={t(user.locale, 'common.edit')} label="Edit" onPress={() => startEdit(a)}>
                   <IconEdit size={16} color={colors.primary} />
                 </IconAction>
-                <IconAction accessibilityLabel={t(user.locale, 'accounts.archive')} danger onPress={() => confirmArchive(a)}>
+                <IconAction accessibilityLabel={t(user.locale, 'accounts.archive')} label="Delete" danger onPress={() => confirmArchive(a)}>
                   <IconTrash size={16} color={colors.warning} />
                 </IconAction>
               </View>
@@ -1946,7 +1927,7 @@ function IconAction({
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
       hitSlop={4}
-      style={{ alignItems: 'center', gap: 4, minWidth: 52 }}
+      style={{ alignItems: 'center', gap: 4, minWidth: 44 }}
     >
       <View
         style={{

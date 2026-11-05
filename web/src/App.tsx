@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { useAuth } from './auth/AuthContext';
 import { ToastProvider } from './components/Toast';
+import { ConfirmProvider } from './components/Confirm';
 import { AppShell } from './layout/AppShell';
 
 import { LoginPage } from './pages/auth/LoginPage';
@@ -68,6 +69,7 @@ function RequireGuest({ children }: { children: ReactNode }) {
 export function App() {
   return (
     <ToastProvider>
+      <ConfirmProvider>
       <BrowserRouter>
         <Routes>
           <Route path="/login" element={<RequireGuest><LoginPage /></RequireGuest>} />
@@ -119,6 +121,7 @@ export function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
+      </ConfirmProvider>
     </ToastProvider>
   );
 }

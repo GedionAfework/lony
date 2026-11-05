@@ -12,6 +12,7 @@ import { Field, SelectField, TextAreaField } from '../components/Field';
 import { Modal } from '../components/Modal';
 import { EmptyState } from '../components/EmptyState';
 import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/Confirm';
 
 const FALLBACK_GOAL_TYPES = [
   { id: 'travel', label: 'Travel' },
@@ -30,6 +31,7 @@ function typeDisplay(g: Goal, goalTypes: { id: string; label: string }[]): strin
 export function PlanPage() {
   const { user, token } = useAuth();
   const { showError } = useToast();
+  const confirm = useConfirm();
   const locale = user?.locale || 'en';
 
   const [goals, setGoals] = useState<Goal[]>([]);
@@ -292,6 +294,14 @@ export function PlanPage() {
 
   async function onArchive(id: string) {
     if (!token) return;
+    const goal = goals.find((g) => g.id === id);
+    const ok = await confirm({
+      title: `Archive ${goal?.title || 'this plan'}?`,
+      body: 'It leaves your plans. Money you saved toward it stays in your accounts.',
+      confirmLabel: 'Archive',
+      tone: 'danger',
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       await api.updateGoal(token, id, { status: 'archived' });
@@ -326,6 +336,8 @@ export function PlanPage() {
 
   async function onClearCover(id: string) {
     if (!token) return;
+    const ok = await confirm({ title: 'Remove the photo?', confirmLabel: 'Remove', tone: 'danger' });
+    if (!ok) return;
     setBusy(true);
     try {
       await api.uploadGoalCover(token, id, { clear: true });

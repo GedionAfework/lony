@@ -31,6 +31,7 @@ import {
 import { formatMoney } from './amountFormat';
 import { t } from './i18n';
 import { mergeMessages } from './chatSync';
+import { ActionSheet, type SheetRequest } from './ActionSheet';
 import { apiBaseUrl, fonts, useTheme, type ThemeColors } from './theme';
 import { AuthenticatedAvatar, AuthenticatedImage, prefetchAvatars } from './AuthenticatedAvatar';
 import { IconAttach, IconBack, IconEmoji, IconLoans, IconMic, IconSend } from './icons';
@@ -95,6 +96,8 @@ type Props = {
   onCreateLoanWith?: (peer: { id: string; display_name: string }) => void;
   onOpenLoan?: (loanId: string) => void;
   onActiveChange?: (active: boolean) => void;
+  /** Unread messages across all chats, for the Chats tab badge. */
+  onUnreadChange?: (count: number) => void;
 };
 
 export function ChatScreen({
@@ -114,6 +117,7 @@ export function ChatScreen({
   onCreateLoanWith,
   onOpenLoan,
   onActiveChange,
+  onUnreadChange,
 }: Props) {
   const { colors } = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -127,6 +131,9 @@ export function ChatScreen({
   const [showEmoji, setShowEmoji] = useState(false);
   const [busy, setBusy] = useState(false);
   const [reactFor, setReactFor] = useState<string | null>(null);
+  // In-app sheet for menus and delete confirmations (never the phone's system pop-up).
+  const [sheet, setSheet] = useState<SheetRequest | null>(null);
+  const sheetEl = <ActionSheet request={sheet} onClose={() => setSheet(null)} />;
   const listRef = useRef<FlatList<ChatMessage>>(null);
   // Server cursor for "what changed since". Only fetches move it, never our own sends,
   // so a message the other person sent a moment earlier is never skipped.
@@ -169,9 +176,20 @@ export function ChatScreen({
     return () => sub.remove();
   }, []);
 
+  function isSelfConversation(c: Conversation) {
+    return c.peer.id === userId || c.peer.display_name === 'Self' || c.peer.display_name === 'Saved Messages';
+  }
+
+  // The Chats tab badge counts unread messages, never notifications.
+  useEffect(() => {
+    onUnreadChange?.(conversations.filter((c) => !isSelfConversation(c)).reduce((n, c) => n + (c.unread_count || 0), 0));
+  }, [conversations]);
+
   async function loadConversations() {
     const res = await api.listConversations(token);
-    const list = res.conversations ?? [];
+    let list = res.conversations ?? [];
+    // The open chat is being read right now, so it has nothing unread.
+    if (activeId.current) list = list.map((c) => (c.id === activeId.current ? { ...c, unread_count: 0 } : c));
     listCache = list;
     setConversations(list);
     prefetchAvatars(list.map((c) => c.peer.avatar_url), token);
@@ -186,6 +204,7 @@ export function ChatScreen({
   // Shows a thread from its newest messages. Ignored if another thread was opened meanwhile.
   async function loadThread(conv: Conversation) {
     activeId.current = conv.id;
+    setConversations((list) => list.map((c) => (c.id === conv.id ? { ...c, unread_count: 0 } : c)));
     cursor.current = undefined;
     peerReadAt.current = null;
     scrolledToNewest.current = undefined;
@@ -533,6 +552,68 @@ export function ChatScreen({
     }
   }
 
+  /** WhatsApp-style delete: your own messages can go for everyone, any message for you. */
+  function askDeleteMessage(msg: ChatMessage) {
+    setReactFor(null);
+    const run = async (scope: 'me' | 'everyone') => {
+      const before = messages;
+      setMessages((prev) => prev.filter((m) => m.id !== msg.id));
+      try {
+        await api.deleteMessage(token, msg.id, scope);
+        loadConversations().catch(() => undefined);
+      } catch (e) {
+        setMessages(before);
+        onError(e instanceof Error ? e.message : 'Could not delete message');
+      }
+    };
+    const self = active ? isSelfConversation(active) : false;
+    setSheet({
+      title: 'Delete message?',
+      actions: [
+        ...(msg.mine && !self ? [{ label: 'Delete for everyone', tone: 'danger' as const, onPress: () => void run('everyone') }] : []),
+        { label: self ? 'Delete' : 'Delete for me', tone: 'danger' as const, onPress: () => void run('me') },
+      ],
+    });
+  }
+
+  function askDeleteChat(c: Conversation) {
+    const self = isSelfConversation(c);
+    const name = self ? t(locale, 'chats.self') : c.peer.display_name;
+    setSheet({
+      title: self ? 'Clear saved messages?' : `Delete chat with ${name}?`,
+      message: self ? undefined : `${name} keeps their copy.`,
+      actions: [
+        {
+          label: self ? 'Clear' : 'Delete chat',
+          tone: 'danger',
+          onPress: async () => {
+            const before = conversations;
+            setConversations((list) => list.filter((x) => x.id !== c.id));
+            threadCache.delete(c.id);
+            try {
+              await api.deleteConversation(token, c.id);
+              loadConversations().catch(() => undefined);
+            } catch (e) {
+              setConversations(before);
+              onError(e instanceof Error ? e.message : 'Could not delete chat');
+            }
+          },
+        },
+      ],
+    });
+  }
+
+  function chatMenu(c: Conversation) {
+    const self = isSelfConversation(c);
+    setSheet({
+      title: self ? t(locale, 'chats.self') : c.peer.display_name,
+      actions: [
+        ...(self || !onOpenProfile ? [] : [{ label: 'View profile', onPress: () => onOpenProfile(c.peer) }]),
+        { label: self ? 'Clear saved messages' : 'Delete chat', tone: 'danger' as const, onPress: () => setTimeout(() => askDeleteChat(c), 250) },
+      ],
+    });
+  }
+
   async function openSelfChat() {
     await openPeer(userId);
   }
@@ -540,8 +621,9 @@ export function ChatScreen({
   if (!active) {
     const peerIds = new Set(conversations.map((c) => c.peer.id));
     const startRows = friends.filter((f) => !peerIds.has(f.peer.id));
+    const selfConv = conversations.find((c) => isSelfConversation(c));
     const threadRows = (() => {
-      const rows = conversations.filter((c) => c.peer.id !== userId);
+      const rows = conversations.filter((c) => !isSelfConversation(c));
       const byPeer = new Map<string, Conversation>();
       for (const c of rows) {
         const existing = byPeer.get(c.peer.id);
@@ -570,7 +652,7 @@ export function ChatScreen({
         <Pressable
           style={styles.row}
           onPress={() => openSelfChat()}
-          onLongPress={() => onOpenProfile?.({ id: userId, display_name: 'Self', avatar_url: selfAvatarUrl })}
+          onLongPress={() => (selfConv ? chatMenu(selfConv) : undefined)}
           accessibilityRole="button"
           accessibilityLabel={t(locale, 'chats.self')}
         >
@@ -588,7 +670,13 @@ export function ChatScreen({
             />
           </Pressable>
           <View style={styles.flex}>
-            <Text style={styles.rowTitle}>{t(locale, 'chats.self')}</Text>
+            <View style={styles.rowTop}>
+              <Text style={styles.rowTitle}>{t(locale, 'chats.self')}</Text>
+              {selfConv?.last_message_at ? <Text style={styles.rowTime}>{formatChatListTime(selfConv.last_message_at)}</Text> : null}
+            </View>
+            <Text style={styles.muted} numberOfLines={1}>
+              {selfConv?.last_message_preview || t(locale, 'chats.selfHint')}
+            </Text>
           </View>
         </Pressable>
         {startRows.map((f) => (
@@ -627,7 +715,8 @@ export function ChatScreen({
               onPress={() => {
                 loadThread(c).catch((e) => onError(e instanceof Error ? e.message : 'Could not open chat'));
               }}
-              onLongPress={() => onOpenProfile?.(c.peer)}
+              onLongPress={() => chatMenu(c)}
+              delayLongPress={300}
             >
               <Pressable onPress={() => onOpenProfile?.(c.peer)} hitSlop={4}>
                 <AuthenticatedAvatar
@@ -669,21 +758,13 @@ export function ChatScreen({
                   </View>
                   <View style={styles.metaCol}>
                     <Text style={styles.rowTime}>{formatChatListTime(c.last_message_at)}</Text>
-                    {c.last_message_mine ? (
-                      <View style={styles.tickStack}>
-                        <Text
-                          style={[
-                            styles.tickMark,
-                            styles.tickBack,
-                            { color: colors.text },
-                          ]}
-                        >
-                          ✓
-                        </Text>
-                        {c.last_message_read ? (
-                          <Text style={[styles.tickMark, styles.tickFront, { color: colors.text }]}>✓</Text>
-                        ) : null}
-                      </View>
+                    {c.last_message_mine && c.last_message_preview ? (
+                      <Text
+                        style={[styles.ticks, { color: c.last_message_read ? colors.primary : colors.muted }]}
+                        accessibilityLabel={c.last_message_read ? 'Read' : 'Sent'}
+                      >
+                        {c.last_message_read ? '✓✓' : '✓'}
+                      </Text>
                     ) : c.unread_count > 0 ? (
                       <View style={styles.unreadBadge}>
                         <Text style={styles.unreadBadgeText}>{c.unread_count > 99 ? '99+' : c.unread_count}</Text>
@@ -698,6 +779,7 @@ export function ChatScreen({
             </Pressable>
           );
         })}
+        {sheetEl}
       </View>
     );
   }
@@ -898,11 +980,13 @@ export function ChatScreen({
                     </Text>
                     {item.mine && pending && !pending.failed ? (
                       <Text style={[styles.timeCorner, styles.mineTime]}>🕓</Text>
-                    ) : item.mine && !pending ? (
-                      <View style={styles.tickStack}>
-                        <Text style={[styles.tickMark, styles.tickBack, { color: colors.text }]}>✓</Text>
-                        {item.read ? <Text style={[styles.tickMark, styles.tickFront, { color: colors.text }]}>✓</Text> : null}
-                      </View>
+                    ) : item.mine && !pending && !isSelfChat ? (
+                      <Text
+                        style={[styles.ticks, styles.bubbleTicks, { opacity: item.read ? 1 : 0.6 }]}
+                        accessibilityLabel={item.read ? 'Read' : 'Sent'}
+                      >
+                        {item.read ? '✓✓' : '✓'}
+                      </Text>
                     ) : null}
                   </View>
                 </View>
@@ -948,6 +1032,9 @@ export function ChatScreen({
                         <Text style={styles.actionText}>⧉ Copy</Text>
                       </Pressable>
                     ) : null}
+                    <Pressable onPress={() => askDeleteMessage(item)} style={styles.actionBtn}>
+                      <Text style={[styles.actionText, { color: colors.error }]}>🗑 Delete</Text>
+                    </Pressable>
                     <Pressable onPress={() => setReactFor(null)} style={styles.actionBtn}>
                       <Text style={[styles.actionText, { color: colors.muted }]}>Close</Text>
                     </Pressable>
@@ -1037,6 +1124,7 @@ export function ChatScreen({
           </Pressable>
         )}
       </View>
+      {sheetEl}
     </KeyboardAvoidingView>
   );
 }
@@ -1218,7 +1306,6 @@ function makeStyles(colors: ThemeColors) {
     metaCol: { alignItems: 'flex-end', gap: 4, minWidth: 44 },
     metaColEnd: { alignItems: 'flex-end', marginTop: 4, gap: 1 },
     rowTime: { color: colors.muted, fontSize: 12, fontFamily: fonts.ui },
-    ticks: { color: colors.muted, fontSize: 11, fontFamily: fonts.ui, lineHeight: 12 },
     ticksInline: { color: colors.muted, fontSize: 10, fontFamily: fonts.ui, lineHeight: 12 },
     ticksRead: { opacity: 1 },
     unreadBadge: {
@@ -1352,6 +1439,8 @@ function makeStyles(colors: ThemeColors) {
       lineHeight: 12,
       fontFamily: fonts.ui,
     },
+    ticks: { fontSize: 12, lineHeight: 14, fontFamily: fonts.uiBold, letterSpacing: -3, marginLeft: 3, paddingRight: 3 },
+    bubbleTicks: { color: '#FFFFFF' },
     tickStack: {
       width: 16,
       height: 14,

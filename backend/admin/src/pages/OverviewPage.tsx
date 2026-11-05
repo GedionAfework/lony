@@ -39,11 +39,35 @@ import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { PermissionGate } from '../components/PermissionGate';
 
-const TEAL = '#1FA8A8';
-const LIME = '#A3E635';
-const AMBER = '#D97706';
-const ROSE = '#DC2626';
+const TEAL = '#14B8A6';
+const CYAN = '#06B6D4';
+const VIOLET = '#7C6CF6';
+const AMBER = '#F59E0B';
+const ROSE = '#F43F5E';
 const SLATE = '#94A3B8';
+
+const TOOLTIP_STYLE = {
+  background: 'var(--surface)',
+  border: '1px solid var(--line)',
+  borderRadius: 12,
+  fontSize: 12,
+  boxShadow: 'var(--shadow)',
+  color: 'var(--text)',
+};
+
+function Legend({ items }: { items: { name: string; color: string; value?: number | string }[] }) {
+  return (
+    <div className="chart-legend">
+      {items.map((i) => (
+        <span key={i.name}>
+          <i style={{ background: i.color }} />
+          {i.name}
+          {i.value !== undefined ? <b style={{ color: 'var(--text)' }}>{i.value}</b> : null}
+        </span>
+      ))}
+    </div>
+  );
+}
 
 export function OverviewPage() {
   const { token } = useAuth();
@@ -134,7 +158,7 @@ export function OverviewPage() {
 
   const engagement = [
     { name: 'DAU', value: overview.dau, fill: TEAL },
-    { name: 'WAU', value: overview.wau, fill: LIME },
+    { name: 'WAU', value: overview.wau, fill: VIOLET },
   ];
 
   const aiBars = [
@@ -212,12 +236,7 @@ export function OverviewPage() {
                   </defs>
                   <Tooltip
                     cursor={{ stroke: '#FFFFFF', strokeWidth: 1, strokeDasharray: '4 4' }}
-                    contentStyle={{
-                      background: 'var(--surface)',
-                      border: '1px solid var(--line)',
-                      borderRadius: 10,
-                      fontSize: 12,
-                    }}
+                    contentStyle={TOOLTIP_STYLE}
                     labelFormatter={(_, payload) => String(payload?.[0]?.payload?.full ?? '')}
                     formatter={(value) => [value as number, 'Signups']}
                   />
@@ -301,8 +320,15 @@ export function OverviewPage() {
         </div>
       </div>
 
+      <div className="overview-section-title">Analytics</div>
+
       <div className="overview-charts">
-        <ChartCard title="Account mix" subtitle="Active vs suspended" height={220}>
+        <ChartCard
+          title="Account mix"
+          subtitle="Active vs suspended"
+          height={220}
+          actions={<Legend items={accountMix.map((d) => ({ name: d.name, color: d.color, value: d.value }))} />}
+        >
           {accountMix.length === 0 ? (
             <div className="chart-state chart-state-empty">
               <p>No accounts yet</p>
@@ -311,6 +337,7 @@ export function OverviewPage() {
             <ResponsiveContainer width="100%" height="100%">
               <PieChart>
                 <Pie
+                  cornerRadius={6}
                   data={accountMix}
                   dataKey="value"
                   nameKey="name"
@@ -324,12 +351,7 @@ export function OverviewPage() {
                   ))}
                 </Pie>
                 <Tooltip
-                  contentStyle={{
-                    background: 'var(--surface)',
-                    border: '1px solid var(--line)',
-                    borderRadius: 10,
-                    fontSize: 12,
-                  }}
+                  contentStyle={TOOLTIP_STYLE}
                 />
               </PieChart>
             </ResponsiveContainer>
@@ -343,12 +365,7 @@ export function OverviewPage() {
               <YAxis hide allowDecimals={false} />
               <Tooltip
                 cursor={{ fill: 'var(--surface-muted)' }}
-                contentStyle={{
-                  background: 'var(--surface)',
-                  border: '1px solid var(--line)',
-                  borderRadius: 10,
-                  fontSize: 12,
-                }}
+                contentStyle={TOOLTIP_STYLE}
               />
               <Bar dataKey="value" radius={[10, 10, 4, 4]}>
                 {engagement.map((entry) => (
@@ -364,21 +381,16 @@ export function OverviewPage() {
             <AreaChart data={aiBars} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
               <defs>
                 <linearGradient id="aiFill" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={LIME} stopOpacity={0.45} />
-                  <stop offset="100%" stopColor={LIME} stopOpacity={0} />
+                  <stop offset="0%" stopColor={CYAN} stopOpacity={0.4} />
+                  <stop offset="100%" stopColor={CYAN} stopOpacity={0} />
                 </linearGradient>
               </defs>
               <XAxis dataKey="name" tick={{ fontSize: 11, fill: 'var(--muted)' }} axisLine={false} tickLine={false} />
               <YAxis hide allowDecimals={false} />
               <Tooltip
-                contentStyle={{
-                  background: 'var(--surface)',
-                  border: '1px solid var(--line)',
-                  borderRadius: 10,
-                  fontSize: 12,
-                }}
+                contentStyle={TOOLTIP_STYLE}
               />
-              <Area type="monotone" dataKey="value" stroke={TEAL} strokeWidth={2} fill="url(#aiFill)" activeDot={{ r: 5 }} />
+              <Area type="monotone" dataKey="value" stroke={CYAN} strokeWidth={2.5} fill="url(#aiFill)" activeDot={{ r: 5, strokeWidth: 2, stroke: 'var(--surface)' }} />
             </AreaChart>
           </ResponsiveContainer>
         </ChartCard>
@@ -400,12 +412,7 @@ export function OverviewPage() {
               />
               <Tooltip
                 formatter={(value) => [`${value as number}% healthy`, 'Share']}
-                contentStyle={{
-                  background: 'var(--surface)',
-                  border: '1px solid var(--line)',
-                  borderRadius: 10,
-                  fontSize: 12,
-                }}
+                contentStyle={TOOLTIP_STYLE}
               />
             </RadialBarChart>
           </ResponsiveContainer>
@@ -430,12 +437,7 @@ export function OverviewPage() {
                   ))}
                 </Pie>
                 <Tooltip
-                  contentStyle={{
-                    background: 'var(--surface)',
-                    border: '1px solid var(--line)',
-                    borderRadius: 10,
-                    fontSize: 12,
-                  }}
+                  contentStyle={TOOLTIP_STYLE}
                 />
               </PieChart>
             </ResponsiveContainer>

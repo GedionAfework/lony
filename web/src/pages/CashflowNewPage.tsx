@@ -335,6 +335,27 @@ export function CashflowNewPage() {
           <Segmented value={kind} onChange={(v) => setKind(v as Kind)} options={[{ id: 'income', label: 'Income' }, { id: 'expense', label: 'Expense' }]} />
         ) : null}
 
+        <div className={`amount-hero ${kind}`}>
+          <label htmlFor="amount-input">{kind === 'income' ? 'Amount received' : 'Amount spent'}</label>
+          <div className="amount-hero-row">
+            <select aria-label="Currency" value={currency} onChange={(e) => setCurrency(e.target.value)}>
+              {CURRENCIES.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.id}
+                </option>
+              ))}
+            </select>
+            <input
+              id="amount-input"
+              inputMode="decimal"
+              autoComplete="off"
+              placeholder="0.00"
+              value={amount}
+              onChange={(e) => setAmount(formatAmountCommas(e.target.value))}
+            />
+          </div>
+        </div>
+
         {kind === 'expense' && !editing ? (
           <>
             <div className="section-label">Is this a loan payment?</div>
@@ -359,11 +380,7 @@ export function CashflowNewPage() {
           />
         ) : null}
 
-        <Field label="Title" value={title} onChange={setTitle} />
-        <div className="form-row">
-          <Field label="Amount" value={amount} onChange={setAmount} money placeholder="0.00" />
-          <SelectField label="Currency" value={currency} onChange={setCurrency} options={CURRENCIES} />
-        </div>
+        <Field label="What was it for?" value={title} onChange={setTitle} placeholder={kind === 'income' ? 'Salary, sale, gift…' : 'Groceries, taxi, rent…'} />
         {canSplitPayment ? (
           <>
             <div className="section-label">Split this payment?</div>

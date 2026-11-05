@@ -8,19 +8,17 @@ type Props = {
   actions?: ReactNode;
 };
 
-export function PageHeader({ icon: Icon, title, subtitle, actions }: Props) {
+// Titles only: pages carry no description lines under the heading.
+export function PageHeader({ icon: Icon, title, actions }: Props) {
   return (
     <div className="page-header">
       <div className="page-header-title">
         {Icon ? (
-          <span className="page-header-icon">
-            <Icon size={20} strokeWidth={2} />
+          <span className="page-header-icon" aria-hidden>
+            <Icon size={22} strokeWidth={2} />
           </span>
         ) : null}
-        <div>
-          <h1>{title}</h1>
-          {subtitle ? <p className="muted">{subtitle}</p> : null}
-        </div>
+        <h1>{title}</h1>
       </div>
       {actions ? <div className="page-header-actions">{actions}</div> : null}
     </div>

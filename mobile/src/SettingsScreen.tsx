@@ -1,4 +1,7 @@
 import { useEffect, useState } from 'react';
+import FontAwesome from '@expo/vector-icons/FontAwesome';
+import Constants from 'expo-constants';
+import * as SecureStore from 'expo-secure-store';
 import { Alert, I18nManager, Platform, Pressable, Share, Switch, Text, View } from 'react-native';
 import { AdminScreen } from './AdminScreen';
 import { AuthenticatedAvatar } from './AuthenticatedAvatar';
@@ -38,12 +41,16 @@ import {
   ScreenHeader,
   SecondaryButton,
   SectionLabel,
+  Segmented,
 } from './ui';
+
+const appVersion = Constants.expoConfig?.version ?? '';
 
 type SettingsPage =
   | 'hub'
   | 'profile'
   | 'region'
+  | 'money'
   | 'payments'
   | 'notifications'
   | 'privacy'
@@ -117,31 +124,156 @@ type Props = {
   onChangePassword?: () => void;
 };
 
-function HubRow({
+type FAName = React.ComponentProps<typeof FontAwesome>['name'];
+
+const ICON_TINTS: Record<string, string> = {
+  teal: '#159E9E',
+  blue: '#2F7DD3',
+  orange: '#E07B12',
+  violet: '#8B5CF6',
+  pink: '#E0457B',
+  green: '#0E8A6A',
+  slate: '#5B6B82',
+  red: '#DC3B3B',
+};
+
+/** Rounded block of rows with an optional small heading above it, like phone settings. */
+function Group({ title, footer, children }: { title?: string; footer?: string; children: React.ReactNode }) {
+  const { colors } = useTheme();
+  return (
+    <View style={{ gap: 6 }}>
+      {title ? (
+        <Text style={{ color: colors.muted, fontFamily: fonts.uiSemi, fontSize: 12.5, marginLeft: 14, textTransform: 'uppercase', letterSpacing: 0.4 }}>
+          {title}
+        </Text>
+      ) : null}
+      <View style={{ backgroundColor: colors.surface, borderRadius: 18, borderWidth: 1, borderColor: colors.border, overflow: 'hidden' }}>
+        {children}
+      </View>
+      {/* Groups carry no description lines. */}
+      {footer && false ? <Text>{footer}</Text> : null}
+    </View>
+  );
+}
+
+function RowIcon({ icon, tint }: { icon: FAName; tint: keyof typeof ICON_TINTS }) {
+  return (
+    <View style={{ width: 32, height: 32, borderRadius: 9, alignItems: 'center', justifyContent: 'center', backgroundColor: ICON_TINTS[tint] }}>
+      <FontAwesome name={icon} size={15} color="#FFFFFF" />
+    </View>
+  );
+}
+
+/** A row that opens a page: icon, title, optional value on the right, and an arrow. */
+function NavRow({
+  icon,
+  tint = 'teal',
   title,
   subtitle,
+  value,
   onPress,
+  last,
+  danger,
 }: {
+  icon?: FAName;
+  tint?: keyof typeof ICON_TINTS;
   title: string;
-  subtitle: string;
+  subtitle?: string;
+  value?: string;
   onPress: () => void;
+  last?: boolean;
+  danger?: boolean;
 }) {
   const { colors } = useTheme();
   return (
     <Pressable
       onPress={onPress}
-      style={{
-        paddingVertical: 14,
-        borderBottomWidth: 1,
-        borderBottomColor: colors.border,
-        gap: 4,
-      }}
+      accessibilityRole="button"
+      style={({ pressed }) => ({
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+        paddingHorizontal: 14,
+        paddingVertical: 13,
+        backgroundColor: pressed ? colors.surfaceMuted : 'transparent',
+      })}
     >
-      <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16 }}>{title}</Text>
-      <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>{subtitle}</Text>
+      {icon ? <RowIcon icon={icon} tint={danger ? 'red' : tint} /> : null}
+      <View
+        style={{
+          flex: 1,
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 8,
+          minHeight: 32,
+        }}
+      >
+        <View style={{ flex: 1, gap: 2 }}>
+          <Text style={{ color: danger ? colors.error : colors.text, fontFamily: fonts.uiMedium, fontSize: 15.5 }}>{title}</Text>
+
+        </View>
+        {value ? (
+          <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 14, maxWidth: 150 }} numberOfLines={1}>
+            {value}
+          </Text>
+        ) : null}
+        {danger ? null : <FontAwesome name="angle-right" size={20} color={colors.borderStrong} />}
+      </View>
+      {last ? null : (
+        <View style={{ position: 'absolute', left: icon ? 58 : 14, right: 0, bottom: 0, height: 1, backgroundColor: colors.border }} />
+      )}
     </Pressable>
   );
 }
+
+/** A row with a switch. Changes apply at once; there is never a Save button. */
+function ToggleRow({
+  icon,
+  tint = 'teal',
+  title,
+  subtitle,
+  value,
+  onChange,
+  disabled,
+  last,
+}: {
+  icon?: FAName;
+  tint?: keyof typeof ICON_TINTS;
+  title: string;
+  subtitle?: string;
+  value: boolean;
+  onChange: (v: boolean) => void;
+  disabled?: boolean;
+  last?: boolean;
+}) {
+  const { colors } = useTheme();
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 14, paddingVertical: 12 }}>
+      {icon ? <RowIcon icon={icon} tint={tint} /> : null}
+      <View style={{ flex: 1, gap: 2 }}>
+        <Text style={{ color: colors.text, fontFamily: fonts.uiMedium, fontSize: 15.5 }}>{title}</Text>
+
+      </View>
+      <Switch
+        value={value}
+        onValueChange={onChange}
+        disabled={disabled}
+        trackColor={{ false: colors.borderStrong, true: colors.primary }}
+        thumbColor="#FFFFFF"
+      />
+      {last ? null : <View style={{ position: 'absolute', left: icon ? 58 : 14, right: 0, bottom: 0, height: 1, backgroundColor: colors.border }} />}
+    </View>
+  );
+}
+
+/** Padding around pickers and fields placed inside a group. */
+function Inset({ children }: { children: React.ReactNode }) {
+  return <View style={{ paddingHorizontal: 14, paddingVertical: 10, gap: 10 }}>{children}</View>;
+}
+
+const NOTIFY_KEY = 'lony_notify_prefs_v1';
+type NotifyPrefs = { loans: boolean; splits: boolean; goals: boolean; inbox: boolean };
+const DEFAULT_NOTIFY: NotifyPrefs = { loans: true, splits: true, goals: true, inbox: true };
 
 const HOUR_CYCLES = [
   { value: '24h', labelKey: 'settings.hourCycle.24h' },
@@ -151,10 +283,7 @@ const HOUR_CYCLES = [
 export function SettingsScreen(props: Props) {
   const { colors } = useTheme();
   const [page, setPage] = useState<SettingsPage>('hub');
-  const [pushLoans, setPushLoans] = useState(true);
-  const [pushSplits, setPushSplits] = useState(true);
-  const [pushGoals, setPushGoals] = useState(true);
-  const [inAppAll, setInAppAll] = useState(true);
+  const [notify, setNotify] = useState<NotifyPrefs>(DEFAULT_NOTIFY);
   const [smsAutoImport, setSmsAutoImport] = useState(true);
   const [smsCheckupHour, setSmsCheckupHour] = useState('8');
   const [biometricsLock, setBiometricsLock] = useState(false);
@@ -168,6 +297,15 @@ export function SettingsScreen(props: Props) {
   const [mfaBusy, setMfaBusy] = useState(false);
   const [locales, setLocales] = useState<AppLocale[]>([]);
   const [calendars, setCalendars] = useState<AppCalendar[]>([]);
+
+  // Notification choices are remembered on this phone.
+  useEffect(() => {
+    SecureStore.getItemAsync(NOTIFY_KEY)
+      .then((raw) => {
+        if (raw) setNotify({ ...DEFAULT_NOTIFY, ...(JSON.parse(raw) as Partial<NotifyPrefs>) });
+      })
+      .catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -317,121 +455,113 @@ export function SettingsScreen(props: Props) {
     );
   }
 
+  const L = props.locale;
+  const premium = props.isAdmin || props.planTier === 'premium';
+  const languageName = locales.find((l) => l.code === props.locale)?.name || props.locale || 'English';
+  const lockLabel =
+    lockMethod === 'biometrics' || biometricsLock
+      ? biometricsLabel
+      : lockMethod === 'pin'
+        ? 'PIN'
+        : lockMethod === 'pattern'
+          ? 'Pattern'
+          : lockMethod === 'password'
+            ? 'Password'
+            : t(L, 'settings.off');
+
   if (page === 'region') {
     const localeOpts =
       locales.length > 0
         ? locales.map((l) => ({ id: l.code, label: `${l.name} (${l.code})` }))
         : [{ id: props.locale || 'en', label: props.locale || 'en' }];
-    const calendarOpts = CALENDARS;
-    const hourOpts = HOUR_CYCLES.map((h) => ({
-      id: h.value,
-      label: t(props.locale, h.labelKey),
-    }));
-    const smsHourOpts = Array.from({ length: 24 }, (_, h) => ({
-      id: String(h),
-      label: `${String(h).padStart(2, '0')}:00`,
-    }));
+    const hourOpts = HOUR_CYCLES.map((h) => ({ id: h.value, label: t(L, h.labelKey) }));
     return (
-      <View style={{ gap: space.md }}>
-        <Back title={t(props.locale, 'settings.region')} />
-        <Card>
-          <SearchSelect
-            label={t(props.locale, 'settings.language')}
-            value={props.locale}
-            onChange={(code) => {
-              props.onLocale(code);
-              // Always flip the active pack immediately — bundled en/fr/am-ET packs
-              // already cover every key, so the UI switches even if the API's
-              // locale list hasn't loaded yet or is missing this code.
-              const pack = locales.find((l) => l.code === code);
-              setActivePack(
-                pack
-                  ? {
-                      locale: pack.code,
-                      name: pack.name,
-                      dir: pack.dir,
-                      messages: parseLocaleMessages(pack.messages),
-                    }
-                  : { locale: code },
-              );
-              applyNativeDirection(code);
-            }}
-            options={localeOpts}
-          />
-          <SearchSelect
-            label={t(props.locale, 'settings.calendar')}
-            value={
-              props.calendarId === 'hijri'
-                ? 'islamic'
-                : props.calendarId === 'ethiopian'
-                  ? 'ethiopic'
-                  : props.calendarId === 'solar_hijri' || props.calendarId === 'jalali'
-                    ? 'persian'
-                    : props.calendarId
-            }
-            onChange={props.onCalendarId}
-            options={calendarOpts}
-          />
-          <SearchSelect
-            label={t(props.locale, 'settings.hourCycle')}
-            value={props.hourCycle === 'ethiopian_6' ? '24h' : props.hourCycle}
-            onChange={props.onHourCycle}
-            options={hourOpts}
-          />
-          <SearchSelect
-            label={t(props.locale, 'settings.timezone')}
-            value={resolveTimezoneId(props.timezone)}
-            onChange={props.onTimezone}
-            options={TIMEZONES}
-          />
-          <SearchSelect
-            label={t(props.locale, 'settings.baseCurrency')}
-            value={props.currency}
-            onChange={props.onCurrency}
-            options={CURRENCIES}
-          />
-          <View
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              paddingVertical: 12,
-              borderBottomWidth: 1,
-              borderBottomColor: colors.border,
-              gap: 12,
-            }}
-          >
-            <View style={{ flex: 1 }}>
-              <Text style={{ color: colors.text, fontFamily: fonts.ui, fontSize: 15 }}>
-                {t(props.locale, 'settings.smsAutoImport')}
-              </Text>
-            </View>
-            <Switch
-              value={smsAutoImport}
-              onValueChange={(v) => {
-                setSmsAutoImport(v);
-                void (async () => {
-                  if (v) {
-                    if (props.onActivateSmsImport) {
-                      await props.onActivateSmsImport();
-                    } else {
-                      await setSmsAutoImportEnabled(true);
-                    }
-                    await scheduleDailySmsCheckup();
-                  } else {
-                    await setSmsAutoImportEnabled(false);
-                    await cancelDailySmsCheckup();
-                  }
-                })();
+      <View style={{ gap: space.lg }}>
+        <Back title={t(L, 'settings.languageRegion')} />
+        <Group title={t(L, 'settings.groupLanguage')}>
+          <Inset>
+            <SearchSelect
+              label={t(L, 'settings.language')}
+              value={props.locale}
+              onChange={(code) => {
+                props.onLocale(code);
+                // Switch the words at once; bundled packs already cover every key.
+                const pack = locales.find((l) => l.code === code);
+                setActivePack(
+                  pack ? { locale: pack.code, name: pack.name, dir: pack.dir, messages: parseLocaleMessages(pack.messages) } : { locale: code },
+                );
+                applyNativeDirection(code);
               }}
-              trackColor={{ false: colors.borderStrong, true: colors.primarySoft }}
-              thumbColor={smsAutoImport ? colors.primary : colors.muted}
+              options={localeOpts}
             />
-          </View>
+          </Inset>
+        </Group>
+        <Group title={t(L, 'settings.groupMoney')} footer={t(L, 'settings.currencyFooter')}>
+          <Inset>
+            <SearchSelect label={t(L, 'settings.baseCurrency')} value={props.currency} onChange={props.onCurrency} options={CURRENCIES} />
+          </Inset>
+        </Group>
+        <Group title={t(L, 'settings.groupDates')}>
+          <Inset>
+            <SearchSelect
+              label={t(L, 'settings.calendar')}
+              value={
+                props.calendarId === 'hijri'
+                  ? 'islamic'
+                  : props.calendarId === 'ethiopian'
+                    ? 'ethiopic'
+                    : props.calendarId === 'solar_hijri' || props.calendarId === 'jalali'
+                      ? 'persian'
+                      : props.calendarId
+              }
+              onChange={props.onCalendarId}
+              options={CALENDARS}
+            />
+            <SearchSelect
+              label={t(L, 'settings.hourCycle')}
+              value={props.hourCycle === 'ethiopian_6' ? '24h' : props.hourCycle}
+              onChange={props.onHourCycle}
+              options={hourOpts}
+            />
+            <SearchSelect label={t(L, 'settings.timezone')} value={resolveTimezoneId(props.timezone)} onChange={props.onTimezone} options={TIMEZONES} />
+          </Inset>
+        </Group>
+        {I18nManager.isRTL ? <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>{t(L, 'settings.rtlNotice')}</Text> : null}
+      </View>
+    );
+  }
+
+  if (page === 'money') {
+    const smsHourOpts = Array.from({ length: 24 }, (_, h) => ({ id: String(h), label: `${String(h).padStart(2, '0')}:00` }));
+    return (
+      <View style={{ gap: space.lg }}>
+        <Back title={t(L, 'settings.moneyTracking')} />
+        <Group title={t(L, 'settings.groupSms')} footer={t(L, 'settings.smsFooter')}>
+          <ToggleRow
+            icon="envelope"
+            tint="green"
+            title={t(L, 'settings.smsAutoImport')}
+            subtitle={t(L, 'settings.smsAutoImportSub')}
+            value={smsAutoImport}
+            last={!smsAutoImport}
+            onChange={(v) => {
+              setSmsAutoImport(v);
+              void (async () => {
+                if (v) {
+                  if (props.onActivateSmsImport) await props.onActivateSmsImport();
+                  else await setSmsAutoImportEnabled(true);
+                  await scheduleDailySmsCheckup();
+                } else {
+                  await setSmsAutoImportEnabled(false);
+                  await cancelDailySmsCheckup();
+                }
+              })();
+            }}
+          />
           {smsAutoImport ? (
-            <>
+            <Inset>
               <SearchSelect
-                label={t(props.locale, 'settings.smsDailyCheckup')}
+                label={t(L, 'settings.smsDailyCheckup')}
                 value={smsCheckupHour}
                 onChange={(id) => {
                   setSmsCheckupHour(id);
@@ -439,467 +569,314 @@ export function SettingsScreen(props: Props) {
                 }}
                 options={smsHourOpts}
               />
-            </>
+            </Inset>
           ) : null}
-          <View
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              paddingVertical: 12,
-              borderBottomWidth: 1,
-              borderBottomColor: colors.border,
-              gap: 12,
-            }}
-          >
-            <View style={{ flex: 1 }}>
-              <Text style={{ color: colors.text, fontFamily: fonts.ui, fontSize: 15 }}>
-                {t(props.locale, 'settings.loanApproval')}
-              </Text>
-            </View>
-            <Switch
-              value={props.loanRequireApproval}
-              onValueChange={props.onLoanRequireApproval}
-              trackColor={{ false: colors.borderStrong, true: colors.primarySoft }}
-              thumbColor={props.loanRequireApproval ? colors.primary : colors.muted}
-            />
-          </View>
-          {I18nManager.isRTL ? (
-            <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
-              {t(props.locale, 'settings.rtlNotice')}
-            </Text>
-          ) : null}
-        </Card>
+        </Group>
+        <Group title={t(L, 'settings.groupLoans')}>
+          <ToggleRow
+            icon="handshake-o"
+            tint="orange"
+            title={t(L, 'settings.loanApproval')}
+            subtitle={t(L, 'settings.loanApprovalSub')}
+            value={props.loanRequireApproval}
+            onChange={props.onLoanRequireApproval}
+          />
+          <ToggleRow
+            icon="repeat"
+            tint="blue"
+            title={t(L, 'settings.askRecurringReceived')}
+            subtitle={t(L, 'settings.askRecurringReceivedHint')}
+            value={props.askRecurringReceived}
+            onChange={props.onAskRecurringReceived}
+            last
+          />
+        </Group>
+        <Group title={t(L, 'payments')} footer={t(L, 'settings.paymentsHint')}>
+          <NavRow icon="university" tint="teal" title={t(L, 'settings.manageBanks')} onPress={props.onBanks} last />
+        </Group>
       </View>
     );
   }
 
   if (page === 'profile') {
+    const missing = !props.username.trim() || !props.firstName.trim() || !props.lastName.trim();
     return (
-      <View style={{ gap: space.md }}>
-        <Back title={t(props.locale, 'profile')} />
-        {!props.profileComplete ? (
-          <Text style={{ color: colors.error, fontFamily: fonts.ui, fontSize: 14 }}>
-            {t(props.locale, 'settings.profileIncomplete')}
-          </Text>
-        ) : null}
-        <Card>
-          <View style={{ alignItems: 'center', gap: 12, marginBottom: 8 }}>
-            <AuthenticatedAvatar
-              path={props.avatarUrl}
-              localUri={props.avatarLocalUri}
-              token={props.token}
-              size={96}
-              fallbackLetter={props.displayName || props.firstName || '?'}
-            />
-            <Pressable
-              onPress={props.onAvatar}
-              disabled={props.busy}
-              accessibilityLabel={t(props.locale, 'profile.changePhoto')}
+      <View style={{ gap: space.lg }}>
+        <Back title={t(L, 'profile')} />
+        <View style={{ alignItems: 'center', gap: 10 }}>
+          <Pressable onPress={props.onAvatar} disabled={props.busy} accessibilityLabel={t(L, 'profile.changePhoto')}>
+            <AuthenticatedAvatar path={props.avatarUrl} localUri={props.avatarLocalUri} token={props.token} size={104} fallbackLetter={props.displayName || props.firstName || '?'} />
+            <View
               style={{
-                flexDirection: 'row',
+                position: 'absolute',
+                right: 0,
+                bottom: 0,
+                width: 34,
+                height: 34,
+                borderRadius: 17,
                 alignItems: 'center',
-                gap: 8,
-                paddingHorizontal: 14,
-                paddingVertical: 10,
-                borderRadius: radii.full,
-                backgroundColor: colors.primarySoft,
-                borderWidth: 1,
-                borderColor: colors.primary,
-                opacity: props.busy ? 0.5 : 1,
+                justifyContent: 'center',
+                backgroundColor: colors.primary,
+                borderWidth: 3,
+                borderColor: colors.background,
               }}
             >
-              <IconCamera size={16} color={colors.primary} />
-              <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 14 }}>
-                {props.busy
-                  ? t(props.locale, 'profile.uploading')
-                  : props.avatarUrl || props.avatarLocalUri
-                    ? t(props.locale, 'profile.changePhoto')
-                    : t(props.locale, 'profile.addPhoto')}
-              </Text>
-            </Pressable>
-          </View>
-          <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 14 }}>{props.email}</Text>
-          <Field label={t(props.locale, 'profile.username')} value={props.username} onChange={props.onUsername} />
-          <Field label={t(props.locale, 'profile.firstName')} value={props.firstName} onChange={props.onFirstName} />
-          <Field label={t(props.locale, 'profile.middleName')} value={props.middleName} onChange={props.onMiddleName} />
-          <Field label={t(props.locale, 'profile.lastName')} value={props.lastName} onChange={props.onLastName} />
-          <Field label={t(props.locale, 'profile.displayName')} value={props.displayName} onChange={props.onDisplayName} />
-          <PhoneField
-            value={props.phone}
-            country={props.country}
-            onCountryChange={props.onCountry}
-            onChange={props.onPhone}
-          />
-          <SearchSelect label={t(props.locale, 'profile.country')} value={props.country} onChange={props.onCountry} options={COUNTRIES} />
-          <SectionLabel>{t(props.locale, 'profile.signInPreference')}</SectionLabel>
-          <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
-            {(['email', 'google', 'telegram'] as const).map((p) => {
-              const active = props.authPref === p;
-              return (
-                <SecondaryButton key={p} label={p} onPress={() => props.onAuthPref(p)} disabled={active} />
-              );
-            })}
-          </View>
-          {!props.username.trim() || !props.firstName.trim() || !props.lastName.trim() ? (
-            <Text style={{ color: colors.warning, fontFamily: fonts.ui, fontSize: 13 }}>
-              Username, first and last name are needed before changes save.
-            </Text>
-          ) : null}
-        </Card>
-      </View>
-    );
-  }
-
-  if (page === 'payments') {
-    return (
-      <View style={{ gap: space.md }}>
-        <Back title={t(props.locale, 'payments')} />
-        <Card>
+              <IconCamera size={15} color={colors.onPrimary} />
+            </View>
+          </Pressable>
           <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
-            {t(props.locale, 'settings.paymentsHint')}
+            {props.busy ? t(L, 'profile.uploading') : t(L, 'settings.tapPhoto')}
           </Text>
-          <PrimaryButton label={t(props.locale, 'settings.manageBanks')} onPress={props.onBanks} />
-        </Card>
+        </View>
+        {missing ? (
+          <Text style={{ color: colors.warning, fontFamily: fonts.ui, fontSize: 13, textAlign: 'center' }}>{t(L, 'settings.nameNeeded')}</Text>
+        ) : null}
+        <Group title={t(L, 'settings.groupName')}>
+          <Inset>
+            <Field label={t(L, 'profile.firstName')} value={props.firstName} onChange={props.onFirstName} />
+            <Field label={t(L, 'profile.lastName')} value={props.lastName} onChange={props.onLastName} />
+            <Field label={t(L, 'profile.middleName')} value={props.middleName} onChange={props.onMiddleName} />
+            <Field label={t(L, 'profile.displayName')} value={props.displayName} onChange={props.onDisplayName} />
+          </Inset>
+        </Group>
+        <Group title={t(L, 'settings.groupAccount')} footer={props.email}>
+          <Inset>
+            <Field label={t(L, 'profile.username')} value={props.username} onChange={props.onUsername} />
+            <PhoneField value={props.phone} country={props.country} onCountryChange={props.onCountry} onChange={props.onPhone} />
+            <SearchSelect label={t(L, 'profile.country')} value={props.country} onChange={props.onCountry} options={COUNTRIES} />
+          </Inset>
+        </Group>
+        <Group title={t(L, 'profile.signInPreference')}>
+          <Inset>
+            <Segmented
+              value={props.authPref}
+              onChange={(v) => props.onAuthPref(v as 'email' | 'google' | 'telegram')}
+              options={[
+                { id: 'email', label: 'Email' },
+                { id: 'google', label: 'Google' },
+                { id: 'telegram', label: 'Telegram' },
+              ]}
+            />
+          </Inset>
+        </Group>
       </View>
     );
   }
 
   if (page === 'notifications') {
+    const setPref = (key: keyof NotifyPrefs) => (v: boolean) => {
+      const next = { ...notify, [key]: v };
+      setNotify(next);
+      void SecureStore.setItemAsync(NOTIFY_KEY, JSON.stringify(next)).catch(() => undefined);
+    };
     return (
-      <View style={{ gap: space.md }}>
-        <Back title={t(props.locale, 'notifications')} />
-        <Card>
-          <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13, marginBottom: 8 }}>
-            {t(props.locale, 'settings.notificationsHint')}
-          </Text>
-          <View
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              paddingVertical: 12,
-              borderBottomWidth: 1,
-              borderBottomColor: colors.border,
-              gap: 12,
-            }}
-          >
-            <View style={{ flex: 1 }}>
-              <Text style={{ color: colors.text, fontFamily: fonts.ui, fontSize: 15 }}>
-                {t(props.locale, 'settings.askRecurringReceived')}
-              </Text>
-              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12, marginTop: 2 }}>
-                {t(props.locale, 'settings.askRecurringReceivedHint')}
-              </Text>
-            </View>
-            <Switch
-              value={props.askRecurringReceived}
-              onValueChange={props.onAskRecurringReceived}
-              trackColor={{ false: colors.borderStrong, true: colors.primarySoft }}
-              thumbColor={props.askRecurringReceived ? colors.primary : colors.muted}
-            />
-          </View>
-          {(
-            [
-              { label: t(props.locale, 'settings.notifyLoanAlerts'), value: pushLoans, onChange: setPushLoans },
-              { label: t(props.locale, 'settings.notifySplits'), value: pushSplits, onChange: setPushSplits },
-              { label: t(props.locale, 'settings.notifyGoals'), value: pushGoals, onChange: setPushGoals },
-              { label: t(props.locale, 'settings.notifyInbox'), value: inAppAll, onChange: setInAppAll },
-            ] as { label: string; value: boolean; onChange: (v: boolean) => void }[]
-          ).map(({ label, value, onChange }) => (
-            <View
-              key={label}
-              style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                paddingVertical: 12,
-                borderBottomWidth: 1,
-                borderBottomColor: colors.border,
-              }}
-            >
-              <Text style={{ color: colors.text, fontFamily: fonts.ui, fontSize: 15, flex: 1 }}>{label}</Text>
-              <Switch
-                value={value}
-                onValueChange={onChange}
-                trackColor={{ false: colors.borderStrong, true: colors.primarySoft }}
-                thumbColor={value ? colors.primary : colors.muted}
-              />
-            </View>
-          ))}
-        </Card>
+      <View style={{ gap: space.lg }}>
+        <Back title={t(L, 'notifications')} />
+        <Group title={t(L, 'settings.groupTellMe')} footer={t(L, 'settings.notifyFooter')}>
+          <ToggleRow icon="money" tint="orange" title={t(L, 'settings.notifyLoanAlerts')} subtitle={t(L, 'settings.notifyLoanAlertsSub')} value={notify.loans} onChange={setPref('loans')} />
+          <ToggleRow icon="users" tint="violet" title={t(L, 'settings.notifySplits')} subtitle={t(L, 'settings.notifySplitsSub')} value={notify.splits} onChange={setPref('splits')} />
+          <ToggleRow icon="flag" tint="green" title={t(L, 'settings.notifyGoals')} subtitle={t(L, 'settings.notifyGoalsSub')} value={notify.goals} onChange={setPref('goals')} />
+          <ToggleRow icon="bell" tint="blue" title={t(L, 'settings.notifyInbox')} subtitle={t(L, 'settings.notifyInboxSub')} value={notify.inbox} onChange={setPref('inbox')} last />
+        </Group>
       </View>
     );
   }
 
   if (page === 'privacy') {
     return (
-      <View style={{ gap: space.md }}>
-        <Back title={t(props.locale, 'privacy')} />
-        <Card>
-          <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
-            {t(props.locale, 'settings.privacyHint')}
-          </Text>
-          <SecondaryButton
-            label={props.busy ? t(props.locale, 'common.working') : t(props.locale, 'settings.exportData')}
-            onPress={props.onExportData}
-            disabled={props.busy}
-          />
+      <View style={{ gap: space.lg }}>
+        <Back title={t(L, 'privacy')} />
+        <Group title={t(L, 'settings.groupYourData')} footer={t(L, 'settings.privacyHint')}>
+          <NavRow icon="download" tint="blue" title={t(L, 'settings.exportData')} subtitle={t(L, 'settings.exportDataSub')} onPress={props.onExportData} last={!props.onExportLedger} />
           {props.onExportLedger ? (
-            <SecondaryButton
-              label={props.busy ? t(props.locale, 'common.working') : t(props.locale, 'settings.exportLedger')}
-              onPress={props.onExportLedger}
-              disabled={props.busy}
-            />
+            <NavRow icon="table" tint="green" title={t(L, 'settings.exportLedger')} subtitle={t(L, 'settings.exportLedgerSub')} onPress={props.onExportLedger} last />
           ) : null}
-          <SecondaryButton
-            label={props.busy ? t(props.locale, 'common.working') : t(props.locale, 'settings.clearAiInsights')}
-            onPress={props.onClearAI}
-            disabled={props.busy}
+        </Group>
+        <Group title={t(L, 'settings.groupAi')}>
+          <NavRow
+            icon="magic"
+            tint="violet"
+            title={t(L, 'settings.clearAiInsights')}
+            subtitle={t(L, 'settings.clearAiSub')}
+            onPress={() =>
+              Alert.alert(t(L, 'settings.clearAiInsights'), t(L, 'settings.clearAiConfirm'), [
+                { text: t(L, 'common.cancel'), style: 'cancel' },
+                { text: t(L, 'common.clear'), style: 'destructive', onPress: props.onClearAI },
+              ])
+            }
+            last
           />
-          <SecondaryButton label={t(props.locale, 'settings.deleteAccount')} onPress={confirmDelete} disabled={props.busy} />
-        </Card>
+        </Group>
+        <Group footer={t(L, 'settings.deleteFooter')}>
+          <NavRow icon="trash" title={t(L, 'settings.deleteAccount')} onPress={confirmDelete} danger last />
+        </Group>
       </View>
     );
   }
 
   if (page === 'security') {
     return (
-      <View style={{ gap: space.md }}>
-        <Back title={t(props.locale, 'settings.security')} />
-        <Card>
-          <SectionLabel>{t(props.locale, 'settings.appLock')}</SectionLabel>
-          <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13, marginBottom: 8 }}>
-            {t(props.locale, 'settings.appLockHint')}
-          </Text>
-          <View
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              paddingVertical: 12,
-              borderBottomWidth: 1,
-              borderBottomColor: colors.border,
-              gap: 12,
-            }}
-          >
-            <View style={{ flex: 1 }}>
-              <Text style={{ color: colors.text, fontFamily: fonts.ui, fontSize: 15 }}>
-                {biometricsLabel}
-              </Text>
-              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12, marginTop: 2 }}>
-                {t(props.locale, 'settings.biometricsHint')}
-              </Text>
-            </View>
-            <Switch
-              value={biometricsLock}
-              disabled={biometricsBusy || (!biometricsSupported && !biometricsLock)}
-              onValueChange={(v) => {
-                void (async () => {
-                  setBiometricsBusy(true);
-                  try {
-                    if (v) {
-                      const res = await enableBiometricsLock();
-                      if (!res.ok) {
-                        Alert.alert('Screen lock', res.error || `Could not enable ${biometricsLabel}`);
-                        setBiometricsLock(false);
-                        return;
-                      }
-                      await setBiometricsAsLockMethod();
-                      setBiometricsLock(true);
-                      setLockMethod('biometrics');
-                    } else {
-                      const res = await disableBiometricsLock();
-                      if (!res.ok) {
-                        Alert.alert('Screen lock', res.error || `Could not disable ${biometricsLabel}`);
-                        setBiometricsLock(true);
-                        return;
-                      }
-                      if (lockMethod === 'biometrics') {
-                        await clearAppLock();
-                        setLockMethod('none');
-                      }
+      <View style={{ gap: space.lg }}>
+        <Back title={t(L, 'settings.security')} />
+        <Group title={t(L, 'settings.appLock')} footer={t(L, 'settings.appLockHint')}>
+          <ToggleRow
+            icon="lock"
+            tint="slate"
+            title={biometricsLabel}
+            subtitle={biometricsSupported || biometricsLock ? t(L, 'settings.biometricsHint') : t(L, 'settings.biometricsUnavailable')}
+            value={biometricsLock}
+            disabled={biometricsBusy || (!biometricsSupported && !biometricsLock)}
+            onChange={(v) => {
+              void (async () => {
+                setBiometricsBusy(true);
+                try {
+                  if (v) {
+                    const res = await enableBiometricsLock();
+                    if (!res.ok) {
+                      Alert.alert(t(L, 'settings.appLock'), res.error || `Could not enable ${biometricsLabel}`);
                       setBiometricsLock(false);
+                      return;
                     }
-                  } finally {
-                    setBiometricsBusy(false);
+                    await setBiometricsAsLockMethod();
+                    setBiometricsLock(true);
+                    setLockMethod('biometrics');
+                  } else {
+                    const res = await disableBiometricsLock();
+                    if (!res.ok) {
+                      Alert.alert(t(L, 'settings.appLock'), res.error || `Could not disable ${biometricsLabel}`);
+                      setBiometricsLock(true);
+                      return;
+                    }
+                    if (lockMethod === 'biometrics') {
+                      await clearAppLock();
+                      setLockMethod('none');
+                    }
+                    setBiometricsLock(false);
                   }
-                })();
-              }}
-              trackColor={{ false: colors.borderStrong, true: colors.primarySoft }}
-              thumbColor={biometricsLock ? colors.primary : colors.muted}
-            />
-          </View>
-
-          <Pressable
-            onPress={() => goPage('extraFactor')}
-            style={{
-              marginTop: 12,
-              paddingVertical: 12,
-              borderTopWidth: 1,
-              borderTopColor: colors.border,
-              gap: 4,
+                } finally {
+                  setBiometricsBusy(false);
+                }
+              })();
             }}
-          >
-            <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>
-              {t(props.locale, 'settings.extraFactor')}
-            </Text>
-            <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
-              {mfaEnabled
-                ? t(props.locale, 'settings.extraFactorOn').replace('{method}', mfaKind)
-                : t(props.locale, 'settings.extraFactorOff')}
-            </Text>
-          </Pressable>
+          />
+          <NavRow
+            icon="key"
+            tint="orange"
+            title={t(L, 'settings.extraFactor')}
+            value={mfaEnabled ? mfaKind.toUpperCase() : t(L, 'settings.off')}
+            onPress={() => goPage('extraFactor')}
+            last={!(lockMethod !== 'none' || biometricsLock)}
+          />
           {lockMethod !== 'none' || biometricsLock ? (
-            <SecondaryButton
-              label={t(props.locale, 'settings.turnOffLock')}
-              onPress={() => {
-                void (async () => {
-                  await clearAppLock();
-                  await disableBiometricsLock().catch(() => undefined);
-                  setLockMethod('none');
-                  setBiometricsLock(false);
-                  setMfaEnabled(false);
-                })();
-              }}
+            <NavRow
+              title={t(L, 'settings.turnOffLock')}
+              danger
+              last
+              onPress={() =>
+                Alert.alert(t(L, 'settings.turnOffLock'), t(L, 'settings.turnOffLockConfirm'), [
+                  { text: t(L, 'common.cancel'), style: 'cancel' },
+                  {
+                    text: t(L, 'settings.turnOff'),
+                    style: 'destructive',
+                    onPress: () => {
+                      void (async () => {
+                        await clearAppLock();
+                        await disableBiometricsLock().catch(() => undefined);
+                        setLockMethod('none');
+                        setBiometricsLock(false);
+                        setMfaEnabled(false);
+                      })();
+                    },
+                  },
+                ])
+              }
             />
           ) : null}
-        </Card>
-        <Card>
-          <SectionLabel>{t(props.locale, 'settings.accountPassword')}</SectionLabel>
-          <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
-            {t(props.locale, 'settings.changePasswordHint').replace('{email}', props.email)}
-          </Text>
-          <Field
-            label={t(props.locale, 'settings.currentPassword')}
-            value={props.currentPassword ?? ''}
-            onChange={props.onCurrentPassword ?? (() => undefined)}
-            secure
-          />
-          <Field
-            label={t(props.locale, 'settings.newPassword')}
-            value={props.changePasswordNew ?? ''}
-            onChange={props.onChangePasswordNew ?? (() => undefined)}
-            secure
-          />
-          <PrimaryButton
-            label={props.busy ? t(props.locale, 'common.working') : t(props.locale, 'settings.updatePassword')}
-            onPress={props.onChangePassword ?? (() => undefined)}
-            disabled={props.busy || !props.onChangePassword}
-          />
-        </Card>
+        </Group>
+        <Group title={t(L, 'settings.accountPassword')} footer={t(L, 'settings.changePasswordHint').replace('{email}', props.email)}>
+          <Inset>
+            <Field label={t(L, 'settings.currentPassword')} value={props.currentPassword ?? ''} onChange={props.onCurrentPassword ?? (() => undefined)} secure />
+            <Field label={t(L, 'settings.newPassword')} value={props.changePasswordNew ?? ''} onChange={props.onChangePasswordNew ?? (() => undefined)} secure />
+            <PrimaryButton
+              label={props.busy ? t(L, 'common.working') : t(L, 'settings.updatePassword')}
+              onPress={props.onChangePassword ?? (() => undefined)}
+              disabled={props.busy || !props.onChangePassword || !(props.currentPassword ?? '').trim() || !(props.changePasswordNew ?? '').trim()}
+            />
+          </Inset>
+        </Group>
       </View>
     );
   }
 
   if (page === 'extraFactor') {
+    const saveSecret = async (kind: 'pin' | 'pattern' | 'password', secret: string) => {
+      setMfaBusy(true);
+      try {
+        const res = await setAppLockMethod(kind, secret);
+        if (!res.ok) {
+          Alert.alert(t(L, 'settings.extraFactor'), res.error || 'Could not save');
+          return;
+        }
+        await disableBiometricsLock().catch(() => undefined);
+        setBiometricsLock(false);
+        setLockMethod(kind);
+        setMfaEnabled(true);
+        setMfaDraft('');
+        Alert.alert(t(L, 'settings.extraFactor'), t(L, 'settings.extraFactorSaved'));
+        goPage('security');
+      } finally {
+        setMfaBusy(false);
+      }
+    };
     return (
-      <View style={{ gap: space.md }}>
-        <Back title={t(props.locale, 'settings.extraFactor')} />
-        <Card>
-          <SectionLabel>{t(props.locale, 'settings.extraFactor')}</SectionLabel>
-          <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13, marginBottom: 8 }}>
-            {t(props.locale, 'settings.extraFactorHint')}
-          </Text>
-          <View
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              paddingVertical: 12,
-              borderBottomWidth: 1,
-              borderBottomColor: colors.border,
-              gap: 12,
-            }}
-          >
-            <Text style={{ color: colors.text, fontFamily: fonts.ui, fontSize: 15, flex: 1 }}>
-              {t(props.locale, 'settings.extraFactorToggle')}
-            </Text>
-            <Switch
-              value={mfaEnabled}
-              onValueChange={(v) => {
-                void (async () => {
-                  if (!v) {
-                    await clearAppLock();
-                    setMfaEnabled(false);
-                    if (lockMethod === 'pin' || lockMethod === 'pattern' || lockMethod === 'password') {
-                      setLockMethod(biometricsLock ? 'biometrics' : 'none');
-                      if (biometricsLock) await setBiometricsAsLockMethod();
-                    }
-                    setMfaDraft('');
-                    return;
+      <View style={{ gap: space.lg }}>
+        <Back title={t(L, 'settings.extraFactor')} />
+        <Group footer={t(L, 'settings.extraFactorHint')}>
+          <ToggleRow
+            icon="key"
+            tint="orange"
+            title={t(L, 'settings.extraFactorToggle')}
+            value={mfaEnabled}
+            last
+            onChange={(v) => {
+              void (async () => {
+                if (!v) {
+                  await clearAppLock();
+                  setMfaEnabled(false);
+                  if (lockMethod === 'pin' || lockMethod === 'pattern' || lockMethod === 'password') {
+                    setLockMethod(biometricsLock ? 'biometrics' : 'none');
+                    if (biometricsLock) await setBiometricsAsLockMethod();
                   }
-                  setMfaEnabled(true);
                   setMfaDraft('');
-                })();
-              }}
-              trackColor={{ false: colors.borderStrong, true: colors.primarySoft }}
-              thumbColor={mfaEnabled ? colors.primary : colors.muted}
-            />
-          </View>
-
-          {mfaEnabled ? (
-            <>
-              <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 14, marginTop: 12 }}>
-                {t(props.locale, 'settings.chooseMethod')}
-              </Text>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginVertical: 8 }}>
-                {(
-                  [
-                    ['pin', t(props.locale, 'settings.methodPin')],
-                    ['pattern', t(props.locale, 'settings.methodPattern')],
-                    ['password', t(props.locale, 'settings.methodPassword')],
-                  ] as const
-                ).map(([id, label]) => (
-                  <SecondaryButton
-                    key={id}
-                    label={label}
-                    onPress={() => {
-                      setMfaKind(id);
-                      setMfaDraft('');
-                    }}
-                  />
-                ))}
-              </View>
-              <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12, marginBottom: 8 }}>
-                {t(props.locale, 'settings.activeMethod')}: {mfaKind}
-              </Text>
-
+                  return;
+                }
+                setMfaEnabled(true);
+                setMfaDraft('');
+              })();
+            }}
+          />
+        </Group>
+        {mfaEnabled ? (
+          <Group title={t(L, 'settings.chooseMethod')}>
+            <Inset>
+              <Segmented
+                value={mfaKind}
+                onChange={(v) => {
+                  setMfaKind(v as 'pin' | 'pattern' | 'password');
+                  setMfaDraft('');
+                }}
+                options={[
+                  { id: 'pin', label: t(L, 'settings.methodPin') },
+                  { id: 'pattern', label: t(L, 'settings.methodPattern') },
+                  { id: 'password', label: t(L, 'settings.methodPassword') },
+                ]}
+              />
               {mfaKind === 'pattern' ? (
-                <PatternPad
-                  disabled={mfaBusy}
-                  onComplete={(key) => {
-                    void (async () => {
-                      setMfaBusy(true);
-                      try {
-                        const res = await setAppLockMethod('pattern', key);
-                        if (!res.ok) {
-                          Alert.alert(t(props.locale, 'settings.extraFactor'), res.error || 'Could not save');
-                          return;
-                        }
-                        await disableBiometricsLock().catch(() => undefined);
-                        setBiometricsLock(false);
-                        setLockMethod('pattern');
-                        setMfaEnabled(true);
-                        Alert.alert(
-                          t(props.locale, 'settings.extraFactor'),
-                          t(props.locale, 'settings.extraFactorSaved'),
-                        );
-                        goPage('security');
-                      } finally {
-                        setMfaBusy(false);
-                      }
-                    })();
-                  }}
-                />
+                <PatternPad disabled={mfaBusy} onComplete={(key) => void saveSecret('pattern', key)} />
               ) : (
                 <>
                   <Field
-                    label={
-                      mfaKind === 'pin'
-                        ? t(props.locale, 'settings.methodPin')
-                        : t(props.locale, 'settings.methodPassword')
-                    }
+                    label={mfaKind === 'pin' ? t(L, 'settings.methodPin') : t(L, 'settings.methodPassword')}
                     value={mfaDraft}
                     onChange={setMfaDraft}
                     secure
@@ -907,110 +884,129 @@ export function SettingsScreen(props: Props) {
                     placeholder={mfaKind === 'pin' ? '123456' : '••••••'}
                   />
                   <PrimaryButton
-                    label={mfaBusy ? t(props.locale, 'common.loading') : mfaKind === 'pin' ? 'Set PIN' : 'Set password'}
-                    disabled={mfaBusy}
-                    onPress={() => {
-                      void (async () => {
-                        setMfaBusy(true);
-                        try {
-                          const res = await setAppLockMethod(mfaKind, mfaDraft);
-                          if (!res.ok) {
-                            Alert.alert(t(props.locale, 'settings.extraFactor'), res.error || 'Could not save');
-                            return;
-                          }
-                          await disableBiometricsLock().catch(() => undefined);
-                          setBiometricsLock(false);
-                          setLockMethod(mfaKind);
-                          setMfaEnabled(true);
-                          setMfaDraft('');
-                          Alert.alert(
-                            t(props.locale, 'settings.extraFactor'),
-                            t(props.locale, 'settings.extraFactorSaved'),
-                          );
-                          goPage('security');
-                        } finally {
-                          setMfaBusy(false);
-                        }
-                      })();
-                    }}
+                    label={mfaBusy ? t(L, 'common.loading') : mfaKind === 'pin' ? 'Set PIN' : 'Set password'}
+                    disabled={mfaBusy || !mfaDraft.trim()}
+                    onPress={() => void saveSecret(mfaKind, mfaDraft)}
                   />
                 </>
               )}
-            </>
-          ) : null}
-        </Card>
+            </Inset>
+          </Group>
+        ) : null}
       </View>
     );
   }
 
   if (page === 'legal') {
     return (
-      <View style={{ gap: space.md }}>
-        <Back title={t(props.locale, 'legal')} />
-        <Card>
-          <SecondaryButton label={t(props.locale, 'settings.termsOfService')} onPress={props.onTos} />
-          {props.tosAccepted ? (
-            <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>
-              {t(props.locale, 'settings.accepted').replace('{version}', props.tosVersion || '')}
-            </Text>
-          ) : (
-            <Text style={{ color: colors.error, fontFamily: fonts.ui, fontSize: 13 }}>
-              {t(props.locale, 'settings.notAccepted')}
-            </Text>
-          )}
-        </Card>
+      <View style={{ gap: space.lg }}>
+        <Back title={t(L, 'settings.about')} />
+        <Group
+          footer={
+            props.tosAccepted ? t(L, 'settings.accepted').replace('{version}', props.tosVersion || '') : t(L, 'settings.notAccepted')
+          }
+        >
+          <NavRow icon="file-text-o" tint="slate" title={t(L, 'settings.termsOfService')} onPress={props.onTos} last />
+        </Group>
+        <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12, textAlign: 'center' }}>
+          Lony {appVersion}
+        </Text>
       </View>
     );
   }
 
+  // Hub
   return (
-    <View style={{ gap: space.md }}>
-      <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 22 }}>
-        {t(props.locale, 'settings')}
-      </Text>
+    <View style={{ gap: space.lg }}>
+      <Text style={{ color: colors.text, fontFamily: fonts.uiBold, fontSize: 26, letterSpacing: -0.5 }}>{t(L, 'settings')}</Text>
+
+      <Pressable
+        onPress={() => goPage('profile')}
+        style={({ pressed }) => ({
+          flexDirection: 'row',
+          alignItems: 'center',
+          gap: 14,
+          padding: 14,
+          borderRadius: 18,
+          borderWidth: 1,
+          borderColor: colors.border,
+          backgroundColor: pressed ? colors.surfaceMuted : colors.surface,
+        })}
+      >
+        <AuthenticatedAvatar path={props.avatarUrl} localUri={props.avatarLocalUri} token={props.token} size={58} fallbackLetter={props.displayName || props.firstName || '?'} />
+        <View style={{ flex: 1, gap: 2 }}>
+          <Text style={{ color: colors.text, fontFamily: fonts.uiBold, fontSize: 18 }} numberOfLines={1}>
+            {props.displayName || [props.firstName, props.lastName].filter(Boolean).join(' ') || props.username || props.email}
+          </Text>
+          <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }} numberOfLines={1}>
+            {props.username ? `@${props.username}` : props.email}
+          </Text>
+          <View
+            style={{
+              alignSelf: 'flex-start',
+              marginTop: 4,
+              paddingHorizontal: 9,
+              paddingVertical: 3,
+              borderRadius: radii.full,
+              backgroundColor: premium ? colors.secondarySoft : colors.surfaceMuted,
+            }}
+          >
+            <Text style={{ color: premium ? colors.secondary : colors.muted, fontFamily: fonts.uiSemi, fontSize: 11 }}>
+              {premium ? `★ ${t(L, 'settings.premium')}` : t(L, 'settings.freePlan')}
+            </Text>
+          </View>
+        </View>
+        <FontAwesome name="angle-right" size={22} color={colors.borderStrong} />
+      </Pressable>
+
       {!props.profileComplete ? (
-        <Text style={{ color: colors.error, fontFamily: fonts.ui, fontSize: 14 }}>
-          {t(props.locale, 'settings.finishProfile')}
-        </Text>
+        <Pressable onPress={() => goPage('profile')} style={{ padding: 12, borderRadius: 14, backgroundColor: colors.warningSoft }}>
+          <Text style={{ color: colors.warning, fontFamily: fonts.uiSemi, fontSize: 13.5 }}>{t(L, 'settings.finishProfile')}</Text>
+        </Pressable>
       ) : null}
-      <Card>
-        <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>
-          {props.isAdmin || props.planTier === 'premium'
-            ? t(props.locale, 'settings.premium')
-            : t(props.locale, 'settings.freePlan')}
-        </Text>
-        <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13, marginTop: 4 }}>
-          {props.isAdmin || props.planTier === 'premium'
-            ? t(props.locale, 'settings.premiumUnlocked')
-            : t(props.locale, 'settings.freePlanHint')}
-        </Text>
-      </Card>
-      <Card>
-        <HubRow
-          title={t(props.locale, 'profile')}
-          subtitle={t(props.locale, 'settings.profileSubtitle')}
-          onPress={() => goPage('profile')}
+
+      <Group title={t(L, 'settings.groupGeneral')}>
+        <NavRow icon="globe" tint="blue" title={t(L, 'settings.languageRegion')} value={`${languageName} · ${props.currency || '—'}`} onPress={() => goPage('region')} />
+        <NavRow icon="paint-brush" tint="pink" title={t(L, 'settings.appearance')} onPress={() => goPage('themes')} />
+        <NavRow icon="bell" tint="red" title={t(L, 'notifications')} onPress={() => goPage('notifications')} last />
+      </Group>
+
+      <Group title={t(L, 'settings.groupMoneyHub')}>
+        <NavRow
+          icon="exchange"
+          tint="green"
+          title={t(L, 'settings.moneyTracking')}
+          value={smsAutoImport ? t(L, 'settings.smsOn') : undefined}
+          onPress={() => goPage('money')}
         />
-        <HubRow
-          title={t(props.locale, 'settings.region')}
-          subtitle={t(props.locale, 'settings.regionSubtitle')}
-          onPress={() => goPage('region')}
+        <NavRow icon="university" tint="teal" title={t(L, 'settings.paymentMethods')} onPress={props.onBanks} last />
+      </Group>
+
+      <Group title={t(L, 'settings.groupPrivacy')}>
+        <NavRow icon="lock" tint="slate" title={t(L, 'settings.security')} value={lockLabel} onPress={() => goPage('security')} />
+        <NavRow icon="shield" tint="violet" title={t(L, 'privacy')} onPress={() => goPage('privacy')} last />
+      </Group>
+
+      <Group>
+        <NavRow icon="info-circle" tint="slate" title={t(L, 'settings.about')} onPress={() => goPage('legal')} last={!props.isAdmin} />
+        {props.isAdmin ? <NavRow icon="wrench" tint="orange" title={t(L, 'admin')} onPress={() => goPage('admin')} last /> : null}
+      </Group>
+
+      <Group>
+        <NavRow
+          icon="sign-out"
+          title={t(L, 'signOut')}
+          danger
+          last
+          onPress={() =>
+            Alert.alert(t(L, 'signOut'), t(L, 'settings.signOutConfirm'), [
+              { text: t(L, 'common.cancel'), style: 'cancel' },
+              { text: t(L, 'signOut'), style: 'destructive', onPress: props.onLogout },
+            ])
+          }
         />
-        <HubRow title={t(props.locale, 'themes')} subtitle={t(props.locale, 'settings.themesSubtitle')} onPress={() => goPage('themes')} />
-        <HubRow title={t(props.locale, 'payments')} subtitle={t(props.locale, 'settings.paymentsSubtitle')} onPress={() => goPage('payments')} />
-        <HubRow title={t(props.locale, 'notifications')} subtitle={t(props.locale, 'settings.notificationsSubtitle')} onPress={() => goPage('notifications')} />
-        <HubRow title={t(props.locale, 'privacy')} subtitle={t(props.locale, 'settings.privacySubtitle')} onPress={() => goPage('privacy')} />
-        <HubRow
-          title={t(props.locale, 'settings.security')}
-          subtitle={t(props.locale, 'settings.securitySubtitle')}
-          onPress={() => goPage('security')}
-        />
-        <HubRow title={t(props.locale, 'legal')} subtitle={t(props.locale, 'settings.legalSubtitle')} onPress={() => goPage('legal')} />
-        {props.isAdmin ? (
-          <HubRow title={t(props.locale, 'admin')} subtitle={t(props.locale, 'settings.adminSubtitle')} onPress={() => goPage('admin')} />
-        ) : null}
-      </Card>
-      <SecondaryButton label={t(props.locale, 'signOut')} onPress={props.onLogout} />
+      </Group>
+      <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12, textAlign: 'center' }}>Lony {appVersion}</Text>
     </View>
   );
 }

@@ -11,6 +11,7 @@ import { Segmented } from '../components/Segmented';
 import { EmptyState } from '../components/EmptyState';
 import { Field, SelectField } from '../components/Field';
 import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/Confirm';
 import { CategoryIcon, Hero, HeroStat, Initials, SectionHead, hueFor } from '../components/Visuals';
 
 type Tab = 'dashboard' | 'income' | 'expenses' | 'bills';
@@ -55,6 +56,7 @@ export function HomePage() {
   const { user, token } = useAuth();
   const navigate = useNavigate();
   const { showError, show } = useToast();
+  const confirm = useConfirm();
   const [tab, setTab] = useState<Tab>('dashboard');
   // Friends who turned down their share of one of your expenses.
   const [declined, setDeclined] = useState<DeclinedShare[]>([]);
@@ -346,6 +348,14 @@ export function HomePage() {
 
   async function onDeleteTrip(id: string) {
     if (!token) return;
+    const trip = trips.find((t) => t.id === id);
+    const ok = await confirm({
+      title: `Remove ${trip?.title || 'this trip'}?`,
+      body: 'Its spending limit goes away. Your expenses stay.',
+      confirmLabel: 'Remove',
+      tone: 'danger',
+    });
+    if (!ok) return;
     setTripBusy(true);
     try {
       await api.deleteTrip(token, id);
@@ -629,16 +639,130 @@ export function HomePage() {
               {recent.length === 0 ? (
                 <EmptyState title="Nothing yet this month" body="Add income or an expense to get started." />
               ) : (
-                grouped(recent).map((g) => (
-                  <div key={g.day} className="tx-group">
-                    <div className="tx-day">{dayHeading(g.day)}</div>
-                    {g.rows.map((entry) => (
-                      <EntryRow key={entry.id} entry={entry} showDate={false} />
-                    ))}
-                  </div>
-                ))
+                <div className="scroll-list">
+                  {grouped(recent).map((g) => (
+                    <div key={g.day} className="tx-group">
+                      <div className="tx-day">{dayHeading(g.day)}</div>
+                      {g.rows.map((entry) => (
+                        <EntryRow key={entry.id} entry={entry} showDate={false} />
+                      ))}
+                    </div>
+                  ))}
+                </div>
               )}
             </Card>
+
+            <div className="grid grid-2 home-bottom">
+            <Card>
+              <SectionHead
+                title="Budgets"
+                sub={payday ? `${payday.days_left} days to payday` : undefined}
+                action={
+                  <button className="link-btn" onClick={() => setEditBudgets((v) => !v)}>
+                    {editBudgets ? 'Done' : 'Edit'}
+                  </button>
+                }
+              />
+              {payday?.limit_amount ? (
+                <PaceBar
+                  label="Until payday"
+                  spent={payday.spent}
+                  limitAmt={payday.limit_amount}
+                  currency={payday.currency_code || preferred}
+                  spentPct={payday.spent_pct ?? 0}
+                  pacePct={payday.pace_pct}
+                  ahead={payday.ahead}
+                />
+              ) : null}
+              {budgets.map((b) => (
+                <PaceBar
+                  key={b.id}
+                  label={b.category_name}
+                  spent={b.spent}
+                  limitAmt={b.limit_amount}
+                  currency={b.currency_code}
+                  spentPct={b.spent_pct ?? 0}
+                  pacePct={b.pace_pct ?? payday?.pace_pct ?? 0}
+                  ahead={Boolean(b.ahead)}
+                />
+              ))}
+              {budgets.length === 0 && !payday?.limit_amount && !editBudgets ? (
+                <div className="quiet">
+                  No budgets yet.{' '}
+                  <button className="link-btn" onClick={() => setEditBudgets(true)}>
+                    Set one
+                  </button>
+                </div>
+              ) : null}
+              {editBudgets ? (
+                <div className="inline-form">
+                  <div className="form-row">
+                    <Field label="Payday" value={paydayDay} onChange={setPaydayDay} inputMode="numeric" placeholder="1–28" />
+                    <Field label="Spend limit" value={paydayLimit} onChange={setPaydayLimit} money placeholder="0.00" />
+                  </div>
+                  <Button onClick={() => void onSavePayday()} busy={budgetBusy} block variant="secondary">
+                    Save payday
+                  </Button>
+                  <div className="form-row">
+                    <SelectField label="Category" value={budgetCategory} onChange={setBudgetCategory} options={expenseCatOptions} placeholder="Choose" />
+                    <Field label="Limit" value={budgetLimit} onChange={setBudgetLimit} money placeholder="0.00" />
+                  </div>
+                  <Button onClick={onSaveBudget} busy={budgetBusy} block variant="secondary">
+                    Save budget
+                  </Button>
+                </div>
+              ) : null}
+            </Card>
+            <Card>
+              <SectionHead
+                title="Trips & events"
+                action={
+                  <button className="link-btn" onClick={() => setAddTrip((v) => !v)}>
+                    {addTrip ? 'Cancel' : 'Add'}
+                  </button>
+                }
+              />
+              {trips.length === 0 && !addTrip ? <div className="quiet">Set a spending cap for a trip or event.</div> : null}
+              {trips.map((trip) => (
+                <div key={trip.id} className="trip">
+                  <PaceBar
+                    label={trip.title}
+                    spent={trip.spent}
+                    limitAmt={trip.limit_amount}
+                    currency={trip.currency_code}
+                    spentPct={trip.spent_pct}
+                    pacePct={trip.pace_pct}
+                    ahead={trip.ahead}
+                  />
+                  <div className="trip-foot">
+                    <span>
+                      {trip.starts_on} – {trip.ends_on}
+                      {trip.days_left >= 0 ? ` · ${trip.days_left} days left` : ''}
+                    </span>
+                    <button className="icon-btn sm ghost" aria-label="Remove trip" title="Remove trip" disabled={tripBusy} onClick={() => void onDeleteTrip(trip.id)}>
+                      <X size={14} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {addTrip ? (
+                <div className="inline-form">
+                  <Field label="Name" value={tripTitle} onChange={setTripTitle} placeholder="Addis trip, wedding…" />
+                  <div className="form-row">
+                    <Field label="Starts" type="date" value={tripStarts} onChange={setTripStarts} />
+                    <Field label="Ends" type="date" value={tripEnds} onChange={setTripEnds} />
+                  </div>
+                  <div className="form-row">
+                    <SelectField label="Currency" value={tripCurrency} onChange={setTripCurrency} options={CURRENCIES} />
+                    <Field label="Limit" value={tripLimit} onChange={setTripLimit} money placeholder="0.00" />
+                  </div>
+                  <Button onClick={() => void onSaveTrip().then((ok) => ok && setAddTrip(false))} busy={tripBusy} block>
+                    Save trip
+                  </Button>
+                </div>
+              ) : null}
+            </Card>
+            </div>
           </div>
 
           <div className="flex-col gap-lg">
@@ -770,116 +894,7 @@ export function HomePage() {
               )}
             </Card>
 
-            <Card>
-              <SectionHead
-                title="Budgets"
-                sub={payday ? `${payday.days_left} days to payday` : undefined}
-                action={
-                  <button className="link-btn" onClick={() => setEditBudgets((v) => !v)}>
-                    {editBudgets ? 'Done' : 'Edit'}
-                  </button>
-                }
-              />
-              {payday?.limit_amount ? (
-                <PaceBar
-                  label="Until payday"
-                  spent={payday.spent}
-                  limitAmt={payday.limit_amount}
-                  currency={payday.currency_code || preferred}
-                  spentPct={payday.spent_pct ?? 0}
-                  pacePct={payday.pace_pct}
-                  ahead={payday.ahead}
-                />
-              ) : null}
-              {budgets.map((b) => (
-                <PaceBar
-                  key={b.id}
-                  label={b.category_name}
-                  spent={b.spent}
-                  limitAmt={b.limit_amount}
-                  currency={b.currency_code}
-                  spentPct={b.spent_pct ?? 0}
-                  pacePct={b.pace_pct ?? payday?.pace_pct ?? 0}
-                  ahead={Boolean(b.ahead)}
-                />
-              ))}
-              {budgets.length === 0 && !payday?.limit_amount && !editBudgets ? (
-                <div className="quiet">
-                  No budgets yet.{' '}
-                  <button className="link-btn" onClick={() => setEditBudgets(true)}>
-                    Set one
-                  </button>
-                </div>
-              ) : null}
-              {editBudgets ? (
-                <div className="inline-form">
-                  <div className="form-row">
-                    <Field label="Payday" value={paydayDay} onChange={setPaydayDay} inputMode="numeric" placeholder="1–28" />
-                    <Field label="Spend limit" value={paydayLimit} onChange={setPaydayLimit} money placeholder="0.00" />
-                  </div>
-                  <Button onClick={() => void onSavePayday()} busy={budgetBusy} block variant="secondary">
-                    Save payday
-                  </Button>
-                  <div className="form-row">
-                    <SelectField label="Category" value={budgetCategory} onChange={setBudgetCategory} options={expenseCatOptions} placeholder="Choose" />
-                    <Field label="Limit" value={budgetLimit} onChange={setBudgetLimit} money placeholder="0.00" />
-                  </div>
-                  <Button onClick={onSaveBudget} busy={budgetBusy} block variant="secondary">
-                    Save budget
-                  </Button>
-                </div>
-              ) : null}
-            </Card>
 
-            <Card>
-              <SectionHead
-                title="Trips & events"
-                action={
-                  <button className="link-btn" onClick={() => setAddTrip((v) => !v)}>
-                    {addTrip ? 'Cancel' : 'Add'}
-                  </button>
-                }
-              />
-              {trips.length === 0 && !addTrip ? <div className="quiet">Set a spending cap for a trip or event.</div> : null}
-              {trips.map((trip) => (
-                <div key={trip.id} className="trip">
-                  <PaceBar
-                    label={trip.title}
-                    spent={trip.spent}
-                    limitAmt={trip.limit_amount}
-                    currency={trip.currency_code}
-                    spentPct={trip.spent_pct}
-                    pacePct={trip.pace_pct}
-                    ahead={trip.ahead}
-                  />
-                  <div className="trip-foot">
-                    <span>
-                      {trip.starts_on} – {trip.ends_on}
-                      {trip.days_left >= 0 ? ` · ${trip.days_left} days left` : ''}
-                    </span>
-                    <button className="icon-btn sm ghost" aria-label="Remove trip" title="Remove trip" disabled={tripBusy} onClick={() => void onDeleteTrip(trip.id)}>
-                      <X size={14} />
-                    </button>
-                  </div>
-                </div>
-              ))}
-              {addTrip ? (
-                <div className="inline-form">
-                  <Field label="Name" value={tripTitle} onChange={setTripTitle} placeholder="Addis trip, wedding…" />
-                  <div className="form-row">
-                    <Field label="Starts" type="date" value={tripStarts} onChange={setTripStarts} />
-                    <Field label="Ends" type="date" value={tripEnds} onChange={setTripEnds} />
-                  </div>
-                  <div className="form-row">
-                    <SelectField label="Currency" value={tripCurrency} onChange={setTripCurrency} options={CURRENCIES} />
-                    <Field label="Limit" value={tripLimit} onChange={setTripLimit} money placeholder="0.00" />
-                  </div>
-                  <Button onClick={() => void onSaveTrip().then((ok) => ok && setAddTrip(false))} busy={tripBusy} block>
-                    Save trip
-                  </Button>
-                </div>
-              ) : null}
-            </Card>
           </div>
         </div>
       ) : tab === 'bills' ? (

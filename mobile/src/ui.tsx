@@ -384,7 +384,7 @@ export function HeroCard({
   label: string;
   value: string;
   sub?: string;
-  tiles?: { label: string; value: string; onPress?: () => void }[];
+  tiles?: { label: string; value: string; note?: string; onPress?: () => void }[];
 }) {
   const { colors } = useTheme();
   return (
@@ -432,6 +432,11 @@ export function HeroCard({
               <Text style={{ color: colors.onPrimary, fontFamily: fonts.uiSemi, fontSize: 13 }} numberOfLines={1} adjustsFontSizeToFit>
                 {tile.value}
               </Text>
+              {tile.note ? (
+                <Text style={{ color: colors.onPrimary, opacity: 0.75, fontFamily: fonts.ui, fontSize: 10.5 }} numberOfLines={1}>
+                  {tile.note}
+                </Text>
+              ) : null}
             </Pressable>
           ))}
         </View>

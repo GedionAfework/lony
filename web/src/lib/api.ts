@@ -1130,8 +1130,12 @@ export const api = {
       headers: { 'Idempotency-Key': idemKey('chat-react') },
       body: JSON.stringify({ emoji, remove }),
     }, token),
-  deleteMessage: (token: string, messageId: string) =>
-    request<void>(`/messages/${messageId}`, { method: 'DELETE' }, token),
+  /** "me" hides it only for you; "everyone" removes it for both people (your own messages only). */
+  deleteMessage: (token: string, messageId: string, scope: 'me' | 'everyone' = 'everyone') =>
+    request<void>(`/messages/${messageId}?for=${scope}`, { method: 'DELETE' }, token),
+  /** Clears a chat from your list. The other person keeps their copy. */
+  deleteConversation: (token: string, conversationId: string) =>
+    request<void>(`/conversations/${conversationId}`, { method: 'DELETE' }, token),
 };
 
 export type SearchHit = {

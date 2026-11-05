@@ -321,7 +321,7 @@ export function LocalizationPage() {
 
   return (
     <PermissionGate perm="localization.manage">
-      <PageHeader title="Localization" subtitle="Manage language packs and display calendars" />
+      <PageHeader icon={Languages} title="Localization" subtitle="Manage language packs and display calendars" />
       {error ? <div className="banner banner-error" style={{ marginBottom: 16 }}>{error}</div> : null}
       {success ? <div className="banner banner-success" style={{ marginBottom: 16 }}>{success}</div> : null}
 

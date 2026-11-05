@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Landmark } from 'lucide-react';
+import { Landmark, MessageCircle } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { api, type BankProfile, type CashflowEntry, type Loan, type MoneyAccount, type Repayment } from '../lib/api';
 import { formatMoney } from '../lib/format';
@@ -15,6 +15,8 @@ import { Button } from '../components/Button';
 import { Field, SelectField } from '../components/Field';
 import { EmptyState } from '../components/EmptyState';
 import { useToast } from '../components/Toast';
+import { Hero, HeroStat } from '../components/Visuals';
+import { useConfirm } from '../components/Confirm';
 
 const STATUS_LABELS: Record<string, string> = {
   pending: 'Pending acceptance',
@@ -51,6 +53,7 @@ export function LoanDetailPage() {
   const navigate = useNavigate();
   const { user, token } = useAuth();
   const { showError, show } = useToast();
+  const confirm = useConfirm();
 
   const [loan, setLoan] = useState<Loan | null>(null);
   const [repayments, setRepayments] = useState<Repayment[]>([]);
@@ -128,6 +131,14 @@ export function LoanDetailPage() {
 
   async function onLoanAction(kind: 'accept' | 'reject' | 'cancel') {
     if (!token || !loan) return;
+    if (kind !== 'accept') {
+      const ok = await confirm(
+        kind === 'reject'
+          ? { title: 'Decline this loan?', body: 'The other person will be told you declined.', confirmLabel: 'Decline', tone: 'danger' }
+          : { title: 'Cancel this loan?', body: 'It closes for both of you. This can’t be undone.', confirmLabel: 'Cancel loan', cancelLabel: 'Keep it', tone: 'danger' },
+      );
+      if (!ok) return;
+    }
     setBusy(true);
     try {
       const res = kind === 'accept' ? await api.acceptLoan(token, loan.id) : kind === 'reject' ? await api.rejectLoan(token, loan.id) : await api.cancelLoan(token, loan.id);
@@ -285,33 +296,41 @@ export function LoanDetailPage() {
         right={<DueDatePill dueAt={nextInstallmentDue(loan)} status={loan.status} locale={locale} />}
       />
 
-      <Card>
-        <Money value={loan.expected_total ? formatMoney(loan.expected_total, loan.currency_code, locale) : STATUS_LABELS[loan.status] ?? loan.status} raw size="xl" />
-        {loan.title ? <div className="muted">{loan.reference_code}</div> : null}
-        {loan.institution_label ? (
-          <div style={{ fontWeight: 700, color: 'var(--primary)' }}>{loan.institution_label}</div>
-        ) : isSelfDebt ? (
-          <div className="muted">Your debt</div>
-        ) : peer?.id ? (
-          <button className="link-btn" onClick={() => navigate(`/chats/${peer.id}`)}>
-            {peerPrefix} {peer.display_name}
-          </button>
-        ) : (
-          <div className="muted">{peerPrefix} — Invite to Lony</div>
-        )}
-        {loan.loan_kind === 'long_term' && loan.installment_amount ? (
-          <div className="muted" style={{ marginTop: 6 }}>
-            {formatMoney(loan.installment_amount, loan.currency_code, locale)}/mo{loan.installment_count ? ` · ${loan.installment_count} months` : ''}
-          </div>
-        ) : null}
-        {loan.loan_kind !== 'long_term' && Number(loan.interest_rate_percent || 0) > 0 ? (
-          <div className="muted">
-            Interest {Number(loan.interest_rate_percent)}% {chargeLabel(loan.interest_charge)}
-            {loan.interest_charge === 'per_month' && loan.interest_period_months ? ` · ${loan.interest_period_months} months` : ''}
-          </div>
-        ) : null}
-        <StatusPill status={loan.status} />
-      </Card>
+      <Hero
+        label={isSelfDebt ? 'Your debt' : loan.your_role === 'lender' ? 'You lent' : 'You borrowed'}
+        value={loan.expected_total ? formatMoney(loan.outstanding_amount || loan.expected_total, loan.currency_code, locale) : STATUS_LABELS[loan.status] ?? loan.status}
+        sub={[
+          loan.reference_code,
+          loan.loan_kind === 'long_term' && loan.installment_amount
+            ? `${formatMoney(loan.installment_amount, loan.currency_code, locale)}/mo${loan.installment_count ? ` · ${loan.installment_count} months` : ''}`
+            : null,
+          loan.loan_kind !== 'long_term' && Number(loan.interest_rate_percent || 0) > 0
+            ? `Interest ${Number(loan.interest_rate_percent)}% ${chargeLabel(loan.interest_charge)}${loan.interest_charge === 'per_month' && loan.interest_period_months ? ` · ${loan.interest_period_months} months` : ''}`
+            : null,
+        ]
+          .filter(Boolean)
+          .join(' · ')}
+        aside={
+          <>
+            {loan.institution_label ? (
+              <HeroStat label="With" value={loan.institution_label} />
+            ) : !isSelfDebt && peer?.id ? (
+              <button type="button" className="hero-stat hero-link" onClick={() => navigate(`/chats/${peer.id}`)}>
+                <small>{peerPrefix}</small>
+                <strong>
+                  {peer.display_name} <MessageCircle size={14} />
+                </strong>
+              </button>
+            ) : !isSelfDebt ? (
+              <HeroStat label={peerPrefix} value="Invite to Lony" />
+            ) : null}
+            <HeroStat label="Status" value={STATUS_LABELS[loan.status] ?? loan.status} />
+            {loan.expected_total && loan.outstanding_amount && loan.outstanding_amount !== loan.expected_total ? (
+              <HeroStat label="Total" value={formatMoney(loan.expected_total, loan.currency_code, locale)} />
+            ) : null}
+          </>
+        }
+      />
 
       {loan.installments && loan.installments.length > 0 ? (
         <Card>

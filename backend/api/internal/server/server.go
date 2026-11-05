@@ -454,6 +454,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 			r.Get("/conversations", chatH.ListConversations)
 			r.With(idem.Handler("chat.open")).Post("/conversations", chatH.Open)
 			r.Get("/conversations/{id}/messages", chatH.ListMessages)
+			r.Delete("/conversations/{id}", chatH.DeleteConversation)
 			r.With(idem.Handler("chat.send")).Post("/conversations/{id}/messages", chatH.Send)
 			r.With(idem.Handler("chat.react")).Post("/messages/{id}/reactions", chatH.React)
 			r.Delete("/messages/{id}", chatH.DeleteMessage)

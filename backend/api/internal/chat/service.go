@@ -95,6 +95,8 @@ type MessageQuery struct {
 	BeforeID *uuid.UUID
 	Since    *time.Time
 	Limit    int32
+	// Viewer hides what this person deleted for themselves or cleared.
+	Viewer uuid.UUID
 }
 
 // SinceOverlap re-reads a little before the cursor so a message committed just after
@@ -142,6 +144,10 @@ type Store interface {
 	// at query time, used as the next "since" cursor.
 	ListMessages(ctx context.Context, conversationID uuid.UUID, q MessageQuery) ([]Message, time.Time, error)
 	SoftDeleteMessage(ctx context.Context, id, senderID uuid.UUID) (Message, error)
+	// HideMessage removes a message from one member's view only.
+	HideMessage(ctx context.Context, id, userID uuid.UUID) error
+	// ClearConversation empties a chat for one member; new messages bring it back.
+	ClearConversation(ctx context.Context, conversationID, userID uuid.UUID) error
 	UpsertReaction(ctx context.Context, messageID, userID uuid.UUID, emoji string) (Reaction, error)
 	DeleteReaction(ctx context.Context, messageID, userID uuid.UUID, emoji string) error
 	ListReactions(ctx context.Context, messageIDs []uuid.UUID) ([]Reaction, error)
@@ -428,6 +434,7 @@ func (s *Service) ListMessages(ctx context.Context, actor, conversationID uuid.U
 	if paging {
 		q.Limit++ // one extra row tells us whether older messages exist
 	}
+	q.Viewer = actor
 	rows, dbNow, err := s.store.ListMessages(ctx, conversationID, q)
 	if err != nil {
 		return MessagePage{}, err
@@ -585,12 +592,37 @@ func (s *Service) React(ctx context.Context, actor, messageID uuid.UUID, emoji s
 	return out[0], nil
 }
 
-func (s *Service) Delete(ctx context.Context, actor, messageID uuid.UUID) error {
-	_, err := s.store.SoftDeleteMessage(ctx, messageID, actor)
+// Delete removes a message. For everyone: only the sender can, and both people stop
+// seeing it. For me: anyone in the chat can hide it from their own view.
+func (s *Service) Delete(ctx context.Context, actor, messageID uuid.UUID, forEveryone bool) error {
+	msg, err := s.store.GetMessage(ctx, messageID)
 	if err != nil {
 		return httpx.E(404, "NOT_FOUND", "message not found")
 	}
+	if err := s.requireMember(ctx, msg.ConversationID, actor); err != nil {
+		return httpx.E(404, "NOT_FOUND", "message not found")
+	}
+	if !forEveryone {
+		return s.store.HideMessage(ctx, messageID, actor)
+	}
+	if msg.SenderID != actor {
+		return httpx.E(403, "NOT_SENDER", "you can only delete your own messages for everyone")
+	}
+	if msg.DeletedAt != nil {
+		return nil
+	}
+	if _, err := s.store.SoftDeleteMessage(ctx, messageID, actor); err != nil {
+		return httpx.E(404, "NOT_FOUND", "message not found")
+	}
 	return nil
+}
+
+// DeleteConversation clears a chat from the actor's list. The other person keeps theirs.
+func (s *Service) DeleteConversation(ctx context.Context, actor, conversationID uuid.UUID) error {
+	if err := s.requireMember(ctx, conversationID, actor); err != nil {
+		return err
+	}
+	return s.store.ClearConversation(ctx, conversationID, actor)
 }
 
 func (s *Service) requireMember(ctx context.Context, conversationID, userID uuid.UUID) error {

@@ -6,7 +6,7 @@ import { api, type PeerTrust, type SearchHit } from '../lib/api';
 import { PageHeader } from '../components/PageHeader';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
-import { Avatar } from '../components/Avatar';
+import { Avatar, prepareAvatar, primeAvatar } from '../components/Avatar';
 import { useToast } from '../components/Toast';
 
 export function PeerProfilePage() {
@@ -60,29 +60,20 @@ export function PeerProfilePage() {
       .finally(() => setLoading(false));
   }, [token, peerId, showError, isSelf, user]);
 
-  function onPickAvatar(file: File) {
+  async function onPickAvatar(file: File) {
     if (!token) return;
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const result = String(reader.result || '');
-      const idx = result.indexOf(',');
-      const b64 = idx >= 0 ? result.slice(idx + 1) : result;
-      setBusy(true);
-      try {
-        const res = await api.uploadAvatar(token, {
-          filename: file.name,
-          mime: file.type || 'image/jpeg',
-          attachment_base64: b64,
-        });
-        setUser(res.user);
-        setPeer((prev) => (prev ? { ...prev, avatar_url: res.user.avatar_url } : prev));
-      } catch (e) {
-        showError(e instanceof Error ? e.message : 'Could not upload photo');
-      } finally {
-        setBusy(false);
-      }
-    };
-    reader.readAsDataURL(file);
+    setBusy(true);
+    try {
+      const pic = await prepareAvatar(file);
+      const res = await api.uploadAvatar(token, { filename: pic.filename, mime: pic.mime, attachment_base64: pic.base64 });
+      primeAvatar(res.user.avatar_url, pic.blob);
+      setUser(res.user);
+      setPeer((prev) => (prev ? { ...prev, avatar_url: res.user.avatar_url } : prev));
+    } catch (e) {
+      showError(e instanceof Error ? e.message : 'Could not upload photo');
+    } finally {
+      setBusy(false);
+    }
   }
 
   if (loading) return <div className="page">Loading…</div>;
@@ -135,7 +126,7 @@ export function PeerProfilePage() {
             type="file"
             accept="image/*"
             style={{ display: 'none' }}
-            onChange={(e) => e.target.files?.[0] && onPickAvatar(e.target.files[0])}
+            onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) void onPickAvatar(f); }}
           />
           <div style={{ fontWeight: 800, fontSize: 20 }}>{displayName}</div>
           {peer?.username ? <div className="muted">@{peer.username}</div> : null}

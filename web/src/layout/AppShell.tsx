@@ -21,6 +21,7 @@ import {
 import { useAuth } from '../auth/AuthContext';
 import { useTheme } from '../lib/theme';
 import { api, type AppNotification } from '../lib/api';
+import { Avatar } from '../components/Avatar';
 
 type NavItem = { to: string; label: string; icon: LucideIcon; end?: boolean; group: string };
 
@@ -121,6 +122,15 @@ export function AppShell() {
     };
   }, []);
 
+  // The top bar turns to frosted glass once the page scrolls under it.
+  const [scrolled, setScrolled] = useState(false);
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 8);
+    onScroll();
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, []);
+
   // Each new page starts at the top.
   useEffect(() => {
     window.scrollTo(0, 0);
@@ -152,7 +162,6 @@ export function AppShell() {
   }
 
   const name = user?.display_name || user?.username || 'Account';
-  const initial = (user?.first_name || name).trim().slice(0, 1).toUpperCase() || '?';
   const current =
     NAV_ITEMS.find((i) => (i.end ? location.pathname === i.to : location.pathname.startsWith(i.to))) ??
     (location.pathname.startsWith('/cashflow') ? NAV_ITEMS[0] : location.pathname.startsWith('/people') ? NAV_ITEMS[5] : null);
@@ -186,7 +195,7 @@ export function AppShell() {
 
         <div className="sidebar-footer">
           <button type="button" className="sidebar-user" onClick={() => navigate('/settings')}>
-            <div className="avatar">{user?.avatar_url ? <img src={user.avatar_url} alt="" /> : initial}</div>
+            <Avatar src={user?.avatar_url} token={token} letter={name} />
             <div className="who">
               <strong>{name}</strong>
               <small>{user?.email}</small>
@@ -199,7 +208,7 @@ export function AppShell() {
       </aside>
 
       <div className="app-main">
-        <header className="topbar">
+        <header className={`topbar ${scrolled ? 'scrolled' : ''}`}>
           <button className="icon-btn menu-toggle" aria-label="Menu" onClick={() => setSidebarOpen((v) => !v)}>
             <Menu size={18} />
           </button>
@@ -269,7 +278,7 @@ export function AppShell() {
 
           <div className="dropdown topbar-user" ref={userRef}>
             <button type="button" className="user-chip" onClick={() => setUserMenuOpen((v) => !v)}>
-              <div className="avatar">{user?.avatar_url ? <img src={user.avatar_url} alt="" /> : initial}</div>
+              <Avatar src={user?.avatar_url} token={token} letter={name} />
               <ChevronDown size={14} />
             </button>
             {userMenuOpen ? (

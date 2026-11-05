@@ -33,6 +33,7 @@ type memoryStore struct {
 	reactions     []Reaction
 	peers         map[uuid.UUID]Peer
 	readAt        map[string]time.Time
+	hidden        map[string]bool
 	// clock moves a minute per write so ordering and "since" are deterministic.
 	clock time.Time
 }
@@ -255,6 +256,10 @@ func (m *memoryStore) ListMessages(_ context.Context, conversationID uuid.UUID, 
 	all := []Message{}
 	for _, msg := range m.messages {
 		if msg.ConversationID == conversationID {
+			if m.hidden[msg.ID.String()+"|"+q.Viewer.String()] && msg.DeletedAt == nil {
+				at := msg.UpdatedAt
+				msg.DeletedAt = &at
+			}
 			all = append(all, msg)
 		}
 	}
@@ -313,6 +318,18 @@ func (m *memoryStore) SoftDeleteMessage(_ context.Context, id, senderID uuid.UUI
 	msg.UpdatedAt = at
 	m.messages[id] = msg
 	return msg, nil
+}
+func (m *memoryStore) HideMessage(_ context.Context, id, userID uuid.UUID) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.hidden == nil {
+		m.hidden = map[string]bool{}
+	}
+	m.hidden[id.String()+"|"+userID.String()] = true
+	return nil
+}
+func (m *memoryStore) ClearConversation(_ context.Context, conversationID, userID uuid.UUID) error {
+	return nil
 }
 func (m *memoryStore) UpsertReaction(_ context.Context, messageID, userID uuid.UUID, emoji string) (Reaction, error) {
 	m.mu.Lock()

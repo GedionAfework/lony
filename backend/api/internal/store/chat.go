@@ -98,6 +98,8 @@ func (s *SQLStore) IsMember(ctx context.Context, conversationID, userID uuid.UUI
 }
 
 func (s *SQLStore) ListConversations(ctx context.Context, userID uuid.UUID) ([]chat.ConversationListRow, error) {
+	// A chat the user deleted stays hidden until a newer message arrives. Messages they
+	// deleted for themselves never count as the preview or as unread.
 	const q = `
 SELECT
   c.id, c.user_low_id, c.user_high_id, c.loan_id, c.last_message_at, c.created_at,
@@ -108,7 +110,9 @@ SELECT
     WHERE msg.conversation_id = c.id
       AND msg.deleted_at IS NULL
       AND msg.sender_id <> $1
+      AND msg.created_at > COALESCE(cm.cleared_at, '-infinity'::timestamptz)
       AND (cm.last_read_at IS NULL OR msg.created_at > cm.last_read_at)
+      AND NOT EXISTS (SELECT 1 FROM message_hides h WHERE h.message_id = msg.id AND h.user_id = $1)
   ) AS unread_count
 FROM conversations c
 JOIN conversation_members cm ON cm.conversation_id = c.id AND cm.user_id = $1
@@ -120,10 +124,13 @@ LEFT JOIN LATERAL (
   SELECT body, attachment_kind, sender_id, created_at
   FROM messages
   WHERE conversation_id = c.id AND deleted_at IS NULL
+    AND created_at > COALESCE(cm.cleared_at, '-infinity'::timestamptz)
+    AND NOT EXISTS (SELECT 1 FROM message_hides h WHERE h.message_id = messages.id AND h.user_id = $1)
   ORDER BY created_at DESC
   LIMIT 1
 ) m ON true
-ORDER BY COALESCE(c.last_message_at, c.created_at) DESC`
+WHERE cm.cleared_at IS NULL OR m.created_at IS NOT NULL
+ORDER BY COALESCE(m.created_at, c.last_message_at, c.created_at) DESC`
 	rows, err := s.pool.Query(ctx, q, userID)
 	if err != nil {
 		return nil, err
@@ -149,8 +156,31 @@ func (s *SQLStore) TouchConversation(ctx context.Context, id uuid.UUID, at time.
 	return err
 }
 
-func (s *SQLStore) MarkConversationRead(ctx context.Context, conversationID, userID uuid.UUID, at time.Time) error {
-	_, err := s.pool.Exec(ctx, `UPDATE conversation_members SET last_read_at=$3 WHERE conversation_id=$1 AND user_id=$2`, conversationID, userID, at)
+// MarkConversationRead stamps the read time with the database clock, the same clock
+// that stamps messages, so a message is never "unread" or "read" because two
+// machines disagree about the time. It never moves backwards.
+func (s *SQLStore) MarkConversationRead(ctx context.Context, conversationID, userID uuid.UUID, _ time.Time) error {
+	const q = `UPDATE conversation_members
+		SET last_read_at = GREATEST(
+			COALESCE(last_read_at, '-infinity'::timestamptz),
+			now(),
+			COALESCE((SELECT max(created_at) FROM messages WHERE conversation_id = $1), '-infinity'::timestamptz))
+		WHERE conversation_id = $1 AND user_id = $2`
+	_, err := s.pool.Exec(ctx, q, conversationID, userID)
+	return err
+}
+
+func (s *SQLStore) HideMessage(ctx context.Context, id, userID uuid.UUID) error {
+	const q = `INSERT INTO message_hides (message_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`
+	_, err := s.pool.Exec(ctx, q, id, userID)
+	return err
+}
+
+func (s *SQLStore) ClearConversation(ctx context.Context, conversationID, userID uuid.UUID) error {
+	const q = `UPDATE conversation_members
+		SET cleared_at = now(), last_read_at = GREATEST(COALESCE(last_read_at, '-infinity'::timestamptz), now())
+		WHERE conversation_id = $1 AND user_id = $2`
+	_, err := s.pool.Exec(ctx, q, conversationID, userID)
 	return err
 }
 
@@ -257,37 +287,42 @@ func (s *SQLStore) GetMessage(ctx context.Context, id uuid.UUID) (chat.Message, 
 }
 
 func (s *SQLStore) ListMessages(ctx context.Context, conversationID uuid.UUID, mq chat.MessageQuery) ([]chat.Message, time.Time, error) {
+	// $1 is always the conversation and $2 the viewer. "hidden" is true when the
+	// viewer deleted the message for themselves.
 	const cols = `id, conversation_id, sender_id, body, reply_to_message_id,
 		attachment_kind, attachment_name, attachment_mime, attachment_size,
-		attachment_object_key, voice_duration_ms, created_at, updated_at, deleted_at`
+		attachment_object_key, voice_duration_ms, created_at, updated_at, deleted_at,
+		EXISTS (SELECT 1 FROM message_hides h WHERE h.message_id = messages.id AND h.user_id = $2) AS hidden`
+	const visible = ` AND created_at > COALESCE((SELECT cleared_at FROM conversation_members WHERE conversation_id = $1 AND user_id = $2), '-infinity'::timestamptz)`
+	const notHidden = ` AND NOT EXISTS (SELECT 1 FROM message_hides h WHERE h.message_id = messages.id AND h.user_id = $2)`
 	var q string
-	var args []any
+	args := []any{conversationID, mq.Viewer}
 	newestFirst := false
 	switch {
 	case mq.Since != nil:
 		// Everything that changed, deleted rows included so the app can remove them.
 		q = `SELECT ` + cols + ` FROM messages
-			WHERE conversation_id=$1 AND updated_at > $2
-			ORDER BY updated_at ASC, id ASC LIMIT $3`
-		args = []any{conversationID, mq.Since.Add(-chat.SinceOverlap), mq.Limit}
+			WHERE conversation_id=$1 AND updated_at > $3` + visible + `
+			ORDER BY updated_at ASC, id ASC LIMIT $4`
+		args = append(args, mq.Since.Add(-chat.SinceOverlap), mq.Limit)
 	case mq.After != nil:
 		q = `SELECT ` + cols + ` FROM messages
-			WHERE conversation_id=$1 AND deleted_at IS NULL AND created_at > $2
-			ORDER BY created_at ASC, id ASC LIMIT $3`
-		args = []any{conversationID, *mq.After, mq.Limit}
+			WHERE conversation_id=$1 AND deleted_at IS NULL AND created_at > $3` + visible + notHidden + `
+			ORDER BY created_at ASC, id ASC LIMIT $4`
+		args = append(args, *mq.After, mq.Limit)
 	case mq.Before != nil:
 		newestFirst = true
 		q = `SELECT ` + cols + ` FROM messages
 			WHERE conversation_id=$1 AND deleted_at IS NULL
-			  AND (created_at < $2 OR (created_at = $2 AND $3::uuid IS NOT NULL AND id < $3))
-			ORDER BY created_at DESC, id DESC LIMIT $4`
-		args = []any{conversationID, *mq.Before, mq.BeforeID, mq.Limit}
+			  AND (created_at < $3 OR (created_at = $3 AND $4::uuid IS NOT NULL AND id < $4))` + visible + notHidden + `
+			ORDER BY created_at DESC, id DESC LIMIT $5`
+		args = append(args, *mq.Before, mq.BeforeID, mq.Limit)
 	default:
 		newestFirst = true
 		q = `SELECT ` + cols + ` FROM messages
-			WHERE conversation_id=$1 AND deleted_at IS NULL
-			ORDER BY created_at DESC, id DESC LIMIT $2`
-		args = []any{conversationID, mq.Limit}
+			WHERE conversation_id=$1 AND deleted_at IS NULL` + visible + notHidden + `
+			ORDER BY created_at DESC, id DESC LIMIT $3`
+		args = append(args, mq.Limit)
 	}
 	var dbNow time.Time
 	if err := s.pool.QueryRow(ctx, `SELECT now()`).Scan(&dbNow); err != nil {
@@ -301,12 +336,18 @@ func (s *SQLStore) ListMessages(ctx context.Context, conversationID uuid.UUID, m
 	out := []chat.Message{}
 	for rows.Next() {
 		var m chat.Message
+		var hidden bool
 		if err := rows.Scan(
 			&m.ID, &m.ConversationID, &m.SenderID, &m.Body, &m.ReplyToMessageID,
 			&m.AttachmentKind, &m.AttachmentName, &m.AttachmentMIME, &m.AttachmentSize,
-			&m.AttachmentObjectKey, &m.VoiceDurationMs, &m.CreatedAt, &m.UpdatedAt, &m.DeletedAt,
+			&m.AttachmentObjectKey, &m.VoiceDurationMs, &m.CreatedAt, &m.UpdatedAt, &m.DeletedAt, &hidden,
 		); err != nil {
 			return nil, time.Time{}, err
+		}
+		if hidden && m.DeletedAt == nil {
+			// Deleted for this viewer: the app removes it like any deleted message.
+			at := m.UpdatedAt
+			m.DeletedAt = &at
 		}
 		out = append(out, m)
 	}

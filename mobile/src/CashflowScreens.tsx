@@ -39,6 +39,112 @@ import {
 
 type Kind = 'income' | 'expense';
 
+function isoDaysAgo(n: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/** Big amount entry at the top of the form, with the currency beside it. */
+function AmountHero({
+  kind,
+  amount,
+  onAmount,
+  currency,
+  onCurrency,
+  autoFocus,
+}: {
+  kind: Kind;
+  amount: string;
+  onAmount: (v: string) => void;
+  currency: string;
+  onCurrency: (v: string) => void;
+  autoFocus?: boolean;
+}) {
+  const { colors } = useTheme();
+  const [pickCurrency, setPickCurrency] = useState(false);
+  const tint = kind === 'income' ? colors.success : colors.secondary;
+  return (
+    <View style={{ gap: 8 }}>
+      <View
+        style={{
+          alignItems: 'center',
+          gap: 6,
+          paddingVertical: 18,
+          paddingHorizontal: 12,
+          borderRadius: 18,
+          backgroundColor: tint + '14',
+          borderWidth: 1,
+          borderColor: tint + '33',
+        }}
+      >
+        <Text style={{ color: colors.muted, fontFamily: fonts.uiSemi, fontSize: 13 }}>
+          {kind === 'income' ? 'Amount received' : 'Amount spent'}
+        </Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <Pressable
+            onPress={() => setPickCurrency((v) => !v)}
+            accessibilityLabel="Change currency"
+            style={{ paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border }}
+          >
+            <Text style={{ color: colors.textSecondary, fontFamily: fonts.uiBold, fontSize: 14 }}>{currency || '—'} ▾</Text>
+          </Pressable>
+          <TextInput
+            value={amount}
+            onChangeText={(v) => onAmount(formatAmountCommas(v))}
+            placeholder="0"
+            placeholderTextColor={colors.borderStrong}
+            keyboardType="decimal-pad"
+            autoFocus={autoFocus}
+            style={{ minWidth: 120, maxWidth: 240, color: colors.text, fontFamily: fonts.uiBold, fontSize: 40, textAlign: 'center', paddingVertical: 0 }}
+          />
+        </View>
+      </View>
+      {pickCurrency ? (
+        <SearchSelect
+          label="Currency"
+          value={currency}
+          onChange={(v) => {
+            onCurrency(v);
+            setPickCurrency(false);
+          }}
+          options={CURRENCIES}
+        />
+      ) : null}
+    </View>
+  );
+}
+
+/** Pill buttons: tap one to choose. Used for accounts and dates. */
+function ChipRow({ options, value, onChange }: { options: { id: string; label: string }[]; value: string; onChange: (id: string) => void }) {
+  const { colors } = useTheme();
+  return (
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+      {options.map((o) => {
+        const on = o.id === value;
+        return (
+          <Pressable
+            key={o.id}
+            onPress={() => onChange(o.id)}
+            accessibilityRole="radio"
+            accessibilityState={{ checked: on }}
+            style={{
+              paddingHorizontal: 14,
+              paddingVertical: 9,
+              borderRadius: radii.full,
+              backgroundColor: on ? colors.primary : colors.surfaceMuted,
+              borderWidth: 1,
+              borderColor: on ? colors.primary : colors.border,
+            }}
+          >
+            <Text style={{ color: on ? colors.onPrimary : colors.text, fontFamily: fonts.uiSemi, fontSize: 13 }}>{o.label}</Text>
+          </Pressable>
+        );
+      })}
+    </ScrollView>
+  );
+}
+
 export type CashflowFormPrefill = {
   title?: string;
   amount?: string;
@@ -157,6 +263,9 @@ export function CashflowFormScreen({
   const [recurrence, setRecurrence] = useState<string>(editing?.recurrence || 'monthly');
   const [accounts, setAccounts] = useState<MoneyAccount[]>([]);
   const [accountId, setAccountId] = useState(editing?.account_id ?? prefill?.account_id ?? '');
+  const [pickDate, setPickDate] = useState(false);
+  // Note and trip stay folded away until asked for (or already filled in).
+  const [moreOpen, setMoreOpen] = useState(Boolean(editing?.note || prefill?.note || editing?.trip_id));
 
   // Expense flow choices
   const [isLoanPayment, setIsLoanPayment] = useState('no');
@@ -923,14 +1032,13 @@ export function CashflowFormScreen({
           </>
         ) : (
           <>
-            <Field label="Amount" value={amount} onChange={setAmount} money />
+            <AmountHero kind={kind} amount={amount} onAmount={setAmount} currency={currency} onCurrency={setCurrency} autoFocus={!editing && !prefill} />
             <Field
               label={kind === 'income' ? 'From' : 'What was it for?'}
               value={title}
               onChange={setTitle}
               placeholder={kind === 'income' ? 'e.g. Salary' : 'e.g. Lunch, taxi, rent'}
             />
-            <SearchSelect label="Currency" value={currency} onChange={setCurrency} options={CURRENCIES} />
             {canSplitPayment ? (
               <>
                 <CheckRow
@@ -1006,15 +1114,26 @@ export function CashflowFormScreen({
               </>
             ) : (
               <>
-                <SearchSelect
-                  label="Account"
-                  value={accountId}
-                  onChange={setAccountId}
-                  options={accountOptions}
-                  placeholder={
-                    accountOptions.length ? 'Which account?' : `Add a ${currency} account first`
-                  }
-                />
+                {accountOptions.length > 0 && accountOptions.length <= 6 ? (
+                  <View style={{ gap: 8 }}>
+                    <Text style={{ color: colors.muted, fontFamily: fonts.uiSemi, fontSize: 13 }}>
+                      {kind === 'income' ? 'Into which account?' : 'Paid from'}
+                    </Text>
+                    <ChipRow
+                      value={accountId}
+                      onChange={setAccountId}
+                      options={accountOptions.map((o) => ({ id: o.id, label: o.label.split(' · ')[0] }))}
+                    />
+                  </View>
+                ) : (
+                  <SearchSelect
+                    label="Account"
+                    value={accountId}
+                    onChange={setAccountId}
+                    options={accountOptions}
+                    placeholder={accountOptions.length ? 'Which account?' : `Add a ${currency} account first`}
+                  />
+                )}
                 <View style={{ gap: 8 }}>
                   <Text style={{ color: colors.muted, fontFamily: fonts.uiSemi, fontSize: 13 }}>Category</Text>
                   <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
@@ -1065,7 +1184,7 @@ export function CashflowFormScreen({
                 ) : null}
               </>
             )}
-            {kind === 'expense' && trips.length ? (
+            {kind === 'expense' && trips.length && moreOpen ? (
               <SearchSelect
                 label={t(user.locale, 'cashflow.trip')}
                 value={tripId || 'none'}
@@ -1079,7 +1198,23 @@ export function CashflowFormScreen({
                 ]}
               />
             ) : null}
-            <DateField label="Date" value={date} onChange={setDate} />
+            <View style={{ gap: 8 }}>
+              <Text style={{ color: colors.muted, fontFamily: fonts.uiSemi, fontSize: 13 }}>When</Text>
+              <ChipRow
+                value={date === isoDaysAgo(0) ? 'today' : date === isoDaysAgo(1) ? 'yesterday' : 'other'}
+                onChange={(id) => {
+                  if (id === 'today') setDate(isoDaysAgo(0));
+                  else if (id === 'yesterday') setDate(isoDaysAgo(1));
+                  else setPickDate(true);
+                }}
+                options={[
+                  { id: 'today', label: 'Today' },
+                  { id: 'yesterday', label: 'Yesterday' },
+                  { id: 'other', label: date !== isoDaysAgo(0) && date !== isoDaysAgo(1) ? date : 'Pick a date' },
+                ]}
+              />
+              {pickDate || (date !== isoDaysAgo(0) && date !== isoDaysAgo(1)) ? <DateField label="Date" value={date} onChange={setDate} /> : null}
+            </View>
 
             {kind === 'income' ? (
               <>
@@ -1420,11 +1555,23 @@ export function CashflowFormScreen({
               </>
             ) : null}
 
-            <Field label="Note" value={note} onChange={setNote} />
+            {moreOpen ? (
+              <Field label="Note" value={note} onChange={setNote} placeholder="Anything to remember" />
+            ) : (
+              <Pressable onPress={() => setMoreOpen(true)} hitSlop={8} style={{ alignSelf: 'flex-start', paddingVertical: 4 }}>
+                <Text style={{ color: colors.primary, fontFamily: fonts.uiSemi, fontSize: 14 }}>
+                  + {kind === 'expense' && trips.length ? 'Add a note or trip' : 'Add a note'}
+                </Text>
+              </Pressable>
+            )}
           </>
         )}
 
-        <PrimaryButton label={busy ? 'Saving…' : 'Save'} onPress={onSave} disabled={busy} />
+        <PrimaryButton
+          label={busy ? 'Saving…' : `Save ${kind === 'income' ? 'income' : 'expense'}`}
+          onPress={onSave}
+          disabled={busy || (isLoanPayment !== 'yes' && (!stripAmount(amount) || Number(stripAmount(amount)) <= 0))}
+        />
       </Card>
       <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
         {kind === 'income' && incomePeriodic === 'yes'

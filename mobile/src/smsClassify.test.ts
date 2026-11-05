@@ -6,6 +6,19 @@ import { classifySms } from './smsClassify';
 type Case = { name: string; sender: string; body: string; verdict: 'transaction' | 'review' | 'ignore'; kind?: 'income' | 'expense'; amount?: string };
 
 const cases: Case[] = [
+  // Short bank alerts that only say "debited"/"credited" (no "has been"): still clear.
+  { name: 'Debited first word', sender: 'CBE', verdict: 'transaction', kind: 'expense', amount: '1250.00',
+    body: 'Debited ETB 1,250.00 from A/C 1*****5678 on 04-Nov-2026. Available balance ETB 8,750.00. Ref FT26308ABC' },
+  { name: 'A/C debited with', sender: 'CBE', verdict: 'transaction', kind: 'expense', amount: '1250.00',
+    body: 'Your A/C 1*****5678 debited with ETB 1,250.00 on 04/11/2026. Bal ETB 8,750.00' },
+  { name: 'Debit Alert', sender: 'AWASH', verdict: 'transaction', kind: 'expense', amount: '1250.00',
+    body: 'Debit Alert: Acct 01320****900 ETB 1,250.00 debited. Avl Bal ETB 8,750.00' },
+  { name: 'Rs debited from a/c', sender: 'HDFCBK', verdict: 'transaction', kind: 'expense', amount: '1250.00',
+    body: 'Rs.1250.00 debited from a/c **5678 on 04-11-26 to VPA abc@okicici. Avl bal Rs 8750' },
+  { name: 'Credited first word', sender: 'CBE', verdict: 'transaction', kind: 'income', amount: '2000.00',
+    body: 'Credited ETB 2,000.00 to A/C 1*****5678 on 04-Nov-2026. Available balance ETB 10,750.00' },
+  { name: 'Credit Alert', sender: 'AWASH', verdict: 'transaction', kind: 'income', amount: '2000.00',
+    body: 'Credit Alert: Acct 01320****900 ETB 2,000.00 credited. Avl Bal ETB 10,750.00' },
   // Real money that moved: saved automatically.
   { name: 'CBE debit', sender: 'CBE', verdict: 'transaction', kind: 'expense', amount: '500.00',
     body: 'Dear Abebe your Account 1*****1234 has been debited with ETB 500.00. Your Current Balance is ETB 9,500.00 Thank you for Banking with CBE! https://apps.cbe.com.et:100/?id=FT12345' },

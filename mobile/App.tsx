@@ -308,6 +308,8 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   const [receiveInto, setReceiveInto] = useState<Record<string, string>>({});
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  // Unread chat messages for the Chats tab (notifications have their own count).
+  const [chatUnread, setChatUnread] = useState(0);
   const [profileName, setProfileName] = useState('');
   const [profileUsername, setProfileUsername] = useState('');
   const [profileFirstName, setProfileFirstName] = useState('');
@@ -1169,6 +1171,29 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
       received?.remove();
     };
   }, [token]);
+
+  // Keeps the Chats badge right while you're on other tabs (the chat screen updates it live).
+  useEffect(() => {
+    if (!token || !user) return;
+    let cancelled = false;
+    const tick = () =>
+      api
+        .listConversations(token)
+        .then((res) => {
+          if (cancelled) return;
+          const n = (res.conversations ?? [])
+            .filter((c) => c.peer.id !== user.id && c.peer.display_name !== 'Self')
+            .reduce((sum, c) => sum + (c.unread_count || 0), 0);
+          setChatUnread(n);
+        })
+        .catch(() => undefined);
+    void tick();
+    const id = setInterval(tick, 20000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [token, user?.id, screen === 'chats']);
 
   async function onActivateSmsImport() {
     if (!token || !user) return;
@@ -2469,6 +2494,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               onPeerOpened={() => setChatPeerId(null)}
               onError={(message) => setError(message)}
               onActiveChange={setChatThreadOpen}
+              onUnreadChange={setChatUnread}
               onOpenLoan={openLoan}
               onOpenProfile={(peer) => {
                 setPeerProfile(peer);
@@ -2790,6 +2816,8 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               <TermsScreen
                 token={token}
                 requireAccept={Boolean(token)}
+                acceptedVersion={user?.tos_version ?? null}
+                acceptedAt={user?.tos_accepted_at ?? null}
                 onAccepted={async () => {
                   if (token) {
                     const me = await api.me(token);
@@ -3613,7 +3641,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
         {showNav ? (
           <BottomNav
             active={tabFromScreen(screen)}
-            unread={unreadCount}
+            unread={chatUnread}
             locale={user?.locale || profileLocale}
             onChange={goTab}
           />

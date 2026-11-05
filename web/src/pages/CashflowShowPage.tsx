@@ -10,6 +10,7 @@ import { Money } from '../components/Money';
 import { Button } from '../components/Button';
 import { SelectField } from '../components/Field';
 import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/Confirm';
 
 function monthBounds(d = new Date()) {
   const from = new Date(Date.UTC(d.getFullYear(), d.getMonth(), 1));
@@ -22,6 +23,7 @@ export function CashflowShowPage() {
   const navigate = useNavigate();
   const { user, token } = useAuth();
   const { showError } = useToast();
+  const confirm = useConfirm();
   const [entry, setEntry] = useState<CashflowEntry | null>(null);
   const [monthEntries, setMonthEntries] = useState<CashflowEntry[]>([]);
   const [accounts, setAccounts] = useState<MoneyAccount[]>([]);
@@ -56,6 +58,13 @@ export function CashflowShowPage() {
 
   async function onDelete() {
     if (!token || !entry) return;
+    const ok = await confirm({
+      title: `Delete ${entry.title || 'this entry'}?`,
+      body: entry.is_template || entry.recurrence ? 'This also stops it from repeating. This can’t be undone.' : 'This can’t be undone.',
+      confirmLabel: 'Delete',
+      tone: 'danger',
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       await api.deleteCashflow(token, entry.id);

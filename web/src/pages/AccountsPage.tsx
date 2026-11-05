@@ -20,6 +20,7 @@ import { Field, SelectField } from '../components/Field';
 import { Modal } from '../components/Modal';
 import { EmptyState } from '../components/EmptyState';
 import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/Confirm';
 
 const FALLBACK_ACCOUNT_TYPES: CatalogOption[] = [
   { id: 'bank', label: 'Bank' },
@@ -61,6 +62,7 @@ function mergeOptions(primary: CatalogOption[], fallback: CatalogOption[]): Cata
 export function AccountsPage() {
   const { user, token } = useAuth();
   const { showError, show } = useToast();
+  const confirm = useConfirm();
   const locale = user?.locale || 'en';
 
   const [accounts, setAccounts] = useState<MoneyAccount[]>([]);
@@ -145,9 +147,19 @@ export function AccountsPage() {
     if (!token) return;
     api
       .listCatalogInstitutions(token, 'account_type', accountType)
-      .then((res) => setRemoteInstitutions((res.institutions ?? []).filter((i) => i.active).map((i) => ({ id: i.code, label: i.label }))))
+      .then((res) => {
+        // Your own country first, then worldwide services, then everything else.
+        const home = (user?.country_code || '').toUpperCase();
+        const rank = (cc?: string | null) => (cc && cc.toUpperCase() === home ? 0 : !cc ? 1 : 2);
+        setRemoteInstitutions(
+          (res.institutions ?? [])
+            .filter((i) => i.active)
+            .sort((a, b) => rank(a.country_code) - rank(b.country_code))
+            .map((i) => ({ id: i.code, label: i.label })),
+        );
+      })
       .catch(() => setRemoteInstitutions([]));
-  }, [token, accountType]);
+  }, [token, accountType, user?.country_code]);
 
   function resetForm() {
     setAccountType('bank');
@@ -345,6 +357,8 @@ export function AccountsPage() {
 
   async function onDeleteInstallment(id: string) {
     if (!token || !activeId) return;
+    const ok = await confirm({ title: 'Delete this payment plan?', body: 'This can’t be undone.', confirmLabel: 'Delete', tone: 'danger' });
+    if (!ok) return;
     setBusy(true);
     try {
       await api.deleteInstallment(token, activeId, id);
@@ -358,7 +372,14 @@ export function AccountsPage() {
 
   async function onArchive(id: string) {
     if (!token) return;
-    if (!window.confirm('Archive this account?')) return;
+    const acct = accounts.find((a) => a.id === id);
+    const ok = await confirm({
+      title: `Archive ${acct?.name || 'this account'}?`,
+      body: 'It leaves your list and your total balance. Its past records are kept.',
+      confirmLabel: 'Archive',
+      tone: 'danger',
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       await api.archiveAccount(token, id);
@@ -497,6 +518,13 @@ export function AccountsPage() {
 
   async function onDisconnect(c: BankLinkConnection) {
     if (!token) return;
+    const ok = await confirm({
+      title: `Disconnect ${c.institution_label || 'this bank'}?`,
+      body: 'Balances stop syncing. Your accounts and records stay.',
+      confirmLabel: 'Disconnect',
+      tone: 'danger',
+    });
+    if (!ok) return;
     try {
       await api.disconnectBankLink(token, c.id);
       await reload();

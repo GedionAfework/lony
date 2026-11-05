@@ -71,7 +71,7 @@ func TestChatSyncAgainstPostgres(t *testing.T) {
 	if _, err := svc.React(e.ctx, b, first.ID, "❤️", false); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Delete(e.ctx, b, mustUUID(t, lastFromB)); err != nil {
+	if err := svc.Delete(e.ctx, b, mustUUID(t, lastFromB), true); err != nil {
 		t.Fatal(err)
 	}
 	changes, err := svc.ListMessages(e.ctx, a, conv.ID, chat.MessageQuery{Since: &cursor})

@@ -34,6 +34,8 @@ const SHOWN = 4;
  * their own) and messages that look like money but are not certain.
  */
 export function SmsReviewCard({ token, userId, locale, reloadKey, formatMoney, onChanged, onError }: Props) {
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+  const [justSaved, setJustSaved] = useState(0);
   const { colors } = useTheme();
   const [reviews, setReviews] = useState<SmsReviewItem[]>([]);
   const [pending, setPending] = useState<SmsPendingAccount[]>([]);
@@ -56,7 +58,7 @@ export function SmsReviewCard({ token, userId, locale, reloadKey, formatMoney, o
     void load();
   }, [load, reloadKey]);
 
-  if (!reviews.length && !pending.length) return null;
+  if (!reviews.length && !pending.length && !justSaved) return null;
 
   async function run(key: string, work: () => Promise<unknown>) {
     setBusy(key);
@@ -116,9 +118,12 @@ export function SmsReviewCard({ token, userId, locale, reloadKey, formatMoney, o
 
   async function saveAll() {
     setBusy('all');
+    const list = [...ready];
+    setProgress({ done: 0, total: list.length });
     let failed = 0;
+    let saved = 0;
     let trustedAny = false;
-    for (const item of ready) {
+    for (const item of list) {
       const p = planFor(item);
       if (!p.account || !p.kind || !p.amount) continue;
       try {
@@ -127,9 +132,11 @@ export function SmsReviewCard({ token, userId, locale, reloadKey, formatMoney, o
           trustedAny = true;
         }
         await saveReviewedSms(token, { ...item, kind: p.kind, amount: p.amount }, p.account, userId);
+        saved++;
       } catch {
         failed++;
       }
+      setProgress({ done: saved + failed, total: list.length });
     }
     try {
       if (trustedAny) await retryHeldTransfers(token, userId);
@@ -137,38 +144,92 @@ export function SmsReviewCard({ token, userId, locale, reloadKey, formatMoney, o
       onChanged?.();
     } finally {
       setBusy(null);
+      setProgress(null);
+    }
+    if (saved) {
+      setJustSaved(saved);
+      setTimeout(() => setJustSaved(0), 3500);
     }
     if (failed) onError(`${failed} message(s) could not be saved. They are still in the list.`);
   }
 
+  // What "Save all" would add, per currency, so the button says what it does.
+  const readyTotals = (() => {
+    const by = new Map<string, { in: number; out: number }>();
+    for (const r of ready) {
+      const p = planFor(r);
+      const cur = (r.currency || p.account?.currency_code || '').toUpperCase();
+      const row = by.get(cur) || { in: 0, out: 0 };
+      const n = Number(p.amount) || 0;
+      if (p.kind === 'income') row.in += n;
+      else row.out += n;
+      by.set(cur, row);
+    }
+    return [...by.entries()];
+  })();
+
   return (
     <Card>
-      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-        <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 16, flex: 1 }}>From your bank messages</Text>
-        {ready.length > 0 ? (
+      <Text style={{ color: colors.text, fontFamily: fonts.uiBold, fontSize: 16 }}>From your bank messages</Text>
+
+      {justSaved > 0 && ready.length === 0 ? (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, padding: 12, borderRadius: 14, backgroundColor: colors.successSoft }}>
+          <View style={{ width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.success }}>
+            <Text style={{ color: '#fff', fontFamily: fonts.uiBold, fontSize: 14 }}>✓</Text>
+          </View>
+          <Text style={{ color: colors.success, fontFamily: fonts.uiSemi, fontSize: 14 }}>
+            Saved {justSaved} {justSaved === 1 ? 'message' : 'messages'}
+          </Text>
+        </View>
+      ) : null}
+
+      {ready.length > 0 ? (
+        <View style={{ gap: 12, padding: 14, borderRadius: 18, backgroundColor: colors.primarySoft, borderWidth: 1, borderColor: colors.primary + '33' }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+            <View style={{ width: 40, height: 40, borderRadius: 13, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.primary }}>
+              <Text style={{ color: colors.onPrimary, fontFamily: fonts.uiBold, fontSize: 16 }}>{ready.length}</Text>
+            </View>
+            <View style={{ flex: 1, gap: 2 }}>
+              <Text style={{ color: colors.text, fontFamily: fonts.uiSemi, fontSize: 15 }}>
+                {ready.length === 1 ? 'Message ready to save' : 'Messages ready to save'}
+              </Text>
+              {readyTotals.map(([cur, tot]) => (
+                <Text key={cur} style={{ color: colors.textSecondary, fontFamily: fonts.ui, fontSize: 12.5 }}>
+                  {tot.in > 0 ? <Text style={{ color: colors.success, fontFamily: fonts.uiSemi }}>+{formatMoney(tot.in.toFixed(2), cur, locale)}</Text> : null}
+                  {tot.in > 0 && tot.out > 0 ? '   ' : ''}
+                  {tot.out > 0 ? <Text style={{ color: colors.secondary, fontFamily: fonts.uiSemi }}>−{formatMoney(tot.out.toFixed(2), cur, locale)}</Text> : null}
+                </Text>
+              ))}
+            </View>
+          </View>
+          {progress ? (
+            <View style={{ height: 6, borderRadius: 3, backgroundColor: colors.surface, overflow: 'hidden' }}>
+              <View style={{ height: '100%', width: `${Math.round((progress.done / Math.max(1, progress.total)) * 100)}%`, backgroundColor: colors.primary }} />
+            </View>
+          ) : null}
           <Pressable
             onPress={() => void saveAll()}
             disabled={busy !== null}
             accessibilityRole="button"
-            style={{
-              paddingHorizontal: 14,
-              paddingVertical: 8,
-              borderRadius: radii.full,
+            style={({ pressed }) => ({
+              height: 48,
+              borderRadius: 14,
+              alignItems: 'center',
+              justifyContent: 'center',
               backgroundColor: colors.primary,
-              opacity: busy !== null ? 0.6 : 1,
-            }}
+              opacity: busy !== null ? 0.7 : pressed ? 0.88 : 1,
+            })}
           >
-            <Text style={{ color: colors.onPrimary, fontFamily: fonts.uiSemi, fontSize: 13 }}>
-              {busy === 'all' ? 'Saving…' : `Save all (${ready.length})`}
+            <Text style={{ color: colors.onPrimary, fontFamily: fonts.uiBold, fontSize: 15 }}>
+              {progress ? `Saving ${progress.done} of ${progress.total}…` : ready.length === 1 ? 'Save it' : `Save all ${ready.length}`}
             </Text>
           </Pressable>
-        ) : null}
-      </View>
-      {ready.length > 0 ? (
-        <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12 }}>
-          {ready.length} clear {ready.length === 1 ? 'message' : 'messages'} ready to save
-          {vague.length ? `, ${vague.length} need${vague.length === 1 ? 's' : ''} you` : ''}.
-        </Text>
+          {vague.length ? (
+            <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12, textAlign: 'center' }}>
+              {vague.length} more {vague.length === 1 ? 'needs' : 'need'} a quick check below
+            </Text>
+          ) : null}
+        </View>
       ) : null}
 
       {pending.map((acct) => (

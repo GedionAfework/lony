@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AlertTriangle, ArrowDownRight, ArrowUpRight, Leaf, Lightbulb, RefreshCw, Send, Sparkles, Tag, Trash2, TrendingUp, Users } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Bar, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { useAuth } from '../auth/AuthContext';
@@ -16,15 +17,14 @@ import {
   isPremiumPlan,
 } from '../lib/api';
 import { formatMoney } from '../lib/format';
-import { PageHeader } from '../components/PageHeader';
 import { Card } from '../components/Card';
-import { Money } from '../components/Money';
 import { Segmented } from '../components/Segmented';
 import { Button } from '../components/Button';
-import { Field } from '../components/Field';
 import { EmptyState } from '../components/EmptyState';
 import { RichText } from '../components/RichText';
 import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/Confirm';
+import { CategoryIcon, Hero, HeroStat, Initials, SectionHead, hueFor } from '../components/Visuals';
 
 type Tab = 'overview' | 'cashflow' | 'debts' | 'goals' | 'analysis' | 'reports' | 'coach';
 
@@ -48,101 +48,190 @@ function convert(amount: number, from: string, to: string, rates: Record<string,
   return (amount / rf) * rt;
 }
 
-function fmtPct(v: number | null | undefined): string {
-  if (v == null || !Number.isFinite(v)) return '—';
-  const sign = v > 0 ? '+' : '';
-  return `${sign}${v.toFixed(0)}%`;
+/** Month-over-month change as a small coloured chip. `goodWhenUp` flips the colour for spending. */
+function Change({ value, goodWhenUp }: { value: number | null | undefined; goodWhenUp: boolean }) {
+  if (value == null || !Number.isFinite(value) || Math.round(value) === 0) return <span className="chg flat">same as last month</span>;
+  const up = value > 0;
+  const good = up === goodWhenUp;
+  return (
+    <span className={`chg ${good ? 'good' : 'bad'}`}>
+      {up ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
+      {Math.abs(Math.round(value))}% vs last month
+    </span>
+  );
 }
 
-function Mini({ label, value, hint, tone }: { label: string; value: string; hint?: string; tone?: 'positive' | 'negative' }) {
+function monthName(ym: string, locale?: string): string {
+  const [y, m] = ym.split('-').map(Number);
+  if (!y || !m) return ym;
+  return new Date(y, m - 1, 1).toLocaleDateString(locale || 'en', { month: 'short' });
+}
+
+function CashflowChart({ series, locale, currency }: { series: InsightsMonthPoint[]; locale?: string; currency?: string }) {
+  const data = series.map((s) => ({ month: monthName(s.month, locale), income: Number(s.income) || 0, expense: Number(s.expense) || 0, net: Number(s.net) || 0 }));
+  const compact = (v: number) => new Intl.NumberFormat(locale || 'en', { notation: 'compact', maximumFractionDigits: 1 }).format(v);
   return (
-    <div style={{ minWidth: '28%' }}>
-      <div className="muted" style={{ fontSize: 11 }}>{label}</div>
-      <div style={{ fontWeight: 700, fontSize: 15, color: tone === 'positive' ? 'var(--success)' : tone === 'negative' ? 'var(--warning)' : 'var(--text)' }}>{value}</div>
-      {hint ? <div className="muted" style={{ fontSize: 10 }}>MoM {hint}</div> : null}
+    <div className="chart-box">
+      <div className="chart-legend">
+        <span>
+          <i style={{ background: 'var(--success)' }} /> Money in
+        </span>
+        <span>
+          <i style={{ background: 'var(--secondary)' }} /> Money out
+        </span>
+        <span>
+          <i className="line" style={{ background: 'var(--primary)' }} /> Left over
+        </span>
+      </div>
+      <ResponsiveContainer width="100%" height={260}>
+        <ComposedChart data={data} barGap={6} barCategoryGap="30%" margin={{ top: 8, right: 4, left: 0, bottom: 0 }}>
+          <defs>
+            <linearGradient id="gIn" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="var(--success)" stopOpacity={0.95} />
+              <stop offset="100%" stopColor="var(--success)" stopOpacity={0.55} />
+            </linearGradient>
+            <linearGradient id="gOut" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="var(--secondary)" stopOpacity={0.95} />
+              <stop offset="100%" stopColor="var(--secondary)" stopOpacity={0.55} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid stroke="var(--border)" vertical={false} />
+          <XAxis dataKey="month" tick={{ fontSize: 12, fill: 'var(--muted)' }} axisLine={false} tickLine={false} />
+          <YAxis tick={{ fontSize: 11, fill: 'var(--muted)' }} axisLine={false} tickLine={false} width={44} tickFormatter={compact} />
+          <Tooltip
+            cursor={{ fill: 'color-mix(in srgb, var(--text) 5%, transparent)', radius: 10 }}
+            contentStyle={{ background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: 14, fontSize: 12.5, boxShadow: 'var(--shadow-lg)', padding: '10px 12px' }}
+            labelStyle={{ fontWeight: 700, color: 'var(--text)', marginBottom: 4 }}
+            formatter={(v, name) => [formatMoney(String(Number(v) || 0), currency, locale), name === 'income' ? 'Money in' : name === 'expense' ? 'Money out' : 'Left over']}
+          />
+          <Bar dataKey="income" fill="url(#gIn)" radius={[8, 8, 3, 3]} maxBarSize={30} />
+          <Bar dataKey="expense" fill="url(#gOut)" radius={[8, 8, 3, 3]} maxBarSize={30} />
+          <Line dataKey="net" type="monotone" stroke="var(--primary)" strokeWidth={2.5} dot={{ r: 3.5, fill: 'var(--surface)', stroke: 'var(--primary)', strokeWidth: 2 }} activeDot={{ r: 5 }} />
+        </ComposedChart>
+      </ResponsiveContainer>
     </div>
   );
 }
 
-function CashflowChart({ series, locale }: { series: InsightsMonthPoint[]; locale?: string }) {
-  const data = series.map((s) => ({ month: s.month.slice(5), income: Number(s.income) || 0, expense: Number(s.expense) || 0, net: Number(s.net) || 0 }));
+/** A ring with the categories as coloured slices, total in the middle. */
+function Donut({ rows, total, label }: { rows: { key: string; value: number; color: string }[]; total: string; label: string }) {
+  const sum = rows.reduce((n, r) => n + r.value, 0) || 1;
+  const r = 52;
+  const c = 2 * Math.PI * r;
+  let offset = 0;
   return (
-    <div
-      style={{
-        padding: 12,
-        borderRadius: 16,
-        background: 'var(--surface-muted)',
-        border: '1px solid var(--border)',
-      }}
-    >
-      <ResponsiveContainer width="100%" height={240}>
-        <ComposedChart data={data} barGap={4} barCategoryGap="28%">
-          <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" vertical={false} />
-          <XAxis dataKey="month" tick={{ fontSize: 11, fill: 'var(--muted)' }} axisLine={false} tickLine={false} />
-          <YAxis tick={{ fontSize: 11, fill: 'var(--muted)' }} axisLine={false} tickLine={false} width={48} />
-          <Tooltip
-            contentStyle={{
-              background: 'var(--surface)',
-              border: '1px solid var(--border)',
-              borderRadius: 12,
-              fontSize: 12,
-              boxShadow: 'var(--shadow-md)',
-            }}
-            formatter={(v) => formatMoney(String(Number(v) || 0), undefined, locale)}
-          />
-          <Bar dataKey="income" fill="var(--success)" radius={[8, 8, 0, 0]} maxBarSize={28} />
-          <Bar dataKey="expense" fill="var(--warning)" radius={[8, 8, 0, 0]} maxBarSize={28} />
-          <Line dataKey="net" stroke="var(--primary)" strokeWidth={2.5} dot={{ r: 3, fill: 'var(--primary)' }} />
-        </ComposedChart>
-      </ResponsiveContainer>
-      <div style={{ display: 'flex', gap: 16, marginTop: 8, fontSize: 11, color: 'var(--muted)' }}>
-        <span style={{ color: 'var(--success)' }}>● Income</span>
-        <span style={{ color: 'var(--warning)' }}>● Expense</span>
-        <span style={{ color: 'var(--primary)' }}>— Net</span>
+    <div className="donut">
+      <svg viewBox="0 0 140 140" aria-hidden="true">
+        <circle cx="70" cy="70" r={r} fill="none" stroke="var(--surface-muted)" strokeWidth="16" />
+        {rows.map((row) => {
+          const len = (row.value / sum) * c;
+          const gap = rows.length > 1 ? Math.min(3, len / 3) : 0;
+          const el = (
+            <circle
+              key={row.key}
+              cx="70"
+              cy="70"
+              r={r}
+              fill="none"
+              stroke={row.color}
+              strokeWidth="16"
+              strokeLinecap="butt"
+              strokeDasharray={`${Math.max(0, len - gap)} ${c}`}
+              strokeDashoffset={-offset}
+              transform="rotate(-90 70 70)"
+            />
+          );
+          offset += len;
+          return el;
+        })}
+      </svg>
+      <div className="donut-center">
+        <small>{label}</small>
+        <strong>{total}</strong>
       </div>
     </div>
   );
 }
 
-function CategoryBars({ rows, locale }: { rows: InsightsCategoryPoint[]; locale?: string }) {
-  const max = Math.max(1, ...rows.map((r) => Number(r.amount) || 0));
-  if (rows.length === 0) return <EmptyState title="No spending yet" body="Category bars appear after confirmed expenses." />;
+function CategoryBreakdown({ rows, locale, currency }: { rows: InsightsCategoryPoint[]; locale?: string; currency: string }) {
+  if (rows.length === 0) return <EmptyState title="No spending yet" body="Your categories appear here once you add expenses." />;
+  const top = rows.slice(0, 7);
+  const total = rows.reduce((n, r) => n + (Number(r.amount) || 0), 0);
   return (
-    <div
-      className="flex-col"
-      style={{
-        gap: 12,
-        padding: 12,
-        borderRadius: 16,
-        background: 'var(--surface-muted)',
-        border: '1px solid var(--border)',
-      }}
-    >
-      {rows.slice(0, 8).map((row) => {
-        const amt = Number(row.amount) || 0;
-        const pct = Math.max(4, Math.round((amt / max) * 100));
-        return (
-          <div key={row.category} className="flex-col" style={{ gap: 4 }}>
-            <div className="card-row">
-              <span style={{ fontWeight: 700, fontSize: 13 }}>{row.category}</span>
-              <span className="muted" style={{ fontSize: 12 }}>
-                {formatMoney(row.amount, row.currency_code, locale)} · {row.share_percent.toFixed(0)}%
-              </span>
+    <div className="breakdown">
+      <Donut
+        rows={top.map((r) => ({ key: r.category, value: Number(r.amount) || 0, color: hueFor(r.category) }))}
+        total={formatMoney(total.toFixed(2), currency, locale)}
+        label="Spent"
+      />
+      <div className="cat-list">
+        {top.map((row) => (
+          <div key={row.category} className="cat-row">
+            <CategoryIcon category={row.category} kind="expense" size={36} />
+            <div className="cat-main">
+              <div className="cat-top">
+                <span>{row.category}</span>
+                <strong>{formatMoney(row.amount, row.currency_code, locale)}</strong>
+              </div>
+              <div className="cat-track">
+                <div style={{ width: `${Math.max(3, Math.round(row.share_percent))}%`, background: hueFor(row.category) }} />
+              </div>
             </div>
-            <div className="bar-track" style={{ height: 10, borderRadius: 8, background: 'var(--surface)' }}>
-              <div className="bar-fill" style={{ width: `${pct}%`, borderRadius: 8, background: 'var(--warning)' }} />
-            </div>
+            <span className="cat-pct">{row.share_percent.toFixed(0)}%</span>
           </div>
-        );
-      })}
+        ))}
+      </div>
     </div>
   );
 }
+
+const FACTORS: { key: keyof LonyScore; label: string; help: string }[] = [
+  { key: 'repayment_score', label: 'Repayment', help: 'Paying people back on time' },
+  { key: 'debt_score', label: 'Debt', help: 'How much you owe vs. earn' },
+  { key: 'consistency_score', label: 'Consistency', help: 'Steady income and spending' },
+  { key: 'liquidity_score', label: 'Cushion', help: 'Cash you could reach quickly' },
+  { key: 'savings_score', label: 'Savings', help: 'Share of income you keep' },
+  { key: 'goals_score', label: 'Goals', help: 'Progress on your plans' },
+];
+
+function ScoreRing({ points, grade }: { points: number; grade: string }) {
+  const pct = Math.max(0, Math.min(100, points));
+  const r = 54;
+  const c = 2 * Math.PI * r;
+  const arc = c * 0.75;
+  return (
+    <div className="score-ring">
+      <svg viewBox="0 0 140 140" aria-hidden="true">
+        <defs>
+          <linearGradient id="gScore" x1="0" y1="1" x2="1" y2="0">
+            <stop offset="0%" stopColor="var(--secondary)" />
+            <stop offset="55%" stopColor="var(--primary)" />
+            <stop offset="100%" stopColor="var(--success)" />
+          </linearGradient>
+        </defs>
+        <circle cx="70" cy="70" r={r} fill="none" stroke="var(--surface-muted)" strokeWidth="12" strokeLinecap="round" strokeDasharray={`${arc} ${c}`} transform="rotate(135 70 70)" />
+        <circle cx="70" cy="70" r={r} fill="none" stroke="url(#gScore)" strokeWidth="12" strokeLinecap="round" strokeDasharray={`${(arc * pct) / 100} ${c}`} transform="rotate(135 70 70)" />
+      </svg>
+      <div className="score-center">
+        <strong>{grade}</strong>
+        <small>{Math.round(pct)} / 100</small>
+      </div>
+    </div>
+  );
+}
+
+const SEVERITY: Record<string, { icon: typeof Lightbulb; cls: string; label: string }> = {
+  critical: { icon: AlertTriangle, cls: 'bad', label: 'Needs attention' },
+  warning: { icon: AlertTriangle, cls: 'warn', label: 'Heads up' },
+  positive: { icon: TrendingUp, cls: 'good', label: 'Going well' },
+  info: { icon: Lightbulb, cls: 'info', label: 'Tip' },
+};
 
 export function InsightsPage() {
   const navigate = useNavigate();
   const { user, token } = useAuth();
   const { showError } = useToast();
+  const confirm = useConfirm();
   const preferred = (user?.default_currency_code || '').toUpperCase();
   const locale = user?.locale || 'en';
   const isPremium = isPremiumPlan(user);
@@ -240,11 +329,16 @@ export function InsightsPage() {
 
   const tabs: { id: Tab; label: string }[] = [
     { id: 'overview', label: 'Overview' },
-    ...(isPremium ? ([{ id: 'coach', label: 'Chat' }] as { id: Tab; label: string }[]) : []),
-    { id: 'cashflow', label: 'Cashflow' },
-    { id: 'debts', label: 'Debts' },
-    { id: 'goals', label: 'Goals' },
-    ...(isPremium ? ([{ id: 'analysis', label: 'Analysis' }, { id: 'reports', label: 'Reports' }] as { id: Tab; label: string }[]) : []),
+    { id: 'cashflow', label: 'Spending' },
+    { id: 'debts', label: 'Loans' },
+    { id: 'goals', label: 'Plans' },
+    ...(isPremium
+      ? ([
+          { id: 'analysis', label: 'Tips' },
+          { id: 'coach', label: 'Ask Lony' },
+          { id: 'reports', label: 'Reports' },
+        ] as { id: Tab; label: string }[])
+      : []),
   ];
 
   async function onRefreshInsights() {
@@ -271,9 +365,9 @@ export function InsightsPage() {
     }
   }
 
-  async function onAskCoach() {
-    if (!token || !preferred || !coachMsg.trim()) return;
-    const question = coachMsg.trim();
+  async function onAskCoach(asked?: string) {
+    const question = (asked ?? coachMsg).trim();
+    if (!token || !preferred || !question || coachBusy) return;
     setCoachBusy(true);
     setCoachMsg('');
     setCoachActions([]);
@@ -298,110 +392,253 @@ export function InsightsPage() {
     }
   }
 
+  const incomeNum = Number(overview?.income || 0);
+  const spentNum = Number(overview?.expense || 0);
+  const netNum = Number(overview?.net || 0);
+  const savingsRate = overview?.savings_rate_percent;
+  const spentMonths = series.map((m) => Number(m.expense) || 0).filter((v) => v > 0);
+  const avgSpend = spentMonths.length ? spentMonths.reduce((a, b) => a + b, 0) / spentMonths.length : 0;
+
+  // Plain-language takeaways built from the numbers on this page.
+  const takeaways = useMemo(() => {
+    const out: { tone: 'good' | 'bad' | 'info'; text: string }[] = [];
+    if (incomeNum > 0) {
+      const share = Math.round((spentNum / incomeNum) * 100);
+      out.push(
+        share <= 80
+          ? { tone: 'good', text: `You spent ${share}% of what you earned this month, so you kept the rest.` }
+          : share <= 100
+            ? { tone: 'info', text: `You spent ${share}% of what you earned. Not much left to save this month.` }
+            : { tone: 'bad', text: `You spent ${share - 100}% more than you earned this month.` },
+      );
+    } else if (spentNum > 0) {
+      out.push({ tone: 'info', text: `You've spent ${formatMoney(spentNum.toFixed(2), preferred, locale)} and no income is recorded yet this month.` });
+    }
+    const top = categories[0];
+    if (top && top.share_percent >= 1) {
+      out.push({ tone: 'info', text: `${top.category} is your biggest cost: ${top.share_percent.toFixed(0)}% of your spending.` });
+    }
+    const mom = overview?.expense_mom_percent;
+    if (mom != null && Number.isFinite(mom) && Math.abs(mom) >= 10) {
+      out.push(mom > 0 ? { tone: 'bad', text: `Spending is up ${Math.round(mom)}% on last month.` } : { tone: 'good', text: `Spending is down ${Math.round(-mom)}% on last month. Nice.` });
+    }
+    if (loanSummary.recv > 0) {
+      out.push({ tone: 'info', text: `People owe you ${formatMoney(loanSummary.recv.toFixed(2), preferred, locale)} in open loans.` });
+    }
+    if ((overview?.active_goals ?? 0) > 0 && overview?.goals_progress_avg != null) {
+      out.push({ tone: 'good', text: `Your ${overview.active_goals} plan${overview.active_goals === 1 ? ' is' : 's are'} ${Math.round(overview.goals_progress_avg)}% funded on average.` });
+    }
+    return out.slice(0, 4);
+  }, [incomeNum, spentNum, categories, overview, loanSummary.recv, preferred, locale]);
+
+  const coachEnd = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    coachEnd.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [coachMessages]);
+
   if (!preferred) {
     return (
       <div className="page">
-        <PageHeader title="Insights" />
+        <div className="page-head">
+          <h1 className="page-title">Insights</h1>
+        </div>
         <Card>
-          <EmptyState title="Pick your currency" body="Set a default currency in Settings so insights use your unit of choice." />
+          <EmptyState title="Pick your currency" body="Choose a default currency in Settings so your insights add up in one money." />
         </Card>
       </div>
     );
   }
 
+  const monthLabel = new Date().toLocaleDateString(locale, { month: 'long' });
+  const heroSentence =
+    incomeNum === 0 && spentNum === 0
+      ? 'Add income and expenses to see how your month is going.'
+      : netNum >= 0
+        ? `You kept ${savingsRate != null ? `${Math.round(savingsRate)}%` : 'some'} of your income in ${monthLabel}.`
+        : `You spent more than you earned in ${monthLabel}.`;
+
   return (
-    <div className="page">
-      <PageHeader title="Insights" subtitle={!isPremium ? 'Voice add, receipt scan, Plan AI, Analysis, Reports, and Coach unlock with Premium' : undefined} />
-      <Segmented value={tab} onChange={(v) => setTab(v as Tab)} options={tabs} />
+    <div className="page insights">
+      <div className="page-head">
+        <div>
+          <h1 className="page-title">Insights</h1>
+          <div className="page-subtitle muted">How your money is doing, in plain words.</div>
+        </div>
+        {!isPremium ? (
+          <span className="premium-chip">
+            <Sparkles size={13} /> AI tips & chat come with Premium
+          </span>
+        ) : null}
+      </div>
+
+      <div className="tabs-row">
+        <Segmented value={tab} onChange={(v) => setTab(v as Tab)} options={tabs} />
+      </div>
 
       {tab === 'overview' ? (
-        <div className="grid grid-2">
-          {lonyScore ? (
-            <Card>
-              <div className="section-label">Lony Trust</div>
-              <div className="flex-row" style={{ alignItems: 'baseline', gap: 10 }}>
-                <span style={{ color: 'var(--primary)', fontWeight: 800, fontSize: 44 }}>{lonyScore.grade}</span>
-                <span style={{ fontWeight: 700 }}>{lonyScore.band}</span>
-              </div>
-              <div className="muted" style={{ fontSize: 12 }}>
-                Peer-lending trust grade on Lony (not a credit bureau score){lonyScore.thin_history ? ' · limited loan history' : ''}
-              </div>
-              <div className="flex-row" style={{ flexWrap: 'wrap', gap: 10, marginTop: 8 }}>
-                <Mini label="Repayment" value={`${Math.round(lonyScore.repayment_score)}`} />
-                <Mini label="Debt" value={`${Math.round(lonyScore.debt_score)}`} />
-                <Mini label="Consistency" value={`${Math.round(lonyScore.consistency_score)}`} />
-                <Mini label="Liquidity" value={`${Math.round(lonyScore.liquidity_score)}`} />
-                <Mini label="Savings" value={`${Math.round(lonyScore.savings_score)}`} />
-                <Mini label="Goals" value={`${Math.round(lonyScore.goals_score)}`} />
-              </div>
-            </Card>
+        <>
+          <Hero
+            label={`Left over in ${monthLabel}`}
+            value={`${netNum < 0 ? '−' : ''}${formatMoney(Math.abs(netNum).toFixed(2), preferred, locale)}`}
+            sub={heroSentence}
+            aside={
+              <>
+                <div className="hero-stat stacked">
+                  <small>Money in</small>
+                  <strong>{formatMoney(overview?.income ?? '0', preferred, locale)}</strong>
+                  <Change value={overview?.income_mom_percent} goodWhenUp />
+                </div>
+                <div className="hero-stat stacked">
+                  <small>Money out</small>
+                  <strong>{formatMoney(overview?.expense ?? '0', preferred, locale)}</strong>
+                  <Change value={overview?.expense_mom_percent} goodWhenUp={false} />
+                </div>
+              </>
+            }
+          />
+
+          <div className="kpi-strip">
+            <div className="kpi-tile">
+              <span className="kpi-ico good"><Leaf size={16} /></span>
+              <small>Saved</small>
+              <strong>{savingsRate != null ? `${Math.round(savingsRate)}%` : '—'}</strong>
+            </div>
+            <div className="kpi-tile">
+              <span className="kpi-ico warn"><TrendingUp size={16} /></span>
+              <small>Avg. monthly spend</small>
+              <strong>{avgSpend > 0 ? formatMoney(avgSpend.toFixed(0), preferred, locale) : '—'}</strong>
+            </div>
+            <div className="kpi-tile">
+              <span className="kpi-ico"><Tag size={16} /></span>
+              <small>Top category</small>
+              <strong>{categories[0]?.category || '—'}</strong>
+            </div>
+            <div className="kpi-tile">
+              <span className="kpi-ico info"><Users size={16} /></span>
+              <small>Owed to you</small>
+              <strong>{formatMoney(loanSummary.recv.toFixed(2), preferred, locale)}</strong>
+            </div>
+          </div>
+
+          {takeaways.length > 0 ? (
+            <div className="takeaways">
+              {takeaways.map((t) => (
+                <div key={t.text} className={`takeaway ${t.tone}`}>
+                  <span className="takeaway-icon">
+                    {t.tone === 'good' ? <TrendingUp size={16} /> : t.tone === 'bad' ? <AlertTriangle size={16} /> : <Lightbulb size={16} />}
+                  </span>
+                  <p>{t.text}</p>
+                </div>
+              ))}
+            </div>
           ) : null}
 
-          <Card>
-            <div className="section-label">This month</div>
-            <Money value={overview?.net ?? '0'} currency={preferred} size="xl" tone={Number(overview?.net || 0) >= 0 ? 'positive' : 'negative'} locale={locale} />
-            <div className="flex-row" style={{ flexWrap: 'wrap', gap: 12, marginTop: 8 }}>
-              <Mini label="Income" value={formatMoney(overview?.income ?? '0', preferred, locale)} hint={fmtPct(overview?.income_mom_percent)} tone="positive" />
-              <Mini label="Expense" value={formatMoney(overview?.expense ?? '0', preferred, locale)} hint={fmtPct(overview?.expense_mom_percent)} tone="negative" />
-              <Mini label="Savings rate" value={overview?.savings_rate_percent != null ? `${overview.savings_rate_percent.toFixed(0)}%` : '—'} />
-            </div>
-          </Card>
+          <div className="grid grid-main-side">
+            <Card>
+              <SectionHead title="Last 6 months" sub="What came in, what went out, and what was left." />
+              {series.every((s) => Number(s.income) === 0 && Number(s.expense) === 0) ? (
+                <EmptyState title="No history yet" body="Your trend appears once you've added a few months of income and expenses." />
+              ) : (
+                <CashflowChart series={series} locale={locale} currency={preferred} />
+              )}
+            </Card>
 
-          <Card style={{ gridColumn: '1 / -1' }}>
-            <div className="section-label">Last 6 months</div>
-            {series.every((s) => Number(s.income) === 0 && Number(s.expense) === 0) ? (
-              <EmptyState title="No cashflow yet" body="Log income and expenses to see the trend." />
+            {lonyScore ? (
+              <Card className="score-card">
+                <SectionHead title="Lony Trust" sub="How reliable you look to people who lend to you." />
+                <div className="score-top">
+                  <ScoreRing points={Number(lonyScore.points) || 0} grade={lonyScore.grade} />
+                  <div>
+                    <div className="score-band">{lonyScore.band}</div>
+                    <div className="muted" style={{ fontSize: 12.5 }}>
+                      {lonyScore.thin_history ? 'Based on a short loan history so far.' : 'Built from your loans, spending and savings.'}
+                    </div>
+                  </div>
+                </div>
+                <div className="factors">
+                  {FACTORS.map((f) => {
+                    const v = Math.round(Number(lonyScore[f.key]) || 0);
+                    return (
+                      <div key={f.key} className="factor" title={f.help}>
+                        <div className="factor-top">
+                          <span>{f.label}</span>
+                          <strong>{v}</strong>
+                        </div>
+                        <div className="cat-track">
+                          <div style={{ width: `${Math.max(3, v)}%`, background: v >= 70 ? 'var(--success)' : v >= 40 ? 'var(--primary)' : 'var(--secondary)' }} />
+                        </div>
+                        <small>{f.help}</small>
+                      </div>
+                    );
+                  })}
+                </div>
+              </Card>
             ) : (
-              <CashflowChart series={series} locale={locale} />
+              <Card>
+                <SectionHead title="Savings rate" sub="The share of your income you didn't spend." />
+                <div className="big-stat">{savingsRate != null ? `${Math.round(savingsRate)}%` : '—'}</div>
+              </Card>
             )}
-          </Card>
+          </div>
 
-          <Card style={{ gridColumn: '1 / -1' }}>
-            <div className="section-label">Spending this month</div>
-            <CategoryBars rows={categories} locale={locale} />
+          <Card>
+            <SectionHead title={`Where your money went in ${monthLabel}`} sub="Your spending by category." />
+            <CategoryBreakdown rows={categories} locale={locale} currency={preferred} />
           </Card>
-        </div>
+        </>
       ) : null}
 
       {tab === 'cashflow' ? (
-        <div className="flex-col">
+        <div className="flex-col gap-lg">
           <Card>
-            <div className="section-label">Income vs expense</div>
-            <CashflowChart series={series} locale={locale} />
+            <SectionHead title="Money in vs. money out" sub="Six months side by side. The line shows what was left each month." />
+            <CashflowChart series={series} locale={locale} currency={preferred} />
           </Card>
           <Card>
-            <div className="section-label">Categories</div>
-            <CategoryBars rows={categories} locale={locale} />
+            <SectionHead title="Spending by category" sub={`This month, ${monthLabel}.`} />
+            <CategoryBreakdown rows={categories} locale={locale} currency={preferred} />
           </Card>
         </div>
       ) : null}
 
       {tab === 'debts' ? (
-        <div className="flex-col">
+        <div className="flex-col gap-lg">
+          <Hero
+            label="Your loan balance"
+            value={`${loanSummary.net < 0 ? '−' : ''}${formatMoney(Math.abs(loanSummary.net).toFixed(2), preferred, locale)}`}
+            sub={
+              loanSummary.recv === 0 && loanSummary.pay === 0
+                ? 'No open loans right now.'
+                : loanSummary.net >= 0
+                  ? 'Overall, people owe you more than you owe them.'
+                  : 'Overall, you owe more than people owe you.'
+            }
+            aside={
+              <>
+                <HeroStat label="Owed to you" value={formatMoney(loanSummary.recv.toFixed(2), preferred, locale)} tone="up" />
+                <HeroStat label="You owe" value={formatMoney(loanSummary.pay.toFixed(2), preferred, locale)} tone="down" />
+              </>
+            }
+          />
           <Card>
-            <div className="section-label">Loan position</div>
-            <Money value={loanSummary.net.toFixed(2)} currency={preferred} size="xl" tone={loanSummary.net >= 0 ? 'positive' : 'negative'} locale={locale} />
-            <div className="card-row" style={{ marginTop: 8 }}>
-              <span style={{ color: 'var(--success)', fontSize: 12, fontWeight: 700 }}>Owed to you {formatMoney(loanSummary.recv.toFixed(2), preferred, locale)}</span>
-              <span style={{ color: 'var(--warning)', fontSize: 12, fontWeight: 700 }}>You owe {formatMoney(loanSummary.pay.toFixed(2), preferred, locale)}</span>
-            </div>
-            {overview?.debt_service_ratio != null ? (
-              <div className="muted" style={{ fontSize: 12, marginTop: 8 }}>Expense / income this month {(overview.debt_service_ratio * 100).toFixed(0)}%</div>
-            ) : null}
-          </Card>
-          <Card>
-            <div className="section-label">People</div>
+            <SectionHead title="By person" sub="Green: they owe you. Orange: you owe them." />
             {friends.length === 0 ? (
-              <EmptyState title="No people yet" body="Friend balances appear after shared loans." />
+              <EmptyState title="No one yet" body="Balances with friends show up after you share a loan or split a bill." />
             ) : (
               friends.map((f) => (
-                <div key={f.name} className="flex-col" style={{ gap: 6, paddingBottom: 10, borderBottom: '1px solid var(--border)' }}>
-                  <div className="card-row">
-                    <span style={{ fontWeight: 700 }}>{f.name}</span>
-                    <Money value={f.net.toFixed(2)} currency={preferred} size="sm" tone={f.net >= 0 ? 'positive' : 'negative'} locale={locale} />
-                  </div>
-                  <div className="bar-track">
-                    <div className="bar-fill" style={{ width: `${Math.max(6, Math.round((Math.abs(f.net) / friendMax) * 100))}%`, background: f.net >= 0 ? 'var(--success)' : 'var(--warning)' }} />
+                <div key={f.name} className="person-row">
+                  <Initials name={f.name} size={40} />
+                  <div className="cat-main">
+                    <div className="cat-top">
+                      <span>{f.name}</span>
+                      <strong style={{ color: f.net >= 0 ? 'var(--success)' : 'var(--secondary)' }}>
+                        {f.net >= 0 ? 'Owes you ' : 'You owe '}
+                        {formatMoney(Math.abs(f.net).toFixed(2), preferred, locale)}
+                      </strong>
+                    </div>
+                    <div className="cat-track">
+                      <div style={{ width: `${Math.max(4, Math.round((Math.abs(f.net) / friendMax) * 100))}%`, background: f.net >= 0 ? 'var(--success)' : 'var(--secondary)' }} />
+                    </div>
                   </div>
                 </div>
               ))
@@ -411,100 +648,100 @@ export function InsightsPage() {
       ) : null}
 
       {tab === 'goals' ? (
-        <Card>
-          <div className="section-label">Goal funding</div>
-          {goals.length === 0 ? (
-            <EmptyState title="No goals yet" body="Create goals under Plan to track funding here." />
-          ) : (
-            goals.map((g) => {
+        goals.length === 0 ? (
+          <Card>
+            <EmptyState
+              title="No plans yet"
+              body="Make a plan for a trip, a purchase or savings and watch it fill up here."
+              action={
+                <Button onClick={() => navigate('/plan')} style={{ marginTop: 8 }}>
+                  Make a plan
+                </Button>
+              }
+            />
+          </Card>
+        ) : (
+          <div className="goal-grid">
+            {goals.map((g) => {
               const pct = Math.min(100, Math.max(0, Math.round(g.progress_percent || 0)));
+              const done = g.status === 'completed' || pct >= 100;
               return (
-                <div key={g.id} className="flex-col" style={{ gap: 6, paddingBottom: 12, borderBottom: '1px solid var(--border)' }}>
-                  <div className="card-row">
-                    <span style={{ fontWeight: 700 }}>{g.title}</span>
-                    <span style={{ color: 'var(--primary)', fontWeight: 700, fontSize: 13 }}>{pct}%</span>
+                <button key={g.id} type="button" className="goal-tile" onClick={() => navigate('/plan')}>
+                  <ScoreRing points={pct} grade={`${pct}%`} />
+                  <div className="goal-tile-text">
+                    <strong>{g.title}</strong>
+                    <span>
+                      {formatMoney(g.current_amount, g.currency_code, locale)} of {formatMoney(g.target_amount, g.currency_code, locale)}
+                    </span>
+                    <small className={done ? 'good' : ''}>
+                      {done ? 'Fully funded' : g.eta_months != null && g.status === 'active' ? `About ${g.eta_months} month${g.eta_months === 1 ? '' : 's'} to go at your pace` : 'Keep adding to it'}
+                    </small>
                   </div>
-                  <div className="bar-track">
-                    <div className="bar-fill" style={{ width: `${Math.max(pct > 0 ? 4 : 0, pct)}%`, background: g.status === 'completed' ? 'var(--success)' : 'var(--primary)' }} />
-                  </div>
-                  <div className="muted" style={{ fontSize: 12 }}>
-                    {formatMoney(g.current_amount, g.currency_code, locale)} / {formatMoney(g.target_amount, g.currency_code, locale)}
-                    {g.eta_months != null && g.status === 'active' ? ` · ~${g.eta_months} mo` : ''}
-                  </div>
-                </div>
+                </button>
               );
-            })
-          )}
-        </Card>
+            })}
+          </div>
+        )
       ) : null}
 
       {tab === 'analysis' ? (
         <Card>
-          <div className="card-row">
-            <div className="section-label">Analyst</div>
-            <div className="flex-row">
-              <button
-                className="link-btn"
-                onClick={async () => {
-                  if (!token) return;
-                  try {
-                    await api.clearAIInsights(token);
-                    setInsights([]);
-                    setCoachMessages([]);
-                  } catch (e) {
-                    showError(e instanceof Error ? e.message : 'Could not clear');
-                  }
-                }}
-              >
-                Clear
-              </button>
-              <button className="link-btn" onClick={onRefreshInsights}>
-                Refresh
-              </button>
-            </div>
-          </div>
-          {insights.length === 0 ? (
-            <EmptyState title="No cards yet" body="Tap Refresh to run rule-based analysis on this month's numbers." />
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {insights.map((card) => (
-                <div
-                  key={card.id}
-                  style={{
-                    padding: '14px 16px',
-                    borderRadius: 14,
-                    background: 'var(--surface-muted)',
-                    border: '1px solid var(--border)',
-                    borderLeft: `3px solid ${
-                      card.severity === 'critical' || card.severity === 'warning'
-                        ? 'var(--warning)'
-                        : card.severity === 'positive'
-                          ? 'var(--success)'
-                          : 'var(--primary)'
-                    }`,
-                  }}
-                >
-                  <div
-                    style={{
-                      fontSize: 11,
-                      fontWeight: 700,
-                      textTransform: 'uppercase',
-                      letterSpacing: 0.4,
-                      color:
-                        card.severity === 'critical' || card.severity === 'warning'
-                          ? 'var(--warning)'
-                          : card.severity === 'positive'
-                            ? 'var(--success)'
-                            : 'var(--muted)',
+          <SectionHead
+            title="Tips for you"
+            sub="Lony looks at this month's numbers and points out what matters."
+            action={
+              <div className="flex-row" style={{ gap: 6 }}>
+                {insights.length > 0 ? (
+                  <button
+                    className="icon-btn sm ghost"
+                    title="Clear tips"
+                    aria-label="Clear tips"
+                    onClick={async () => {
+                      if (!token) return;
+                      const ok = await confirm({ title: 'Clear AI insights?', body: 'Your saved tips and chat are removed.', confirmLabel: 'Clear', tone: 'danger' });
+                      if (!ok) return;
+                      try {
+                        await api.clearAIInsights(token);
+                        setInsights([]);
+                        setCoachMessages([]);
+                      } catch (e) {
+                        showError(e instanceof Error ? e.message : 'Could not clear');
+                      }
                     }}
                   >
-                    {card.severity} · {card.theme}
-                    {card.source?.includes('llm') ? ' · AI' : ''}
+                    <Trash2 size={15} />
+                  </button>
+                ) : null}
+                <Button size="sm" variant="secondary" onClick={onRefreshInsights}>
+                  <RefreshCw size={14} /> Refresh
+                </Button>
+              </div>
+            }
+          />
+          {insights.length === 0 ? (
+            <EmptyState icon={<Lightbulb size={24} />} title="No tips yet" body="Tap Refresh and Lony will look over this month for you." />
+          ) : (
+            <div className="tip-list">
+              {insights.map((card) => {
+                const sev = SEVERITY[card.severity] ?? SEVERITY.info;
+                const Icon = sev.icon;
+                return (
+                  <div key={card.id} className={`tip ${sev.cls}`}>
+                    <span className="tip-icon">
+                      <Icon size={18} />
+                    </span>
+                    <div className="tip-body">
+                      <div className="tip-kicker">
+                        {sev.label}
+                        {card.theme ? ` · ${card.theme.replace(/_/g, ' ')}` : ''}
+                        {card.source?.includes('llm') ? ' · AI' : ''}
+                      </div>
+                      <div className="tip-title">{card.title}</div>
+                      <RichText text={card.body} muted />
+                    </div>
                   </div>
-                  <div style={{ fontWeight: 700, fontSize: 16, marginTop: 4 }}>{card.title}</div>
-                  <RichText text={card.body} muted />
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </Card>
@@ -512,151 +749,134 @@ export function InsightsPage() {
 
       {tab === 'reports' ? (
         <Card>
-          <div className="card-row">
-            <div className="section-label">Visualizer</div>
-            <button className="link-btn" onClick={onLoadReport} disabled={reportBusy}>
-              {reportBusy ? 'Building…' : report ? 'Refresh' : 'Build report'}
-            </button>
-          </div>
+          <SectionHead
+            title="Your 6-month report"
+            sub="Charts and short notes you can read in a minute."
+            action={
+              <Button size="sm" variant={report ? 'secondary' : 'primary'} onClick={onLoadReport} busy={reportBusy}>
+                {reportBusy ? 'Building…' : report ? 'Rebuild' : 'Build report'}
+              </Button>
+            }
+          />
           {!report ? (
-            <EmptyState title="No report yet" body="Build a period pack with cashflow charts, category bars, and captions." />
+            <EmptyState title="No report yet" body="Build one to get a summary of the last six months." />
           ) : (
-            <div className="flex-col">
-              <p>{report.summary}</p>
-              {report.source === 'llm_visualizer' ? <div className="muted" style={{ fontSize: 11 }}>Captions AI-assisted</div> : null}
+            <div className="flex-col gap-lg">
+              <p className="report-summary">{report.summary}</p>
               {report.charts.map((chart) => {
                 const seriesData = (chart.data?.series as InsightsMonthPoint[] | undefined) ?? [];
                 const catData = (chart.data?.categories as InsightsCategoryPoint[] | undefined) ?? [];
                 return (
-                  <div key={chart.id} className="flex-col" style={{ gap: 6 }}>
-                    <div style={{ fontWeight: 700 }}>{chart.title}</div>
-                    <div className="muted" style={{ fontSize: 12 }}>{chart.caption}</div>
-                    {chart.type === 'grouped_bar' && seriesData.length > 0 ? <CashflowChart series={seriesData} locale={locale} /> : null}
-                    {chart.type === 'bar' && catData.length > 0 ? <CategoryBars rows={catData} locale={locale} /> : null}
+                  <div key={chart.id} className="report-block">
+                    <div className="report-title">{chart.title}</div>
+                    {chart.caption ? <div className="muted" style={{ fontSize: 13 }}>{chart.caption}</div> : null}
+                    {chart.type === 'grouped_bar' && seriesData.length > 0 ? <CashflowChart series={seriesData} locale={locale} currency={report.currency_code} /> : null}
+                    {chart.type === 'bar' && catData.length > 0 ? <CategoryBreakdown rows={catData} locale={locale} currency={report.currency_code} /> : null}
                     {chart.type === 'kpi' ? (
-                      <div className="flex-row" style={{ flexWrap: 'wrap', gap: 12 }}>
-                        <Mini label="Income" value={formatMoney(String(chart.data?.income ?? ''), report.currency_code, locale)} />
-                        <Mini label="Expense" value={formatMoney(String(chart.data?.expense ?? ''), report.currency_code, locale)} />
-                        <Mini label="Net" value={formatMoney(String(chart.data?.net ?? ''), report.currency_code, locale)} />
+                      <div className="kpi-row">
+                        {(['income', 'expense', 'net'] as const).map((k) => (
+                          <div key={k} className="kpi">
+                            <small>{k === 'income' ? 'Money in' : k === 'expense' ? 'Money out' : 'Left over'}</small>
+                            <strong>{formatMoney(String(chart.data?.[k] ?? ''), report.currency_code, locale)}</strong>
+                          </div>
+                        ))}
                       </div>
                     ) : null}
                   </div>
                 );
               })}
               {(report.tables ?? []).map((table) => (
-                <div key={table.id} className="table-wrap">
-                  <div style={{ fontWeight: 700, marginBottom: 6 }}>{table.title}</div>
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        {table.columns.map((col) => (
-                          <th key={col}>{col.replace(/_/g, ' ')}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {table.rows.slice(0, 8).map((row, idx) => (
-                        <tr key={`${table.id}-${idx}`}>
-                          {row.map((cell, ci) => (
-                            <td key={`${table.id}-${idx}-${ci}`}>{cell}</td>
+                <div key={table.id} className="report-block">
+                  <div className="report-title">{table.title}</div>
+                  <div className="table-wrap">
+                    <table className="data-table">
+                      <thead>
+                        <tr>
+                          {table.columns.map((col) => (
+                            <th key={col}>{col.replace(/_/g, ' ')}</th>
                           ))}
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {table.rows.slice(0, 8).map((row, idx) => (
+                          <tr key={`${table.id}-${idx}`}>
+                            {row.map((cell, ci) => (
+                              <td key={`${table.id}-${idx}-${ci}`}>{cell}</td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               ))}
+              {report.source === 'llm_visualizer' ? <div className="muted" style={{ fontSize: 12 }}>Notes written with AI help.</div> : null}
             </div>
           )}
         </Card>
       ) : null}
 
       {tab === 'coach' ? (
-        <Card>
-          {coachMessages.length === 0 ? (
-            <div
-              style={{
-                padding: 16,
-                borderRadius: 14,
-                background: 'var(--surface-muted)',
-                border: '1px solid var(--border)',
-                marginBottom: 12,
-                display: 'flex',
-                flexDirection: 'column',
-                gap: 8,
-              }}
-            >
-              <div style={{ fontWeight: 700, fontSize: 14 }}>Try asking</div>
-              {[
-                'Where can I cut spending this month?',
-                'How does my debt look?',
-                'Am I on track for my goals?',
-              ].map((q) => (
-                <button
-                  key={q}
-                  type="button"
-                  className="pill pill-muted"
-                  style={{ cursor: 'pointer', border: '1px solid var(--border)', textAlign: 'left' }}
-                  onClick={() => setCoachMsg(q)}
-                >
-                  {q}
-                </button>
-              ))}
-            </div>
-          ) : (
-            <div className="flex-col" style={{ marginBottom: 12, gap: 10 }}>
-              {coachMessages.map((m) => {
+        <Card className="coach">
+          <SectionHead title="Ask Lony" sub="Questions about your money, answered from your own numbers." />
+          <div className="coach-thread">
+            {coachMessages.length === 0 ? (
+              <div className="coach-empty">
+                <span className="coach-orb">
+                  <Sparkles size={22} />
+                </span>
+                <strong>What would you like to know?</strong>
+                <div className="coach-suggestions">
+                  {['Where can I cut spending this month?', 'How does my debt look?', 'Am I on track for my goals?', 'How much can I save next month?'].map((q) => (
+                    <button key={q} type="button" onClick={() => void onAskCoach(q)}>
+                      {q}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              coachMessages.map((m) => {
                 const isUser = m.role === 'user';
                 return (
-                  <div
-                    key={m.id}
-                    style={{
-                      alignSelf: isUser ? 'flex-end' : 'flex-start',
-                      maxWidth: '85%',
-                      background: isUser ? 'var(--primary)' : 'var(--surface-muted)',
-                      color: isUser ? 'var(--on-primary)' : 'var(--text)',
-                      borderRadius: isUser ? '18px 18px 6px 18px' : '16px 16px 16px 6px',
-                      padding: '10px 14px',
-                      border: isUser ? 'none' : '1px solid var(--border)',
-                    }}
-                  >
-                    {isUser ? (
-                      <div style={{ fontSize: 14, lineHeight: 1.45 }}>{m.content}</div>
-                    ) : m.content ? (
-                      <RichText text={m.content} />
-                    ) : (
-                      <div className="muted" style={{ fontSize: 13 }}>Thinking…</div>
-                    )}
+                  <div key={m.id} className={`coach-msg ${isUser ? 'me' : 'ai'}`}>
+                    {!isUser ? (
+                      <span className="coach-avatar">
+                        <Sparkles size={13} />
+                      </span>
+                    ) : null}
+                    <div className="coach-bubble">
+                      {isUser ? m.content : m.content ? <RichText text={m.content} /> : <span className="typing"><i /><i /><i /></span>}
+                    </div>
                   </div>
                 );
-              })}
-            </div>
-          )}
+              })
+            )}
+            <div ref={coachEnd} />
+          </div>
           {coachActions.length > 0 ? (
-            <div className="flex-row" style={{ flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+            <div className="coach-actions">
               {coachActions.map((a) => {
                 const route = routeForCoachDeepLink(a.deep_link);
                 return (
-                  <button
-                    key={`${a.label}-${a.deep_link}`}
-                    type="button"
-                    className="pill pill-muted"
-                    style={{ cursor: route ? 'pointer' : 'default', border: 'none' }}
-                    disabled={!route}
-                    onClick={() => {
-                      if (route) navigate(route);
-                    }}
-                  >
-                    {a.label}
+                  <button key={`${a.label}-${a.deep_link}`} type="button" disabled={!route} onClick={() => route && navigate(route)}>
+                    {a.label} <ArrowUpRight size={13} />
                   </button>
                 );
               })}
             </div>
           ) : null}
-          <Field label="Your question" value={coachMsg} onChange={setCoachMsg} placeholder="Where can I cut spending?" />
-          <Button onClick={onAskCoach} disabled={coachBusy || !coachMsg.trim()} busy={coachBusy}>
-            {coachBusy ? 'Thinking…' : 'Send'}
-          </Button>
+          <form
+            className="coach-composer"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void onAskCoach();
+            }}
+          >
+            <input value={coachMsg} onChange={(e) => setCoachMsg(e.target.value)} placeholder="Ask about your spending, loans or plans…" aria-label="Your question" />
+            <button type="submit" className="coach-send" disabled={coachBusy || !coachMsg.trim()} aria-label="Send">
+              {coachBusy ? <span className="spinner" /> : <Send size={17} />}
+            </button>
+          </form>
         </Card>
       ) : null}
     </div>

@@ -9,6 +9,7 @@ import { Button } from '../components/Button';
 import { Field, SelectField } from '../components/Field';
 import { EmptyState } from '../components/EmptyState';
 import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/Confirm';
 
 const FALLBACK_RAILS: PaymentRail[] = [
   { code: 'bank_local', label: 'Local bank', profile_type: 'bank_account', category: 'bank', identifier_hint: 'Account number' },
@@ -24,6 +25,7 @@ const FALLBACK_RAILS: PaymentRail[] = [
 export function BanksPage() {
   const { token } = useAuth();
   const { showError, show } = useToast();
+  const confirm = useConfirm();
 
   const [profiles, setProfiles] = useState<BankProfile[]>([]);
   const [friends, setFriends] = useState<Friendship[]>([]);
@@ -121,6 +123,13 @@ export function BanksPage() {
 
   async function onArchive(id: string) {
     if (!token) return;
+    const ok = await confirm({
+      title: 'Remove this payment method?',
+      body: 'People won’t see it when they pay you anymore.',
+      confirmLabel: 'Remove',
+      tone: 'danger',
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       await api.archiveBankProfile(token, id);

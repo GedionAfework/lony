@@ -293,9 +293,27 @@ export function explicitDirection(raw: string): 'income' | 'expense' | null {
     (/\bfrom your account\b/i.test(raw) && /\bto\b/i.test(raw)) ||
     /\bdebited\s+from\s+your\s+(?:account|a\/c|acct|card|wallet)\b/i.test(raw) ||
     /\b(?:purchase|transaction|payment)\s+of\b[^.]{0,40}\b(?:at|on|with)\b[^.]{0,40}\b(?:card|a\/c|account)\b/i.test(raw) ||
-    /\b(?:cash\s+)?withdraw(?:al|n)\b[^.]{0,40}\b(?:atm|cash|agent)\b/i.test(raw)
+    /\b(?:cash\s+)?withdraw(?:al|n)\b[^.]{0,40}\b(?:atm|cash|agent)\b/i.test(raw) ||
+    // Short bank alerts: "Debited ETB 500 from A/C…", "A/C …1234 debited with…",
+    // "Debit Alert: …", "Rs.500 debited from a/c…".
+    /^\W*(?:dear\s+[^,.]{1,40}[,.]?\s*)?debited\b/i.test(raw) ||
+    /\bdebit\s+(?:alert|notification|transaction|advice)\b/i.test(raw) ||
+    /\b(?:a\/c|acct|account|card|wallet)\b[^.]{0,40}\bdebited\b/i.test(raw) ||
+    /\bdebited\s+(?:from|with|by|for)\b/i.test(raw) ||
+    /\d\s*(?:has been\s+|was\s+|is\s+)?debited\b/i.test(raw)
   ) {
     return 'expense';
+  }
+  // The same short forms for money coming in. Checked after money out, so
+  // "debited … will be credited to Kebede" stays money out.
+  if (
+    /^\W*(?:dear\s+[^,.]{1,40}[,.]?\s*)?credited\b/i.test(raw) ||
+    /\bcredit\s+(?:alert|notification|advice)\b/i.test(raw) ||
+    /\b(?:a\/c|acct|account|card|wallet)\b[^.]{0,40}\bcredited\b/i.test(raw) ||
+    /\bcredited\s+(?:to|into|with)\b[^.]{0,30}\b(?:a\/c|acct|account|card|wallet)\b/i.test(raw) ||
+    /\d\s*(?:has been\s+|was\s+|is\s+)?credited\b/i.test(raw)
+  ) {
+    return 'income';
   }
   // Every other supported language (smsPhrases.ts).
   return localDirection(raw);

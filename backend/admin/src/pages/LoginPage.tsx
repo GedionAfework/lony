@@ -1,8 +1,11 @@
 import { useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { AlertCircle, Eye, EyeOff, Loader2, LockKeyhole, Mail, ShieldCheck } from 'lucide-react';
+import { AlertCircle, ArrowRight, Eye, EyeOff, Loader2, LockKeyhole, Mail, ShieldCheck, Sparkles } from 'lucide-react';
 import { useAuth } from '../auth';
 import { BrandLogo } from '../components/BrandLogo';
+
+// Purely decorative bar heights for the preview tile.
+const BARS = [38, 52, 44, 66, 58, 74, 62, 88, 70, 94, 80, 100];
 
 export function LoginPage() {
   const { login, busy, error, clearError } = useAuth();
@@ -24,52 +27,62 @@ export function LoginPage() {
 
   return (
     <div className="login-page">
-      <section className="login-brand" aria-hidden="true">
-        <div className="login-brand-glow" />
+      <section className="login-brand">
+        <div className="login-brand-glow" aria-hidden />
+
         <div className="login-brand-logo-wrap">
-          <BrandLogo size={64} />
-          <div>
-            <div className="login-brand-kicker" style={{ marginBottom: 6 }}>
-              <ShieldCheck size={14} strokeWidth={2} /> Control panel
-            </div>
-            <h1 style={{ margin: 0 }}>
-              Lony <span>Admin</span>
-            </h1>
-          </div>
+          <BrandLogo size={48} />
+          <h1>
+            Lony <span>Admin</span>
+          </h1>
         </div>
-        <div className="login-ledger">
-          <div className="login-ledger-row login-ledger-head">
-            <span />
-            <span />
-            <span />
-          </div>
-          {Array.from({ length: 6 }).map((_, i) => (
-            <div className="login-ledger-row" key={i}>
-              <span className="login-ledger-bar" style={{ width: `${38 + ((i * 13) % 40)}%` }} />
-              <span className="login-ledger-bar login-ledger-bar-num" style={{ width: `${20 + ((i * 7) % 18)}%` }} />
-              <span
-                className={`login-ledger-chip ${i % 3 === 0 ? 'up' : i % 3 === 1 ? 'down' : ''}`}
-                style={{ width: `${14 + ((i * 5) % 10)}%` }}
-              />
-            </div>
-          ))}
-        </div>
+
         <div className="login-brand-copy">
-          <p>Manage users, catalogs, themes, and platform health from one calm, focused workspace.</p>
+          <span className="login-brand-kicker">
+            <Sparkles size={13} strokeWidth={2} /> Control center
+          </span>
+          <h2>
+            Run the whole platform <em>from one place.</em>
+          </h2>
+          <p>Users, catalogs, themes, languages and live platform health, all in one fast, focused workspace.</p>
         </div>
+
+        <div className="login-preview" aria-hidden>
+          <div className="login-tile login-tile-wide">
+            <small>Watch</small>
+            <strong>
+              Platform pulse <span className="login-tile-up">● live</span>
+            </strong>
+            <div className="login-ledger">
+              {BARS.map((h, i) => (
+                <span key={i} className="login-ledger-bar" style={{ height: `${h}%`, animationDelay: `${0.3 + i * 0.05}s` }} />
+              ))}
+            </div>
+          </div>
+          <div className="login-tile">
+            <small>Manage</small>
+            <strong>Users & roles</strong>
+          </div>
+          <div className="login-tile">
+            <small>Curate</small>
+            <strong>Catalogs</strong>
+          </div>
+        </div>
+
+        <div className="login-brand-foot">© {new Date().getFullYear()} Lony · Restricted area</div>
       </section>
 
       <section className="login-form-panel">
         <form className="login-form" onSubmit={onSubmit}>
           <div className="login-form-heading">
             <h2>Welcome back</h2>
-            <p className="muted">Sign in with an admin account to continue.</p>
+            <p className="muted">Sign in with your admin account to continue.</p>
           </div>
 
           <label className="field">
             <span className="field-label">Email</span>
             <span className="input-with-icon">
-              <Mail size={16} strokeWidth={2} />
+              <Mail size={17} strokeWidth={2} />
               <input
                 type="email"
                 value={email}
@@ -77,6 +90,7 @@ export function LoginPage() {
                 autoComplete="username"
                 placeholder="you@lony.app"
                 required
+                autoFocus
               />
             </span>
           </label>
@@ -84,7 +98,7 @@ export function LoginPage() {
           <label className="field">
             <span className="field-label">Password</span>
             <span className="input-with-icon">
-              <LockKeyhole size={16} strokeWidth={2} />
+              <LockKeyhole size={17} strokeWidth={2} />
               <input
                 type={showPassword ? 'text' : 'password'}
                 value={password}
@@ -113,11 +127,14 @@ export function LoginPage() {
           ) : null}
 
           <button className="btn btn-primary btn-block" type="submit" disabled={busy}>
-            {busy ? <Loader2 size={16} strokeWidth={2} className="spin" /> : null}
+            {busy ? <Loader2 size={17} strokeWidth={2} className="spin" /> : null}
             {busy ? 'Signing in…' : 'Sign in'}
+            {busy ? null : <ArrowRight size={17} strokeWidth={2} />}
           </button>
 
-          <p className="login-footnote muted">Admin role required. Contact a Super Admin for access.</p>
+          <p className="login-footnote muted">
+            <ShieldCheck size={14} strokeWidth={2} /> Admin role required. Ask a Super Admin for access.
+          </p>
         </form>
       </section>
     </div>

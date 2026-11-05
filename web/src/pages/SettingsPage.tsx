@@ -6,11 +6,13 @@ import { api, isPremiumPlan, type AppCalendar, type AppLocale } from '../lib/api
 import { COUNTRIES, TIMEZONES } from '../lib/catalogs';
 import { applyDocumentDirection, parseLocaleMessages, setActivePack, t } from '../i18n';
 import { PageHeader } from '../components/PageHeader';
+import { Avatar, prepareAvatar, primeAvatar } from '../components/Avatar';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { Field, SelectField } from '../components/Field';
 import { Segmented } from '../components/Segmented';
 import { useToast } from '../components/Toast';
+import { useConfirm } from '../components/Confirm';
 
 type Page = 'hub' | 'profile' | 'region' | 'payments' | 'notifications' | 'privacy' | 'security' | 'legal';
 
@@ -38,6 +40,7 @@ export function SettingsPage() {
   const { user, token, setUser, logout, busy: authBusy } = useAuth();
   const navigate = useNavigate();
   const { showError, show } = useToast();
+  const confirm = useConfirm();
   const [page, setPage] = useState<Page>('hub');
   const [busy, setBusy] = useState(false);
 
@@ -158,24 +161,24 @@ export function SettingsPage() {
     }
   }
 
-  function onPickAvatar(file: File) {
-    const reader = new FileReader();
-    reader.onload = async () => {
-      if (!token) return;
-      const result = String(reader.result || '');
-      const idx = result.indexOf(',');
-      const b64 = idx >= 0 ? result.slice(idx + 1) : result;
-      setBusy(true);
-      try {
-        const res = await api.uploadAvatar(token, { filename: file.name, mime: file.type || 'image/jpeg', attachment_base64: b64 });
-        setUser(res.user);
-      } catch (e) {
-        showError(e instanceof Error ? e.message : 'Could not upload photo');
-      } finally {
-        setBusy(false);
-      }
-    };
-    reader.readAsDataURL(file);
+  async function onPickAvatar(file: File) {
+    if (!token) return;
+    if (!file.type.startsWith('image/')) {
+      showError('Choose a photo (JPG or PNG)');
+      return;
+    }
+    setBusy(true);
+    try {
+      const pic = await prepareAvatar(file);
+      const res = await api.uploadAvatar(token, { filename: pic.filename, mime: pic.mime, attachment_base64: pic.base64 });
+      primeAvatar(res.user.avatar_url, pic.blob);
+      setUser(res.user);
+      show('Photo updated');
+    } catch (e) {
+      showError(e instanceof Error ? e.message : 'Could not upload photo');
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function onChangePassword() {
@@ -238,6 +241,8 @@ export function SettingsPage() {
 
   async function onClearAI() {
     if (!token) return;
+    const ok = await confirm({ title: 'Clear AI insights?', body: 'Your saved insights and coach chat are removed.', confirmLabel: 'Clear', tone: 'danger' });
+    if (!ok) return;
     setBusy(true);
     try {
       await api.clearAIInsights(token);
@@ -251,7 +256,14 @@ export function SettingsPage() {
 
   async function onDeleteAccount() {
     if (!token) return;
-    if (!confirm('Delete account forever?')) return;
+    const ok = await confirm({
+      title: 'Delete your account?',
+      body: 'Your profile, accounts, records and chats are deleted for good. This can’t be undone.',
+      confirmLabel: 'Delete forever',
+      tone: 'danger',
+      typeToConfirm: 'DELETE',
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       await api.deleteAccount(token);
@@ -279,13 +291,22 @@ export function SettingsPage() {
         {!user?.profile_complete ? <p style={{ color: 'var(--error)' }}>Finish your account details to use Lony fully.</p> : null}
         <Card>
           <div className="flex-col" style={{ alignItems: 'center', gap: 12, marginBottom: 8 }}>
-            <div className="avatar" style={{ width: 96, height: 96, fontSize: 32 }}>
-              {user?.avatar_url ? <img src={user.avatar_url} alt={displayName} /> : (displayName || firstName || '?').slice(0, 1).toUpperCase()}
-            </div>
-            <label className="btn btn-secondary" style={{ cursor: 'pointer' }}>
-              <Camera size={15} /> {busy ? 'Uploading…' : user?.avatar_url ? 'Change photo' : 'Add photo'}
-              <input type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => e.target.files?.[0] && onPickAvatar(e.target.files[0])} />
+            <label className="avatar-picker" title={user?.avatar_url ? 'Change photo' : 'Add photo'}>
+              <Avatar src={user?.avatar_url} token={token} letter={displayName || firstName || '?'} size={104} />
+              <span className="avatar-picker-badge">{busy ? <span className="spinner" /> : <Camera size={16} />}</span>
+              <input
+                type="file"
+                accept="image/*"
+                style={{ display: 'none' }}
+                disabled={busy}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  e.target.value = '';
+                  if (f) void onPickAvatar(f);
+                }}
+              />
             </label>
+            <div className="muted" style={{ fontSize: 13 }}>{busy ? 'Uploading…' : 'Tap the photo to change it'}</div>
           </div>
           <div className="muted">{user?.email}</div>
           <Field label="Username" value={username} onChange={setUsername} />

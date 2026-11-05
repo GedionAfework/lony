@@ -232,7 +232,22 @@ func (h *Handler) DeleteMessage(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, httpx.E(http.StatusBadRequest, "INVALID_ID", "invalid message id"))
 		return
 	}
-	if err := h.svc.Delete(r.Context(), auth.UserIDFrom(r.Context()), id); err != nil {
+	// ?for=me hides it only for the caller; anything else deletes it for everyone.
+	forEveryone := r.URL.Query().Get("for") != "me"
+	if err := h.svc.Delete(r.Context(), auth.UserIDFrom(r.Context()), id, forEveryone); err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) DeleteConversation(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.Error(w, httpx.E(http.StatusBadRequest, "INVALID_ID", "invalid conversation id"))
+		return
+	}
+	if err := h.svc.DeleteConversation(r.Context(), auth.UserIDFrom(r.Context()), id); err != nil {
 		httpx.Error(w, err)
 		return
 	}

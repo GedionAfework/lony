@@ -79,7 +79,7 @@ func TestSinceReturnsChanges(t *testing.T) {
 	if _, err := svc.React(ctx, b, old.ID, "👍", false); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Delete(ctx, b, gone.ID); err != nil {
+	if err := svc.Delete(ctx, b, gone.ID, true); err != nil {
 		t.Fatal(err)
 	}
 	fresh, _ := svc.Send(ctx, b, conv.ID, SendInput{Body: strPtr("new")})

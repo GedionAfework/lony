@@ -219,7 +219,13 @@ func applyLaterMigrations(ctx context.Context, pool *pgxpool.Pool) error {
 	if err := applyMigration(ctx, pool, "00055", "migrations/00055_goal_source_currency.sql"); err != nil {
 		return err
 	}
-	return applyMigration(ctx, pool, "00056", "migrations/00056_account_number.sql")
+	if err := applyMigration(ctx, pool, "00056", "migrations/00056_account_number.sql"); err != nil {
+		return err
+	}
+	if err := applyMigration(ctx, pool, "00057", "migrations/00057_chat_delete.sql"); err != nil {
+		return err
+	}
+	return applyMigration(ctx, pool, "00058", "migrations/00058_world_institutions.sql")
 }
 
 func applyMigration(ctx context.Context, pool *pgxpool.Pool, version, path string) error {
