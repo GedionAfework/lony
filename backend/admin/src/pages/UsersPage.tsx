@@ -1,14 +1,21 @@
-import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   AlertTriangle,
+  ArrowDownCircle,
   ChevronLeft,
   ChevronRight,
+  Copy,
   Crown,
+  History,
+  Mail,
+  Phone,
   ShieldAlert,
   ShieldCheck,
+  UserCheck,
   Users as UsersIcon,
 } from 'lucide-react';
-import { api, type AdminRole, type AdminUser } from '../api';
+import { api, type AdminRole, type AdminUser, type AuditEntry } from '../api';
 import { useAuth } from '../auth';
 import { Button } from '../components/Button';
 import { Modal } from '../components/Modal';
@@ -16,6 +23,9 @@ import { ButtonGroup } from '../components/ButtonGroup';
 import { PageHeader } from '../components/PageHeader';
 import { PermissionGate } from '../components/PermissionGate';
 import { Table, type TableColumn } from '../components/Table';
+import { IconButton } from '../components/IconButton';
+import { Drawer, DetailList } from '../components/Drawer';
+import { actorName, describe, relativeTime } from '../lib/audit';
 import { RolesPanel } from './RolesPage';
 
 const LIMIT = 20;
@@ -80,7 +90,7 @@ export function UsersPage() {
 
 function UsersPanel() {
   const { token, hasPerm } = useAuth();
-  const [q, setQ] = useState('');
+  const [q, setQ] = useState(() => new URLSearchParams(window.location.search).get('q') ?? '');
   const [status, setStatus] = useState('');
   const [offset, setOffset] = useState(0);
   const [users, setUsers] = useState<AdminUser[]>([]);
@@ -218,7 +228,7 @@ function UsersPanel() {
       {
         key: 'status',
         header: 'Status',
-        render: (u) => <span className={`badge badge-${u.status === 'active' ? 'success' : 'warning'}`}>{u.status}</span>,
+        render: (u) => <span className={`badge badge-${statusTone(u.status)}`}>{u.status.replace('_', ' ')}</span>,
       },
       {
         key: 'plan',
@@ -256,47 +266,42 @@ function UsersPanel() {
       {
         key: 'created',
         header: 'Joined',
-        muted: true,
-        render: (u) => new Date(u.created_at).toLocaleDateString(),
+        render: (u) => (
+          <div className="cell-stack">
+            <span style={{ fontWeight: 500 }}>{new Date(u.created_at).toLocaleDateString()}</span>
+            {u.last_active_at ? (
+              <span className="muted" style={{ fontSize: 12 }}>
+                Active {relativeTime(u.last_active_at)}
+              </span>
+            ) : null}
+          </div>
+        ),
       },
       {
         key: 'actions',
         header: '',
         align: 'right',
+        width: 110,
         render: (u) => (
           <PermissionGate perm="users.write">
-            <ButtonGroup>
-              <Button
+            <div className="row-actions" onClick={(e) => e.stopPropagation()}>
+              <IconButton
                 size="sm"
-                variant="secondary"
+                icon={(u.plan_tier || 'free') === 'premium' ? ArrowDownCircle : Crown}
+                label={(u.plan_tier || 'free') === 'premium' ? 'Downgrade to Free' : 'Upgrade to Premium'}
+                variant={(u.plan_tier || 'free') === 'premium' ? 'ghost' : 'primary'}
                 disabled={busyId === u.id}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setConfirm({ kind: 'plan', user: u });
-                }}
-              >
-                {(u.plan_tier || 'free') === 'premium' ? 'Downgrade' : 'Upgrade'}
-              </Button>
-              <Button
+                onClick={() => setConfirm({ kind: 'plan', user: u })}
+              />
+              <IconButton
                 size="sm"
+                icon={u.status === 'suspended' ? UserCheck : ShieldAlert}
+                label={u.role === 'admin' ? 'Cannot suspend an admin' : u.status === 'suspended' ? 'Reactivate' : 'Suspend'}
                 variant={u.status === 'suspended' ? 'primary' : 'danger'}
                 disabled={busyId === u.id || u.role === 'admin'}
-                title={u.role === 'admin' ? 'Cannot suspend an admin' : undefined}
-                icon={
-                  u.status === 'suspended' ? (
-                    <ShieldCheck size={13} strokeWidth={2} />
-                  ) : (
-                    <ShieldAlert size={13} strokeWidth={2} />
-                  )
-                }
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setConfirm({ kind: 'suspend', user: u });
-                }}
-              >
-                {u.status === 'suspended' ? 'Unsuspend' : 'Suspend'}
-              </Button>
-            </ButtonGroup>
+                onClick={() => setConfirm({ kind: 'suspend', user: u })}
+              />
+            </div>
           </PermissionGate>
         ),
       },
@@ -316,9 +321,25 @@ function UsersPanel() {
         </div>
       ) : null}
 
+      <div className="status-chips" role="tablist" aria-label="Filter by status">
+        {STATUS_FILTERS.map((f) => (
+          <button
+            key={f.id}
+            type="button"
+            role="tab"
+            aria-selected={status === f.id}
+            className={`status-chip status-chip-${f.tone}${status === f.id ? ' active' : ''}`}
+            onClick={() => setStatus(f.id)}
+          >
+            <i />
+            {f.label}
+          </button>
+        ))}
+      </div>
+
       <Table
         title="Users"
-        subtitle={`${total} accounts`}
+        subtitle={`${total.toLocaleString()} accounts`}
         toolbar={
           <>
             <input
@@ -327,13 +348,6 @@ function UsersPanel() {
               onChange={(e) => setQ(e.target.value)}
               placeholder="Search by email, name, or username…"
             />
-            <select value={status} onChange={(e) => setStatus(e.target.value)}>
-              <option value="">All statuses</option>
-              <option value="active">Active</option>
-              <option value="suspended">Suspended</option>
-              <option value="deletion_pending">Deletion pending</option>
-              <option value="deleted">Deleted</option>
-            </select>
           </>
         }
         columns={columns}
@@ -372,33 +386,14 @@ function UsersPanel() {
         }
       />
 
-      <Modal
-        open={Boolean(detail)}
-        title={detail?.display_name || 'User'}
-        subtitle={detail?.email}
+      <UserDrawer
+        user={detail}
+        loading={detailLoading}
+        busy={Boolean(detail && busyId === detail.id)}
         onClose={() => setDetail(null)}
-        width={560}
-        footer={
-          detail && hasPerm('users.write') ? (
-            <ButtonGroup>
-              <Button size="sm" variant="secondary" disabled={busyId === detail.id} onClick={() => setConfirm({ kind: 'plan', user: detail })}>
-                {(detail.plan_tier || 'free') === 'premium' ? 'Downgrade to Free' : 'Upgrade to Premium'}
-              </Button>
-              <Button
-                size="sm"
-                variant={detail.status === 'suspended' ? 'primary' : 'danger'}
-                disabled={busyId === detail.id || detail.role === 'admin'}
-                title={detail.role === 'admin' ? 'Cannot suspend an admin' : undefined}
-                onClick={() => setConfirm({ kind: 'suspend', user: detail })}
-              >
-                {detail.status === 'suspended' ? 'Unsuspend' : 'Suspend'}
-              </Button>
-            </ButtonGroup>
-          ) : null
-        }
-      >
-        {detail ? <UserDetail user={detail} loading={detailLoading} /> : null}
-      </Modal>
+        onPlan={(u) => setConfirm({ kind: 'plan', user: u })}
+        onSuspend={(u) => setConfirm({ kind: 'suspend', user: u })}
+      />
 
       <ConfirmModal
         confirm={confirm}
@@ -468,51 +463,217 @@ function ConfirmModal({
   );
 }
 
-function UserDetail({ user: u, loading }: { user: AdminUser; loading: boolean }) {
+function statusTone(status: string) {
+  if (status === 'active') return 'success';
+  if (status === 'suspended') return 'warning';
+  if (status === 'deleted' || status === 'deletion_pending') return 'error';
+  return 'muted';
+}
+
+const STATUS_FILTERS: { id: string; label: string; tone: string }[] = [
+  { id: '', label: 'All', tone: 'all' },
+  { id: 'active', label: 'Active', tone: 'success' },
+  { id: 'suspended', label: 'Suspended', tone: 'warning' },
+  { id: 'deletion_pending', label: 'Deletion pending', tone: 'error' },
+  { id: 'deleted', label: 'Deleted', tone: 'muted' },
+];
+
+type DrawerTab = 'profile' | 'activity' | 'history';
+
+function UserDrawer({
+  user: u,
+  loading,
+  busy,
+  onClose,
+  onPlan,
+  onSuspend,
+}: {
+  user: AdminUser | null;
+  loading: boolean;
+  busy: boolean;
+  onClose: () => void;
+  onPlan: (u: AdminUser) => void;
+  onSuspend: (u: AdminUser) => void;
+}) {
+  const { token, hasPerm } = useAuth();
+  const navigate = useNavigate();
+  const [tab, setTab] = useState<DrawerTab>('profile');
+  const [history, setHistory] = useState<AuditEntry[] | null>(null);
+  const [copied, setCopied] = useState(false);
+  const userId = u?.id;
+
+  useEffect(() => {
+    setTab('profile');
+    setHistory(null);
+  }, [userId]);
+
+  useEffect(() => {
+    if (tab !== 'history' || !token || !userId || history) return;
+    api
+      .audit(token, { target_id: userId, limit: 25 })
+      .then((res) => setHistory(res.audit ?? []))
+      .catch(() => setHistory([]));
+  }, [tab, token, userId, history]);
+
+  if (!u) return null;
+  const name = u.display_name || u.email;
+  const premium = (u.plan_tier || 'free') === 'premium';
   const fmtDate = (v?: string | null) => (v ? new Date(v).toLocaleString() : '—');
-  const rows: [string, ReactNode][] = [
-    ['Status', <span className={`badge badge-${u.status === 'active' ? 'success' : 'warning'}`}>{u.status}</span>],
-    ['Plan', u.plan_tier || 'free'],
-    ['Role', u.admin_role_name || u.role],
+  const canWrite = hasPerm('users.write');
+
+  const profile: [ReactNode, ReactNode][] = [
     ['Username', u.username ? `@${u.username}` : '—'],
     ['Phone', u.phone_e164 || '—'],
     ['Email verified', u.email_verified == null ? '—' : u.email_verified ? 'Yes' : 'No'],
     ['Country', u.country_code || '—'],
     ['Currency', u.default_currency_code || '—'],
-    ['Language / timezone', [u.locale, u.timezone].filter(Boolean).join(' · ') || '—'],
+    ['Language', u.locale || '—'],
+    ['Time zone', u.timezone || '—'],
+    ['Admin role', u.admin_role_name || (u.role === 'admin' ? 'Admin (no role)' : '—')],
     ['Joined', fmtDate(u.created_at)],
-    ['Last active', fmtDate(u.last_active_at)],
+    ['Last active', u.last_active_at ? `${relativeTime(u.last_active_at)} · ${fmtDate(u.last_active_at)}` : '—'],
   ];
-  const stats: [string, ReactNode][] = [
-    ['Trust grade', u.trust_grade ? `${u.trust_grade}${u.trust_band ? ` · ${u.trust_band}` : ''}${u.trust_thin_history ? ' (thin history)' : ''}` : '—'],
-    ['Loans as borrower', u.loans_as_borrower ?? '—'],
-    ['Loans as lender', u.loans_as_lender ?? '—'],
-    ['Open loans', u.open_loans ?? '—'],
-    ['Overdue loans', u.overdue_loans ?? '—'],
-    ['Entries (30 days)', u.cashflow_entries_30d ?? '—'],
-    ['Money moved (30 days)', u.cashflow_volume_30d ?? '—'],
-    ['Friends', u.friends_count ?? '—'],
+
+  const tiles: { label: string; value: ReactNode; tone?: string }[] = [
+    {
+      label: 'Trust grade',
+      value: u.trust_grade ? `${u.trust_grade}${u.trust_band ? ` · ${u.trust_band}` : ''}${u.trust_thin_history ? ' (thin)' : ''}` : '—',
+    },
+    { label: 'Friends', value: u.friends_count ?? '—' },
+    { label: 'Loans borrowed', value: u.loans_as_borrower ?? '—' },
+    { label: 'Loans lent', value: u.loans_as_lender ?? '—' },
+    { label: 'Open loans', value: u.open_loans ?? '—' },
+    { label: 'Overdue', value: u.overdue_loans ?? '—', tone: (u.overdue_loans ?? 0) > 0 ? 'warn' : undefined },
+    { label: 'Entries · 30d', value: u.cashflow_entries_30d ?? '—' },
+    { label: 'Volume · 30d', value: u.cashflow_volume_30d ?? '—' },
   ];
-  const grid = (items: [string, ReactNode][]) => (
-    <div style={{ display: 'grid', gridTemplateColumns: '180px 1fr', gap: '8px 16px', alignItems: 'center' }}>
-      {items.map(([k, v]) => (
-        <Fragment key={k}>
-          <span className="muted">{k}</span>
-          <span>{v}</span>
-        </Fragment>
-      ))}
-    </div>
-  );
+
   return (
-    <div style={{ display: 'grid', gap: 18, opacity: loading ? 0.6 : 1 }}>
-      <section>
-        <h4 style={{ margin: '0 0 8px' }}>Account</h4>
-        {grid(rows)}
-      </section>
-      <section>
-        <h4 style={{ margin: '0 0 8px' }}>Activity{loading ? ' · loading…' : ''}</h4>
-        {grid(stats)}
-      </section>
-    </div>
+    <Drawer
+      open
+      onClose={onClose}
+      width={520}
+      eyebrow="User profile"
+      title={name}
+      icon={
+        <span className="user-initials lg" style={initialsStyle(name)}>
+          {initialsOf(name)}
+        </span>
+      }
+      footer={
+        canWrite ? (
+          <>
+            <Button
+              variant="secondary"
+              disabled={busy}
+              icon={premium ? <ArrowDownCircle size={15} strokeWidth={2} /> : <Crown size={15} strokeWidth={2} />}
+              onClick={() => onPlan(u)}
+            >
+              {premium ? 'Downgrade to Free' : 'Upgrade to Premium'}
+            </Button>
+            <Button
+              variant={u.status === 'suspended' ? 'primary' : 'danger'}
+              disabled={busy || u.role === 'admin'}
+              title={u.role === 'admin' ? 'Cannot suspend an admin' : undefined}
+              icon={u.status === 'suspended' ? <ShieldCheck size={15} strokeWidth={2} /> : <ShieldAlert size={15} strokeWidth={2} />}
+              onClick={() => onSuspend(u)}
+            >
+              {u.status === 'suspended' ? 'Reactivate' : 'Suspend'}
+            </Button>
+          </>
+        ) : null
+      }
+    >
+      <div className="user-hero">
+        <div className="user-hero-badges">
+          <span className={`badge badge-${statusTone(u.status)}`}>{u.status.replace('_', ' ')}</span>
+          <span className={`badge ${premium ? 'badge-primary' : ''}`}>
+            {premium ? <Crown size={12} strokeWidth={2} /> : null}
+            {u.plan_tier || 'free'}
+          </span>
+          {u.role === 'admin' ? <span className="badge badge-warning">admin</span> : null}
+        </div>
+        <div className="user-hero-contact">
+          <a href={`mailto:${u.email}`}>
+            <Mail size={14} strokeWidth={2} /> {u.email}
+          </a>
+          {u.phone_e164 ? (
+            <a href={`tel:${u.phone_e164}`}>
+              <Phone size={14} strokeWidth={2} /> {u.phone_e164}
+            </a>
+          ) : null}
+          <button
+            type="button"
+            className="link-btn"
+            onClick={() => {
+              void navigator.clipboard?.writeText(u.id).catch(() => undefined);
+              setCopied(true);
+              window.setTimeout(() => setCopied(false), 1200);
+            }}
+          >
+            <Copy size={13} strokeWidth={2} /> {copied ? 'Copied' : 'Copy ID'}
+          </button>
+        </div>
+      </div>
+
+      <div className="seg drawer-tabs" role="tablist">
+        <button type="button" className={tab === 'profile' ? 'active' : ''} onClick={() => setTab('profile')}>
+          Profile
+        </button>
+        <button type="button" className={tab === 'activity' ? 'active' : ''} onClick={() => setTab('activity')}>
+          Activity
+        </button>
+        {hasPerm('audit.read') ? (
+          <button type="button" className={tab === 'history' ? 'active' : ''} onClick={() => setTab('history')}>
+            Admin history
+          </button>
+        ) : null}
+      </div>
+
+      <div style={{ opacity: loading ? 0.6 : 1, transition: 'opacity .2s' }}>
+        {tab === 'profile' ? <DetailList rows={profile} /> : null}
+
+        {tab === 'activity' ? (
+          <div className="mini-tiles">
+            {tiles.map((t) => (
+              <div key={t.label} className={`mini-tile${t.tone ? ` mini-tile-${t.tone}` : ''}`}>
+                <small>{t.label}</small>
+                <strong>{t.value}</strong>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        {tab === 'history' ? (
+          history === null ? (
+            <p className="muted">Loading…</p>
+          ) : history.length === 0 ? (
+            <div className="lt-table-empty" style={{ padding: 32 }}>
+              <History size={28} strokeWidth={1.4} />
+              <p>No admin has acted on this account.</p>
+            </div>
+          ) : (
+            <>
+              <ul className="mini-timeline">
+                {history.map((e) => (
+                  <li key={e.id}>
+                    <span className={`mini-dot ${e.action === 'user.suspend' ? 'bad' : 'good'}`} />
+                    <span>
+                      <b>{actorName(e)}</b> {describe(e)}
+                    </span>
+                    <time className="muted" title={new Date(e.created_at).toLocaleString()}>
+                      {relativeTime(e.created_at)}
+                    </time>
+                  </li>
+                ))}
+              </ul>
+              <Button size="sm" variant="ghost" onClick={() => navigate(`/audit?target=${u.id}&target_label=${encodeURIComponent(name)}`)}>
+                Open in audit log
+              </Button>
+            </>
+          )
+        ) : null}
+      </div>
+    </Drawer>
   );
 }

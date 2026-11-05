@@ -42,7 +42,7 @@ const NAV: NavItem[] = [
   { to: '/categories', label: 'Categories', icon: Layers, perm: 'categories.read', group: 'Content', keywords: 'catalog institutions banks' },
   { to: '/themes', label: 'Themes', icon: Palette, perm: 'themes.read', group: 'Content', keywords: 'colors appearance' },
   { to: '/localization', label: 'Languages', icon: Languages, perm: 'localization.manage', group: 'Content', keywords: 'translations i18n calendars' },
-  { to: '/settings', label: 'Settings', icon: Settings, perm: 'settings.ai', group: 'System', keywords: 'ai config' },
+  { to: '/settings', label: 'Settings', icon: Settings, group: 'System', keywords: 'ai config account appearance notes' },
 ];
 
 const THEME_OPTIONS: { id: ThemeMode; label: string; icon: LucideIcon }[] = [
@@ -311,20 +311,18 @@ export function AppShell() {
                   <strong>{me?.display_name || 'Admin'}</strong>
                   <small>{me?.email}</small>
                 </div>
-                {hasPerm('settings.ai') ? (
-                  <button
-                    type="button"
-                    role="menuitem"
-                    className="shell-account-item"
-                    onClick={() => {
-                      setMenuOpen(false);
-                      navigate('/settings');
-                    }}
-                  >
-                    <Settings size={15} strokeWidth={2} />
-                    Settings
-                  </button>
-                ) : null}
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="shell-account-item"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    navigate('/settings');
+                  }}
+                >
+                  <Settings size={15} strokeWidth={2} />
+                  Settings
+                </button>
                 {roleName ? (
                   <div className="shell-account-item" style={{ cursor: 'default', color: 'var(--muted)' }}>
                     <ShieldCheck size={15} strokeWidth={2} />

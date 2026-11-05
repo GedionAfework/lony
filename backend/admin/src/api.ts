@@ -74,10 +74,25 @@ export type AuditEntry = {
   id: string;
   actor_id: string;
   actor_email?: string;
+  actor_name?: string;
   action: string;
   target_user_id?: string | null;
+  target_email?: string;
+  target_name?: string;
+  ip?: string;
+  user_agent?: string;
   meta?: Record<string, unknown> | null;
   created_at: string;
+};
+
+export type AuditStats = {
+  total: number;
+  today: number;
+  last_7d: number;
+  actors_7d: number;
+  by_day: DayCount[];
+  by_action: { action: string; count: number }[];
+  top_actors: { actor_id: string; email: string; name: string; count: number }[];
 };
 
 export type Permission = {
@@ -300,7 +315,13 @@ export type ListUsersResponse = {
 
 export type AuditParams = {
   q?: string;
+  /** Exact action, or a prefix ending in "." such as "user." */
   action?: string;
+  actor_id?: string;
+  target_id?: string;
+  /** RFC3339 timestamps. */
+  from?: string;
+  to?: string;
   limit?: number;
   offset?: number;
 };
@@ -328,8 +349,8 @@ export const api = {
     request<void>('/api/v1/auth/logout', { method: 'POST' }, token),
   me: (token: string) => request<MeResponse>('/api/v1/me', { method: 'GET' }, token),
 
-  overview: (token: string) =>
-    request<OverviewResponse>('/api/v1/admin/overview', { method: 'GET' }, token),
+  overview: (token: string, days?: number) =>
+    request<OverviewResponse>(`/api/v1/admin/overview${qs({ days })}`, { method: 'GET' }, token),
 
   listUsers: (token: string, params: ListUsersParams = {}) =>
     request<ListUsersResponse>(
@@ -382,12 +403,45 @@ export const api = {
       `/api/v1/admin/audit${qs({
         q: params.q,
         action: params.action,
+        actor_id: params.actor_id,
+        target_id: params.target_id,
+        from: params.from,
+        to: params.to,
         limit: params.limit ?? 40,
         offset: params.offset ?? 0,
       })}`,
       { method: 'GET' },
       token,
     ),
+  auditStats: (token: string, days = 30) =>
+    request<{ stats: AuditStats }>(`/api/v1/admin/audit/stats${qs({ days })}`, { method: 'GET' }, token),
+  /** Downloads the filtered audit log as a CSV file. */
+  exportAudit: async (token: string, params: AuditParams = {}) => {
+    const res = await fetch(
+      `${API_BASE}/api/v1/admin/audit/export${qs({
+        q: params.q,
+        action: params.action,
+        actor_id: params.actor_id,
+        target_id: params.target_id,
+        from: params.from,
+        to: params.to,
+      })}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    if (!res.ok) throw new Error(`Export failed (${res.status})`);
+    const blob = await res.blob();
+    const name =
+      /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') || '')?.[1] ||
+      `lony-audit-${new Date().toISOString().slice(0, 10)}.csv`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
 
   getSettings: (token: string) =>
     request<{ settings: { ai_disabled: boolean } }>('/api/v1/admin/settings', { method: 'GET' }, token),

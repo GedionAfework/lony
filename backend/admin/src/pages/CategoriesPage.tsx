@@ -10,7 +10,6 @@ import {
   ChevronDown,
   ChevronUp,
   CreditCard,
-  Filter,
   Landmark,
   Layers,
   Pencil,
@@ -24,39 +23,57 @@ import { BulkJsonUpload, asBulkArray } from '../components/BulkJsonUpload';
 import { Button } from '../components/Button';
 import { ButtonGroup } from '../components/ButtonGroup';
 import { IconButton } from '../components/IconButton';
-import { Modal } from '../components/Modal';
 import { PageHeader } from '../components/PageHeader';
-import { PageToolbar } from '../components/PageToolbar';
+import { CatalogBar, statusOk, type StatusFilter } from '../components/CatalogBar';
 import { PermissionGate } from '../components/PermissionGate';
 import { Table, type TableColumn } from '../components/Table';
 
 type SubTab = 'account_type' | 'institution_type' | 'institutions' | 'goal_type' | 'cashflow';
 
-const SUB_NAV: { id: SubTab; label: string; icon: typeof CreditCard }[] = [
-  { id: 'account_type', label: 'Account types', icon: CreditCard },
-  { id: 'institution_type', label: 'Institution types', icon: Building2 },
-  { id: 'institutions', label: 'Institutions', icon: Landmark },
-  { id: 'goal_type', label: 'Goal types', icon: Target },
-  { id: 'cashflow', label: 'Cashflow', icon: ArrowLeftRight },
+const SUB_NAV: { id: SubTab; label: string; hint: string; icon: typeof CreditCard; color: string }[] = [
+  { id: 'account_type', label: 'Account types', hint: 'Bank, wallet, cash…', icon: CreditCard, color: '#0ea5a0' },
+  { id: 'institution_type', label: 'Lender types', hint: 'Bank, MFI, SACCO…', icon: Building2, color: '#7c6cf6' },
+  { id: 'institutions', label: 'Institutions', hint: 'Named banks & lenders', icon: Landmark, color: '#0891b2' },
+  { id: 'goal_type', label: 'Goal types', hint: 'Savings goal presets', icon: Target, color: '#f59e0b' },
+  { id: 'cashflow', label: 'Cashflow', hint: 'Income & expense', icon: ArrowLeftRight, color: '#db2777' },
 ];
 
+function readTab(): SubTab {
+  const t = new URLSearchParams(window.location.search).get('tab') as SubTab | null;
+  return t && SUB_NAV.some((n) => n.id === t) ? t : 'account_type';
+}
+
 export function CategoriesPage() {
-  const [tab, setTab] = useState<SubTab>('account_type');
+  const [tab, setTab] = useState<SubTab>(readTab);
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    url.searchParams.set('tab', tab);
+    window.history.replaceState({}, '', url.toString());
+  }, [tab]);
 
   return (
     <div className="page">
       <PageHeader icon={Layers} title="Categories" subtitle="Catalogs, institutions, and cashflow categories" />
 
-      <div className="segmented">
+      <div className="cat-tabs" role="tablist" aria-label="Catalog">
         {SUB_NAV.map((item) => (
           <button
             key={item.id}
             type="button"
-            className={`segmented-btn${tab === item.id ? ' active' : ''}`}
+            role="tab"
+            aria-selected={tab === item.id}
+            className={`cat-tab${tab === item.id ? ' active' : ''}`}
+            style={{ ['--tab' as string]: item.color }}
             onClick={() => setTab(item.id)}
           >
-            <item.icon size={15} strokeWidth={2} />
-            {item.label}
+            <span className="cat-tab-icon">
+              <item.icon size={18} strokeWidth={2} />
+            </span>
+            <span className="cat-tab-text">
+              <strong>{item.label}</strong>
+              <small>{item.hint}</small>
+            </span>
           </button>
         ))}
       </div>
@@ -89,9 +106,8 @@ function CatalogTypeSection({ kind, title }: { kind: 'account_type' | 'instituti
   const [newLabel, setNewLabel] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
-  const [filterOpen, setFilterOpen] = useState(false);
   const [search, setSearch] = useState('');
-  const [activeOnly, setActiveOnly] = useState(false);
+  const [status, setStatus] = useState<StatusFilter>('all');
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -114,11 +130,11 @@ function CatalogTypeSection({ kind, title }: { kind: 'account_type' | 'instituti
   const visibleItems = useMemo(() => {
     const q = search.trim().toLowerCase();
     return items.filter((row) => {
-      if (activeOnly && !row.active) return false;
+      if (!statusOk(row.active, status)) return false;
       if (!q) return true;
       return row.label.toLowerCase().includes(q) || row.code.toLowerCase().includes(q);
     });
-  }, [items, search, activeOnly]);
+  }, [items, search, status]);
 
   async function onCreate(e: FormEvent) {
     e.preventDefault();
@@ -222,11 +238,16 @@ function CatalogTypeSection({ kind, title }: { kind: 'account_type' | 'instituti
     <div className="stack-lg">
       <ErrorBanner message={error} />
 
-      <PageToolbar
-        left={
-          <PermissionGate perm="categories.write">
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: '100%' }}>
-              <form className="card inline-form" onSubmit={onCreate} style={{ margin: 0 }}>
+      <CatalogBar
+        search={search}
+        onSearch={setSearch}
+        placeholder="Search by label or code…"
+        status={status}
+        onStatus={setStatus}
+        counts={{ all: items.length, active: items.filter((r) => r.active).length }}
+        addLabel="Add"
+        addForm={
+          <form className="inline-form" onSubmit={onCreate}>
                 <input
                   value={newLabel}
                   onChange={(e) => setNewLabel(e.target.value)}
@@ -236,7 +257,9 @@ function CatalogTypeSection({ kind, title }: { kind: 'account_type' | 'instituti
                   Add
                 </Button>
               </form>
-              <BulkJsonUpload
+        }
+        importer={
+          <BulkJsonUpload
                 title={`Upload ${title.toLowerCase()} JSON`}
                 hint='[ { "label": "Checking" }, { "label": "Savings", "code": "savings" } ]'
                 example={`[\n  { "label": "Example ${title.slice(0, -1)}" }\n]`}
@@ -244,53 +267,8 @@ function CatalogTypeSection({ kind, title }: { kind: 'account_type' | 'instituti
                 busy={busy}
                 onImport={importJSON}
               />
-            </div>
-          </PermissionGate>
-        }
-        right={
-          <IconButton
-            icon={Filter}
-            label={(search || activeOnly) ? 'Filters active' : 'Filter'}
-            variant={(search || activeOnly) ? 'primary' : 'ghost'}
-            className={(search || activeOnly) ? 'filter-icon-active' : undefined}
-            onClick={() => setFilterOpen(true)}
-          />
         }
       />
-
-      <Modal
-        open={filterOpen}
-        title={`Filter ${title.toLowerCase()}`}
-        subtitle="Narrow the list without leaving this page."
-        onClose={() => setFilterOpen(false)}
-        footer={
-          <>
-            <Button
-              variant="ghost"
-              onClick={() => {
-                setSearch('');
-                setActiveOnly(false);
-              }}
-            >
-              Clear
-            </Button>
-            <Button variant="primary" onClick={() => setFilterOpen(false)}>
-              Apply
-            </Button>
-          </>
-        }
-      >
-        <div className="stack">
-          <label className="field">
-            <span className="field-label">Search</span>
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Label or code…" />
-          </label>
-          <label className="checkbox-row" style={{ justifyContent: 'space-between' }}>
-            Active only
-            <input type="checkbox" checked={activeOnly} onChange={(e) => setActiveOnly(e.target.checked)} />
-          </label>
-        </div>
-      </Modal>
 
       <Table
         title={title}
@@ -395,9 +373,8 @@ function InstitutionsSection() {
   const [newCountry, setNewCountry] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
-  const [filterOpen, setFilterOpen] = useState(false);
   const [search, setSearch] = useState('');
-  const [activeOnly, setActiveOnly] = useState(false);
+  const [status, setStatus] = useState<StatusFilter>('all');
 
   // Accounts: banks, wallets and mobile money people keep money in. Lenders: who a loan is from.
   const [kind, setKind] = useState<'account_type' | 'institution_type'>('account_type');
@@ -436,11 +413,11 @@ function InstitutionsSection() {
   // A filter change starts again from the first page.
   useEffect(() => {
     setPageIndex(0);
-  }, [kind, typeCodeFilter, countryFilter, search, activeOnly]);
+  }, [kind, typeCodeFilter, countryFilter, search, status]);
 
   const countries = Array.from(new Set(items.map((r) => r.country_code || '').filter(Boolean))).sort();
   const filtered = items.filter((r) => {
-    if (activeOnly && !r.active) return false;
+    if (!statusOk(r.active, status)) return false;
     if (countryFilter === 'global' ? Boolean(r.country_code) : countryFilter && r.country_code !== countryFilter) return false;
     const q = search.trim().toLowerCase();
     if (!q) return true;
@@ -578,11 +555,45 @@ function InstitutionsSection() {
     <div className="stack-lg">
       <ErrorBanner message={error} />
 
-      <PageToolbar
-        left={
-          <PermissionGate perm="categories.write">
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: '100%' }}>
-              <form className="card inline-form inline-form-wrap" onSubmit={onCreate} style={{ margin: 0 }}>
+      <CatalogBar
+        search={search}
+        onSearch={setSearch}
+        placeholder="Search by name, type or country…"
+        status={status}
+        onStatus={setStatus}
+        counts={{ all: items.length, active: items.filter((r) => r.active).length }}
+        extra={
+          <>
+        <div className="seg" role="tablist" aria-label="Institution group">
+          <button type="button" role="tab" aria-selected={kind === 'account_type'} className={kind === 'account_type' ? 'active' : ''} onClick={() => { setKind('account_type'); setTypeCodeFilter(''); }}>
+            Accounts
+          </button>
+          <button type="button" role="tab" aria-selected={kind === 'institution_type'} className={kind === 'institution_type' ? 'active' : ''} onClick={() => { setKind('institution_type'); setTypeCodeFilter(''); }}>
+            Lenders
+          </button>
+        </div>
+        <select value={typeCodeFilter} onChange={(e) => setTypeCodeFilter(e.target.value)} aria-label="Type">
+          <option value="">All types</option>
+          {typeCodes.map((t) => (
+            <option key={t.id} value={t.code}>
+              {t.label}
+            </option>
+          ))}
+        </select>
+        <select value={countryFilter} onChange={(e) => setCountryFilter(e.target.value)} aria-label="Country">
+          <option value="">All countries</option>
+          <option value="global">Worldwide</option>
+          {countries.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
+        </select>
+                </>
+        }
+        addLabel="Add institution"
+        addForm={
+          <form className="inline-form inline-form-wrap" onSubmit={onCreate}>
                 <select value={newTypeCode} onChange={(e) => setNewTypeCode(e.target.value)} required>
                   <option value="" disabled>
                     Institution type…
@@ -610,7 +621,9 @@ function InstitutionsSection() {
                   Add
                 </Button>
               </form>
-              <BulkJsonUpload
+        }
+        importer={
+          <BulkJsonUpload
                 title="Upload institutions JSON (banks, wallets…)"
                 hint='[ { "label": "Commercial Bank of Ethiopia", "type_code": "bank", "country_code": "ET" } ]'
                 example={`[\n  { "label": "Example Bank", "type_code": "${newTypeCode || 'bank'}", "country_code": "ET" }\n]`}
@@ -618,94 +631,8 @@ function InstitutionsSection() {
                 busy={busy}
                 onImport={importJSON}
               />
-            </div>
-          </PermissionGate>
-        }
-        right={
-          <IconButton
-            icon={Filter}
-            label={(typeCodeFilter || search || activeOnly) ? 'Filters active' : 'More filters'}
-            variant={(typeCodeFilter || activeOnly) ? 'primary' : 'ghost'}
-            className={(typeCodeFilter || activeOnly) ? 'filter-icon-active' : undefined}
-            onClick={() => setFilterOpen(true)}
-          />
         }
       />
-
-      <div className="filter-bar">
-        <div className="seg" role="tablist" aria-label="Institution group">
-          <button type="button" role="tab" aria-selected={kind === 'account_type'} className={kind === 'account_type' ? 'active' : ''} onClick={() => { setKind('account_type'); setTypeCodeFilter(''); }}>
-            Accounts
-          </button>
-          <button type="button" role="tab" aria-selected={kind === 'institution_type'} className={kind === 'institution_type' ? 'active' : ''} onClick={() => { setKind('institution_type'); setTypeCodeFilter(''); }}>
-            Lenders
-          </button>
-        </div>
-        <input className="filter-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search by name, type or country…" aria-label="Search institutions" />
-        <select value={typeCodeFilter} onChange={(e) => setTypeCodeFilter(e.target.value)} aria-label="Type">
-          <option value="">All types</option>
-          {typeCodes.map((t) => (
-            <option key={t.id} value={t.code}>
-              {t.label}
-            </option>
-          ))}
-        </select>
-        <select value={countryFilter} onChange={(e) => setCountryFilter(e.target.value)} aria-label="Country">
-          <option value="">All countries</option>
-          <option value="global">Worldwide</option>
-          {countries.map((c) => (
-            <option key={c} value={c}>
-              {c}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <Modal
-        open={filterOpen}
-        title="Filter institutions"
-        subtitle="Type, search, and active state."
-        onClose={() => setFilterOpen(false)}
-        footer={
-          <>
-            <Button
-              variant="ghost"
-              onClick={() => {
-                setTypeCodeFilter('');
-                setSearch('');
-                setActiveOnly(false);
-              }}
-            >
-              Clear
-            </Button>
-            <Button variant="primary" onClick={() => setFilterOpen(false)}>
-              Apply
-            </Button>
-          </>
-        }
-      >
-        <div className="stack">
-          <label className="field">
-            <span className="field-label">Institution type</span>
-            <select value={typeCodeFilter} onChange={(e) => setTypeCodeFilter(e.target.value)}>
-              <option value="">All institution types</option>
-              {typeCodes.map((t) => (
-                <option key={t.id} value={t.code}>
-                  {t.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field">
-            <span className="field-label">Search</span>
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Name or country…" />
-          </label>
-          <label className="checkbox-row" style={{ justifyContent: 'space-between' }}>
-            Active only
-            <input type="checkbox" checked={activeOnly} onChange={(e) => setActiveOnly(e.target.checked)} />
-          </label>
-        </div>
-      </Modal>
 
       <Table
         title={kind === 'account_type' ? 'Account institutions' : 'Lenders'}
@@ -822,9 +749,8 @@ function CashflowSection() {
   const [newName, setNewName] = useState('');
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState('');
-  const [filterOpen, setFilterOpen] = useState(false);
   const [search, setSearch] = useState('');
-  const [activeOnly, setActiveOnly] = useState(false);
+  const [status, setStatus] = useState<StatusFilter>('all');
 
   const load = useCallback(async () => {
     if (!token) return;
@@ -948,17 +874,24 @@ function CashflowSection() {
         ))}
       </div>
 
-      <PageToolbar
-        left={
-          <PermissionGate perm="categories.write">
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, width: '100%' }}>
-              <form className="card inline-form" onSubmit={onCreate} style={{ margin: 0 }}>
+      <CatalogBar
+        search={search}
+        onSearch={setSearch}
+        placeholder="Search by name or slug…"
+        status={status}
+        onStatus={setStatus}
+        counts={{ all: items.length, active: items.filter((r) => r.active).length }}
+        addLabel="Add category"
+        addForm={
+          <form className="inline-form" onSubmit={onCreate}>
                 <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder={`New ${kind} category name…`} />
                 <Button type="submit" variant="primary" disabled={busy || !newName.trim()} icon={<Plus size={14} strokeWidth={2} />}>
                   Add
                 </Button>
               </form>
-              <BulkJsonUpload
+        }
+        importer={
+          <BulkJsonUpload
                 title={`Upload ${kind} categories JSON`}
                 hint='[ { "name": "Groceries" }, "Rent" ]'
                 example={`[\n  { "name": "Example ${kind}" }\n]`}
@@ -966,57 +899,13 @@ function CashflowSection() {
                 busy={busy}
                 onImport={importJSON}
               />
-            </div>
-          </PermissionGate>
-        }
-        right={
-          <IconButton
-            icon={Filter}
-            label={(search || activeOnly) ? 'Filters active' : 'Filter'}
-            variant={(search || activeOnly) ? 'primary' : 'ghost'}
-            className={(search || activeOnly) ? 'filter-icon-active' : undefined}
-            onClick={() => setFilterOpen(true)}
-          />
         }
       />
-
-      <Modal
-        open={filterOpen}
-        title={`Filter ${kind} categories`}
-        onClose={() => setFilterOpen(false)}
-        footer={
-          <>
-            <Button
-              variant="ghost"
-              onClick={() => {
-                setSearch('');
-                setActiveOnly(false);
-              }}
-            >
-              Clear
-            </Button>
-            <Button variant="primary" onClick={() => setFilterOpen(false)}>
-              Apply
-            </Button>
-          </>
-        }
-      >
-        <div className="stack">
-          <label className="field">
-            <span className="field-label">Search</span>
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Name or slug…" />
-          </label>
-          <label className="checkbox-row" style={{ justifyContent: 'space-between' }}>
-            Active only
-            <input type="checkbox" checked={activeOnly} onChange={(e) => setActiveOnly(e.target.checked)} />
-          </label>
-        </div>
-      </Modal>
 
       <Table
         title={`${kind === 'income' ? 'Income' : 'Expense'} categories`}
         subtitle={`${items.filter((r) => {
-          if (activeOnly && !r.active) return false;
+          if (!statusOk(r.active, status)) return false;
           const q = search.trim().toLowerCase();
           if (!q) return true;
           return r.name.toLowerCase().includes(q) || r.slug.toLowerCase().includes(q);
@@ -1084,7 +973,7 @@ function CashflowSection() {
           },
         ] satisfies TableColumn<SystemCategory>[]}
         rows={items.filter((r) => {
-          if (activeOnly && !r.active) return false;
+          if (!statusOk(r.active, status)) return false;
           const q = search.trim().toLowerCase();
           if (!q) return true;
           return r.name.toLowerCase().includes(q) || r.slug.toLowerCase().includes(q);
