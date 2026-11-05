@@ -367,6 +367,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 
 			r.Route("/admin", func(r chi.Router) {
 				r.Use(admin.RequireAdmin(adminSvc))
+				r.Use(admin.CaptureRequestMeta)
 				r.With(admin.RequirePerm(adminSvc, admin.PermOverviewRead)).Get("/overview", adminH.Overview)
 				r.With(admin.RequirePerm(adminSvc, admin.PermUsersRead)).Get("/users", adminH.ListUsers)
 				r.With(admin.RequirePerm(adminSvc, admin.PermUsersRead)).Get("/users/{userID}", adminH.GetUser)
@@ -375,6 +376,8 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 				r.With(admin.RequirePerm(adminSvc, admin.PermUsersWrite), idem.Handler("admin.plan")).Patch("/users/{userID}/plan", adminH.SetPlanTier)
 				r.With(admin.RequirePerm(adminSvc, admin.PermRolesManage)).Patch("/users/{userID}/role", adminH.SetUserRole)
 				r.With(admin.RequirePerm(adminSvc, admin.PermAuditRead)).Get("/audit", adminH.ListAudit)
+				r.With(admin.RequirePerm(adminSvc, admin.PermAuditRead)).Get("/audit/stats", adminH.AuditStats)
+				r.With(admin.RequirePerm(adminSvc, admin.PermAuditRead)).Get("/audit/export", adminH.ExportAudit)
 				r.With(admin.RequirePerm(adminSvc, admin.PermSettingsAI)).Get("/settings", adminH.GetSettings)
 				r.With(admin.RequirePerm(adminSvc, admin.PermSettingsAI), idem.Handler("admin.ai")).Post("/settings/ai", adminH.SetAIDisabled)
 				r.With(admin.RequirePerm(adminSvc, admin.PermCategoriesRead)).Get("/catalogs/types", adminH.ListCatalogTypesAdmin)

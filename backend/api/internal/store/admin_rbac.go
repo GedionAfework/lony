@@ -34,8 +34,12 @@ func (a adminStoreAdapter) UserPermissions(ctx context.Context, userID uuid.UUID
 func (a adminStoreAdapter) CountSuperAdmins(ctx context.Context) (int, error) {
 	return a.Inner.AdminCountSuperAdmins(ctx)
 }
-func (a adminStoreAdapter) ListAuditFiltered(ctx context.Context, q, action string, limit, offset int) ([]admin.AuditEntry, int, error) {
-	return a.Inner.AdminListAuditFiltered(ctx, q, action, limit, offset)
+func (a adminStoreAdapter) ListAuditFiltered(ctx context.Context, f admin.AuditFilter) ([]admin.AuditEntry, int, error) {
+	return a.Inner.AdminListAuditFiltered(ctx, f)
+}
+
+func (a adminStoreAdapter) AuditStats(ctx context.Context, days int) (admin.AuditStats, error) {
+	return a.Inner.AdminAuditStats(ctx, days)
 }
 func (a adminStoreAdapter) SignupsByDay(ctx context.Context, days int) ([]admin.DayCount, error) {
 	return a.Inner.AdminSignupsByDay(ctx, days)
@@ -231,38 +235,54 @@ func (s *SQLStore) AdminCountSuperAdmins(ctx context.Context) (int, error) {
 	return n, err
 }
 
-func (s *SQLStore) AdminListAuditFiltered(ctx context.Context, q, action string, limit, offset int) ([]admin.AuditEntry, int, error) {
-	q = strings.TrimSpace(strings.ToLower(q))
-	action = strings.TrimSpace(action)
+func (s *SQLStore) AdminListAuditFiltered(ctx context.Context, f admin.AuditFilter) ([]admin.AuditEntry, int, error) {
+	q := strings.TrimSpace(strings.ToLower(f.Q))
 	like := "%" + q + "%"
-	var total int
-	err := s.pool.QueryRow(ctx, `
-		SELECT COUNT(*)::int FROM admin_audit_log a
-		LEFT JOIN users u ON u.id = a.actor_id
+	action := strings.TrimSpace(f.Action)
+	actionPrefix := ""
+	if strings.HasSuffix(action, ".") {
+		actionPrefix, action = action+"%", ""
+	}
+	// $1 action, $2 search, $3 actor, $4 target, $5 from, $6 to, $7 action prefix
+	const where = `
 		WHERE ($1 = '' OR a.action = $1)
-		  AND ($2 = '' OR lower(COALESCE(u.email::text,'')) LIKE $2 OR lower(a.action) LIKE $2)
-	`, action, like).Scan(&total)
-	if err != nil {
+		  AND ($7 = '' OR a.action LIKE $7)
+		  AND ($2 = '%%' OR lower(COALESCE(u.email::text,'')) LIKE $2
+		       OR lower(COALESCE(u.display_name,'')) LIKE $2
+		       OR lower(COALESCE(t.email::text,'')) LIKE $2
+		       OR lower(a.action) LIKE $2
+		       OR lower(a.meta::text) LIKE $2
+		       OR COALESCE(a.ip,'') LIKE $2)
+		  AND ($3::uuid IS NULL OR a.actor_id = $3)
+		  AND ($4::uuid IS NULL OR a.target_user_id = $4)
+		  AND ($5::timestamptz IS NULL OR a.created_at >= $5)
+		  AND ($6::timestamptz IS NULL OR a.created_at < $6)`
+	const from = `
+		FROM admin_audit_log a
+		LEFT JOIN users u ON u.id = a.actor_id
+		LEFT JOIN users t ON t.id = a.target_user_id`
+	args := []any{action, like, f.ActorID, f.TargetID, f.From, f.To, actionPrefix}
+
+	var total int
+	if err := s.pool.QueryRow(ctx, `SELECT COUNT(*)::int `+from+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 	rows, err := s.pool.Query(ctx, `
-		SELECT a.id, a.actor_id, COALESCE(u.email::text,''), a.action, a.target_user_id, a.meta, a.created_at
-		FROM admin_audit_log a
-		LEFT JOIN users u ON u.id = a.actor_id
-		WHERE ($1 = '' OR a.action = $1)
-		  AND ($2 = '' OR lower(COALESCE(u.email::text,'')) LIKE $2 OR lower(a.action) LIKE $2)
+		SELECT a.id, a.actor_id, COALESCE(u.email::text,''), COALESCE(u.display_name,''),
+		       a.action, a.target_user_id, COALESCE(t.email::text,''), COALESCE(t.display_name,''),
+		       COALESCE(a.ip,''), COALESCE(a.user_agent,''), a.meta, a.created_at`+from+where+`
 		ORDER BY a.created_at DESC
-		LIMIT $3 OFFSET $4
-	`, action, like, limit, offset)
+		LIMIT $8 OFFSET $9`, append(args, f.Limit, f.Offset)...)
 	if err != nil {
 		return nil, 0, err
 	}
 	defer rows.Close()
-	var out []admin.AuditEntry
+	out := []admin.AuditEntry{}
 	for rows.Next() {
 		var e admin.AuditEntry
 		var meta []byte
-		if err := rows.Scan(&e.ID, &e.ActorID, &e.ActorEmail, &e.Action, &e.TargetUserID, &meta, &e.CreatedAt); err != nil {
+		if err := rows.Scan(&e.ID, &e.ActorID, &e.ActorEmail, &e.ActorName, &e.Action, &e.TargetUserID,
+			&e.TargetEmail, &e.TargetName, &e.IP, &e.UserAgent, &meta, &e.CreatedAt); err != nil {
 			return nil, 0, err
 		}
 		if meta == nil {
@@ -272,6 +292,83 @@ func (s *SQLStore) AdminListAuditFiltered(ctx context.Context, q, action string,
 		out = append(out, e)
 	}
 	return out, total, rows.Err()
+}
+
+func (s *SQLStore) AdminAuditStats(ctx context.Context, days int) (admin.AuditStats, error) {
+	var st admin.AuditStats
+	if err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*)::int,
+		       COUNT(*) FILTER (WHERE created_at >= date_trunc('day', now()))::int,
+		       COUNT(*) FILTER (WHERE created_at >= now() - interval '7 days')::int,
+		       COUNT(DISTINCT actor_id) FILTER (WHERE created_at >= now() - interval '7 days')::int
+		FROM admin_audit_log
+	`).Scan(&st.Total, &st.Today, &st.Last7d, &st.Actors7d); err != nil {
+		return st, err
+	}
+
+	rows, err := s.pool.Query(ctx, `
+		SELECT to_char(d::date, 'YYYY-MM-DD'), COALESCE(c.cnt, 0)::int
+		FROM generate_series((now() AT TIME ZONE 'UTC')::date - ($1::int - 1), (now() AT TIME ZONE 'UTC')::date, '1 day') d
+		LEFT JOIN (
+		  SELECT (created_at AT TIME ZONE 'UTC')::date AS day, COUNT(*)::int AS cnt
+		  FROM admin_audit_log
+		  WHERE created_at >= now() - ($1::int || ' days')::interval
+		  GROUP BY 1
+		) c ON c.day = d::date
+		ORDER BY 1
+	`, days)
+	if err != nil {
+		return st, err
+	}
+	st.ByDay = []admin.DayCount{}
+	for rows.Next() {
+		var d admin.DayCount
+		if err := rows.Scan(&d.Day, &d.Count); err != nil {
+			rows.Close()
+			return st, err
+		}
+		st.ByDay = append(st.ByDay, d)
+	}
+	rows.Close()
+
+	rows, err = s.pool.Query(ctx, `
+		SELECT action, COUNT(*)::int FROM admin_audit_log
+		WHERE created_at >= now() - ($1::int || ' days')::interval
+		GROUP BY action ORDER BY 2 DESC, 1 LIMIT 12
+	`, days)
+	if err != nil {
+		return st, err
+	}
+	st.ByAction = []admin.ActionCount{}
+	for rows.Next() {
+		var a admin.ActionCount
+		if err := rows.Scan(&a.Action, &a.Count); err != nil {
+			rows.Close()
+			return st, err
+		}
+		st.ByAction = append(st.ByAction, a)
+	}
+	rows.Close()
+
+	rows, err = s.pool.Query(ctx, `
+		SELECT a.actor_id, COALESCE(u.email::text,''), COALESCE(u.display_name,''), COUNT(*)::int
+		FROM admin_audit_log a LEFT JOIN users u ON u.id = a.actor_id
+		WHERE a.created_at >= now() - ($1::int || ' days')::interval
+		GROUP BY 1, 2, 3 ORDER BY 4 DESC LIMIT 5
+	`, days)
+	if err != nil {
+		return st, err
+	}
+	defer rows.Close()
+	st.TopActors = []admin.ActorCount{}
+	for rows.Next() {
+		var a admin.ActorCount
+		if err := rows.Scan(&a.ActorID, &a.Email, &a.Name, &a.Count); err != nil {
+			return st, err
+		}
+		st.TopActors = append(st.TopActors, a)
+	}
+	return st, rows.Err()
 }
 
 func (s *SQLStore) AdminSignupsByDay(ctx context.Context, days int) ([]admin.DayCount, error) {

@@ -350,10 +350,11 @@ func (s *SQLStore) AdminInsertAudit(ctx context.Context, actorID uuid.UUID, acti
 	if meta == nil {
 		meta = json.RawMessage(`{}`)
 	}
+	rm := admin.RequestMetaFrom(ctx)
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO admin_audit_log (actor_id, action, target_user_id, meta)
-		VALUES ($1,$2,$3,$4)
-	`, actorID, action, target, meta)
+		INSERT INTO admin_audit_log (actor_id, action, target_user_id, meta, ip, user_agent)
+		VALUES ($1,$2,$3,$4,NULLIF($5,''),NULLIF($6,''))
+	`, actorID, action, target, meta, rm.IP, rm.UserAgent)
 	return err
 }
 

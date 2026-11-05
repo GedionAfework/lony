@@ -1,10 +1,13 @@
 package admin
 
 import (
+	"encoding/csv"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"equilend/api/internal/auth"
 	"equilend/api/internal/httpx"
@@ -177,21 +180,115 @@ func (h *Handler) SetUserRole(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, http.StatusOK, map[string]any{"user": out})
 }
 
+func parseAuditFilter(r *http.Request) (AuditFilter, error) {
+	q := r.URL.Query()
+	f := AuditFilter{Q: q.Get("q"), Action: q.Get("action")}
+	f.Limit, _ = strconv.Atoi(q.Get("limit"))
+	f.Offset, _ = strconv.Atoi(q.Get("offset"))
+	if v := strings.TrimSpace(q.Get("actor_id")); v != "" {
+		id, err := uuid.Parse(v)
+		if err != nil {
+			return f, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{"actor_id": "must be a uuid"})
+		}
+		f.ActorID = &id
+	}
+	if v := strings.TrimSpace(q.Get("target_id")); v != "" {
+		id, err := uuid.Parse(v)
+		if err != nil {
+			return f, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{"target_id": "must be a uuid"})
+		}
+		f.TargetID = &id
+	}
+	parseTime := func(key string) (*time.Time, error) {
+		v := strings.TrimSpace(q.Get(key))
+		if v == "" {
+			return nil, nil
+		}
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			return &t, nil
+		}
+		t, err := time.Parse("2006-01-02", v)
+		if err != nil {
+			return nil, httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{key: "must be RFC3339 or YYYY-MM-DD"})
+		}
+		return &t, nil
+	}
+	var err error
+	if f.From, err = parseTime("from"); err != nil {
+		return f, err
+	}
+	if f.To, err = parseTime("to"); err != nil {
+		return f, err
+	}
+	return f, nil
+}
+
 func (h *Handler) ListAudit(w http.ResponseWriter, r *http.Request) {
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
-	if limit <= 0 || limit > 100 {
-		limit = 50
-	}
-	if offset < 0 {
-		offset = 0
-	}
-	rows, total, err := h.svc.ListAuditFiltered(r.Context(), r.URL.Query().Get("q"), r.URL.Query().Get("action"), limit, offset)
+	f, err := parseAuditFilter(r)
 	if err != nil {
 		httpx.Error(w, err)
 		return
 	}
-	httpx.JSON(w, http.StatusOK, map[string]any{"audit": rows, "total": total, "limit": limit, "offset": offset})
+	rows, total, err := h.svc.ListAuditFiltered(r.Context(), f)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	if rows == nil {
+		rows = []AuditEntry{}
+	}
+	limit := f.Limit
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"audit": rows, "total": total, "limit": limit, "offset": f.Offset})
+}
+
+func (h *Handler) AuditStats(w http.ResponseWriter, r *http.Request) {
+	days, _ := strconv.Atoi(r.URL.Query().Get("days"))
+	stats, err := h.svc.AuditStats(r.Context(), days)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	httpx.JSON(w, http.StatusOK, map[string]any{"stats": stats})
+}
+
+// ExportAudit streams the filtered audit log as CSV (newest first, capped).
+func (h *Handler) ExportAudit(w http.ResponseWriter, r *http.Request) {
+	f, err := parseAuditFilter(r)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	rows, err := h.svc.ExportAudit(r.Context(), f, 10000)
+	if err != nil {
+		httpx.Error(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="lony-audit-%s.csv"`, time.Now().UTC().Format("20060102-150405")))
+	cw := csv.NewWriter(w)
+	_ = cw.Write([]string{"time_utc", "action", "actor_id", "actor_email", "actor_name", "target_user_id", "target_email", "ip", "user_agent", "meta"})
+	for _, e := range rows {
+		target := ""
+		if e.TargetUserID != nil {
+			target = e.TargetUserID.String()
+		}
+		_ = cw.Write([]string{
+			e.CreatedAt.UTC().Format(time.RFC3339),
+			e.Action,
+			e.ActorID.String(),
+			e.ActorEmail,
+			e.ActorName,
+			target,
+			e.TargetEmail,
+			e.IP,
+			e.UserAgent,
+			string(e.Meta),
+		})
+	}
+	cw.Flush()
 }
 
 func (h *Handler) GetSettings(w http.ResponseWriter, r *http.Request) {

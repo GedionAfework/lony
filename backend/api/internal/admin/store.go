@@ -176,8 +176,13 @@ type AuditEntry struct {
 	ID           uuid.UUID       `json:"id"`
 	ActorID      uuid.UUID       `json:"actor_id"`
 	ActorEmail   string          `json:"actor_email,omitempty"`
+	ActorName    string          `json:"actor_name,omitempty"`
 	Action       string          `json:"action"`
 	TargetUserID *uuid.UUID      `json:"target_user_id,omitempty"`
+	TargetEmail  string          `json:"target_email,omitempty"`
+	TargetName   string          `json:"target_name,omitempty"`
+	IP           string          `json:"ip,omitempty"`
+	UserAgent    string          `json:"user_agent,omitempty"`
 	Meta         json.RawMessage `json:"meta"`
 	CreatedAt    time.Time       `json:"created_at"`
 }
@@ -191,7 +196,8 @@ type Store interface {
 	RevokeUserSessions(ctx context.Context, id uuid.UUID) error
 	InsertAudit(ctx context.Context, actorID uuid.UUID, action string, target *uuid.UUID, meta json.RawMessage) error
 	ListAudit(ctx context.Context, limit int) ([]AuditEntry, error)
-	ListAuditFiltered(ctx context.Context, q, action string, limit, offset int) ([]AuditEntry, int, error)
+	ListAuditFiltered(ctx context.Context, f AuditFilter) ([]AuditEntry, int, error)
+	AuditStats(ctx context.Context, days int) (AuditStats, error)
 	PromoteAdmins(ctx context.Context, emails []string) (int, error)
 	UserRole(ctx context.Context, id uuid.UUID) (string, error)
 	UserPermissions(ctx context.Context, userID uuid.UUID) (perms []string, roleName string, err error)

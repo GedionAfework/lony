@@ -55,15 +55,6 @@ func (s *Service) PermissionsFor(ctx context.Context, userID uuid.UUID) (perms [
 	return s.store.UserPermissions(ctx, userID)
 }
 
-func (s *Service) ListAuditFiltered(ctx context.Context, q, action string, limit, offset int) ([]AuditEntry, int, error) {
-	if limit <= 0 || limit > 100 {
-		limit = 50
-	}
-	if offset < 0 {
-		offset = 0
-	}
-	return s.store.ListAuditFiltered(ctx, strings.TrimSpace(q), strings.TrimSpace(action), limit, offset)
-}
 
 func (s *Service) SignupsByDay(ctx context.Context, days int) ([]DayCount, error) {
 	if days <= 0 || days > 90 {
