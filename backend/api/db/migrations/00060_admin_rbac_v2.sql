@@ -35,7 +35,7 @@ ON CONFLICT (code) DO UPDATE SET
 
 -- Keep what existing roles could already do under the new, split permissions.
 INSERT INTO admin_role_permissions (role_id, permission_code)
-SELECT rp.role_id, p.code
+SELECT rp.role_id, m.code
 FROM admin_role_permissions rp
 JOIN (VALUES
   ('users.write', 'users.suspend'),
