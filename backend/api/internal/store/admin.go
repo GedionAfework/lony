@@ -122,6 +122,20 @@ func (s *SQLStore) AdminOverview(ctx context.Context) (admin.Overview, error) {
 		return out, err
 	}
 	_ = s.pool.QueryRow(ctx, `
+		SELECT
+			COUNT(*) FILTER (WHERE deleted_at IS NULL AND plan_tier = 'premium')::int,
+			COUNT(*) FILTER (WHERE deleted_at IS NULL AND status = 'deletion_pending')::int,
+			COUNT(*) FILTER (WHERE deleted_at IS NULL AND created_at >= now() - interval '14 days' AND created_at < now() - interval '7 days')::int
+		FROM users
+	`).Scan(&out.PremiumUsers, &out.DeletionPending, &out.SignupsPrev7d)
+	_ = s.pool.QueryRow(ctx, `
+		SELECT COUNT(DISTINCT user_id)::int FROM user_sessions
+		WHERE revoked_at IS NULL AND last_used_at >= now() - interval '30 days'
+	`).Scan(&out.MAU)
+	_ = s.pool.QueryRow(ctx, `
+		SELECT COUNT(*)::int FROM loans WHERE created_at >= now() - interval '7 days'
+	`).Scan(&out.LoansCreated7d)
+	_ = s.pool.QueryRow(ctx, `
 		SELECT COUNT(DISTINCT user_id)::int FROM user_sessions
 		WHERE revoked_at IS NULL AND last_used_at >= now() - interval '1 day'
 	`).Scan(&out.DAU)

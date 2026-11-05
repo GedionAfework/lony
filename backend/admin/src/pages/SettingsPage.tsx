@@ -1,12 +1,8 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  AlertTriangle,
-  Bot,
   Check,
-  CircleCheck,
   CircleX,
-  Clock,
   Crown,
   Info,
   KeyRound,
@@ -15,9 +11,6 @@ import {
   Moon,
   NotebookPen,
   Paintbrush,
-  Power,
-  ScrollText,
-  Server,
   Settings as SettingsIcon,
   ShieldCheck,
   SlidersHorizontal,
@@ -26,23 +19,20 @@ import {
   Wallet,
   type LucideIcon,
 } from 'lucide-react';
-import { api, type AuditEntry, type Overview } from '../api';
 import { useAuth } from '../auth';
 import { Button } from '../components/Button';
-import { Modal } from '../components/Modal';
 import { PageHeader } from '../components/PageHeader';
 import { DetailList } from '../components/Drawer';
 import { useThemeMode, type ThemeMode } from '../theme';
 import { useDensity, useMotion } from '../lib/prefs';
-import { actorName, describe, relativeTime } from '../lib/audit';
+import { relativeTime } from '../lib/audit';
 
 const NOTES_KEY = 'lony_admin_ops_notes';
 const NOTES_AT_KEY = 'lony_admin_ops_notes_at';
 
-type SectionId = 'platform' | 'account' | 'appearance' | 'notes' | 'billing' | 'about';
+type SectionId = 'account' | 'appearance' | 'notes' | 'billing' | 'about';
 
 const SECTIONS: { id: SectionId; label: string; icon: LucideIcon; hint: string; perm?: string }[] = [
-  { id: 'platform', label: 'Platform', icon: SlidersHorizontal, hint: 'Kill switches & health', perm: 'settings.ai' },
   { id: 'account', label: 'Your account', icon: UserRound, hint: 'Profile & permissions' },
   { id: 'appearance', label: 'Appearance', icon: Paintbrush, hint: 'Theme & density' },
   { id: 'notes', label: 'Ops notes', icon: NotebookPen, hint: 'On-call scratchpad' },
@@ -51,27 +41,51 @@ const SECTIONS: { id: SectionId; label: string; icon: LucideIcon; hint: string; 
 ];
 
 const PERMISSION_GROUPS: { label: string; perms: [string, string][] }[] = [
-  { label: 'Insights', perms: [['overview.read', 'View overview dashboard']] },
   {
-    label: 'People',
+    label: 'Monitor',
+    perms: [
+      ['overview.read', 'View the overview'],
+      ['system.read', 'View system health'],
+      ['audit.read', 'View the audit log'],
+      ['audit.export', 'Export the audit log'],
+    ],
+  },
+  {
+    label: 'Users',
     perms: [
       ['users.read', 'View users'],
-      ['users.write', 'Suspend users & change plans'],
-      ['roles.manage', 'Manage admin roles'],
-      ['audit.read', 'Read the audit log'],
+      ['users.suspend', 'Suspend users'],
+      ['users.plan', 'Change plans'],
+      ['users.sessions', 'Sign users out'],
+    ],
+  },
+  {
+    label: 'Admin access',
+    perms: [
+      ['roles.read', 'View roles & team'],
+      ['roles.assign', 'Manage the admin team'],
+      ['roles.manage', 'Edit roles'],
+    ],
+  },
+  {
+    label: 'Controls',
+    perms: [
+      ['settings.platform', 'Maintenance, sign-ups & features'],
+      ['settings.ai', 'AI switch'],
+      ['system.jobs', 'Retry background jobs'],
     ],
   },
   {
     label: 'Content',
     perms: [
-      ['categories.read', 'View catalogs & categories'],
-      ['categories.write', 'Edit catalogs & categories'],
+      ['categories.read', 'View catalogs'],
+      ['categories.write', 'Edit catalogs'],
       ['themes.read', 'View themes'],
       ['themes.write', 'Edit themes'],
-      ['localization.manage', 'Manage languages & calendars'],
+      ['localization.read', 'View languages'],
+      ['localization.manage', 'Edit languages'],
     ],
   },
-  { label: 'System', perms: [['settings.ai', 'Platform settings & AI switch']] },
 ];
 
 function readHash(): SectionId | null {
@@ -116,7 +130,6 @@ export function SettingsPage() {
         </nav>
 
         <div className="settings-content" key={current?.id}>
-          {current?.id === 'platform' ? <PlatformSection /> : null}
           {current?.id === 'account' ? <AccountSection /> : null}
           {current?.id === 'appearance' ? <AppearanceSection /> : null}
           {current?.id === 'notes' ? <NotesSection /> : null}
@@ -180,223 +193,6 @@ function Switch({ checked, onChange, disabled, label }: { checked: boolean; onCh
   );
 }
 
-function HealthRow({ ok, label, detail, icon: Icon }: { ok: boolean | null; label: string; detail: string; icon: LucideIcon }) {
-  return (
-    <div className="health-row">
-      <span className="health-icon">
-        <Icon size={16} strokeWidth={2} />
-      </span>
-      <span className="cell-stack">
-        <span>{label}</span>
-        <span className="muted" style={{ fontSize: 12.5 }}>
-          {detail}
-        </span>
-      </span>
-      {ok === null ? (
-        <span className="badge badge-muted">Unknown</span>
-      ) : ok ? (
-        <span className="badge badge-success">Healthy</span>
-      ) : (
-        <span className="badge badge-error">Attention</span>
-      )}
-    </div>
-  );
-}
-
-/* -------------------------------------------------------------- platform */
-
-function PlatformSection() {
-  const { token, hasPerm } = useAuth();
-  const navigate = useNavigate();
-  const [aiDisabled, setAIDisabled] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
-  const [confirm, setConfirm] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [overview, setOverview] = useState<Overview | null>(null);
-  const [history, setHistory] = useState<AuditEntry[]>([]);
-
-  const load = useCallback(async () => {
-    if (!token) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const [settings, ov, audit] = await Promise.all([
-        api.getSettings(token),
-        hasPerm('overview.read') ? api.overview(token).catch(() => null) : Promise.resolve(null),
-        hasPerm('audit.read') ? api.audit(token, { action: 'settings.', limit: 6 }).catch(() => null) : Promise.resolve(null),
-      ]);
-      setAIDisabled(Boolean(settings.settings?.ai_disabled));
-      setOverview(ov?.overview ?? null);
-      setHistory(audit?.audit ?? []);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load settings');
-    } finally {
-      setLoading(false);
-    }
-  }, [token, hasPerm]);
-
-  useEffect(() => {
-    void load();
-  }, [load]);
-
-  async function applyAI() {
-    if (!token) return;
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await api.setAIDisabled(token, !aiDisabled);
-      setAIDisabled(Boolean(res.settings?.ai_disabled));
-      setConfirm(false);
-      void load();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not update AI setting');
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const aiOn = !aiDisabled;
-
-  return (
-    <div className="stack-lg">
-      {error ? (
-        <div className="alert alert-error">
-          <AlertTriangle size={16} strokeWidth={2} />
-          <span>{error}</span>
-        </div>
-      ) : null}
-
-      <section className={`card ai-switch-card${aiOn ? ' on' : ' off'}`}>
-        <div className="ai-switch-glow" aria-hidden />
-        <div className="ai-switch-main">
-          <span className="ai-switch-icon">
-            <Bot size={26} strokeWidth={1.8} />
-          </span>
-          <div className="ai-switch-text">
-            <span className="ai-switch-eyebrow">Global kill switch</span>
-            <h3>{loading ? 'Checking AI status…' : aiOn ? 'AI is running' : 'AI is switched off'}</h3>
-            <p>
-              {aiOn
-                ? 'Premium members can use insights, the coach, plan chat and smart capture. Free members stay gated by plan.'
-                : (
-                    <>
-                      Every AI endpoint is answering <code>AI_DISABLED</code>. No member, free or premium, can use AI features
-                      until you turn it back on.
-                    </>
-                  )}
-            </p>
-          </div>
-          <Switch checked={aiOn} disabled={loading || busy} label="AI enabled" onChange={() => setConfirm(true)} />
-        </div>
-        {overview ? (
-          <div className="ai-switch-stats">
-            <div>
-              <small>Requests today</small>
-              <strong>{(overview.ai_requests_today ?? 0).toLocaleString()}</strong>
-            </div>
-            <div>
-              <small>Runs · 7d</small>
-              <strong>{(overview.ai_runs_7d ?? 0).toLocaleString()}</strong>
-            </div>
-            <div>
-              <small>AI users · 7d</small>
-              <strong>{(overview.ai_users_7d ?? 0).toLocaleString()}</strong>
-            </div>
-            <div>
-              <small>Tokens · 7d</small>
-              <strong>
-                {new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(overview.ai_tokens_7d ?? 0)}
-              </strong>
-            </div>
-          </div>
-        ) : null}
-      </section>
-
-      {overview ? (
-        <Panel title="System health" description="Live from the API on page load." icon={Server} aside={
-          <Button size="sm" variant="ghost" onClick={() => void load()}>
-            Recheck
-          </Button>
-        }>
-          <div className="health-list">
-            <HealthRow
-              icon={overview.fx_ok ? CircleCheck : CircleX}
-              ok={overview.fx_ok ?? null}
-              label="Exchange-rate provider"
-              detail={overview.fx_ok ? `Base ${overview.fx_base || 'USD'} · updated ${overview.fx_as_of || 'recently'}` : overview.fx_error || 'Provider unreachable'}
-            />
-            <HealthRow
-              icon={Clock}
-              ok={(overview.jobs_failed ?? 0) === 0}
-              label="Background jobs"
-              detail={`${overview.jobs_failed ?? 0} failed · ${overview.jobs_pending ?? 0} pending`}
-            />
-            <HealthRow icon={Bot} ok={aiOn} label="AI services" detail={aiOn ? 'Enabled for premium members' : 'Disabled by an admin'} />
-          </div>
-        </Panel>
-      ) : null}
-
-      {hasPerm('audit.read') ? (
-        <Panel
-          title="Change history"
-          description="Who flipped platform switches, most recent first."
-          icon={ScrollText}
-          aside={
-            <Button size="sm" variant="secondary" onClick={() => navigate('/audit')}>
-              Open audit log
-            </Button>
-          }
-        >
-          {history.length === 0 ? (
-            <p className="muted" style={{ margin: 0 }}>
-              No platform setting has been changed yet.
-            </p>
-          ) : (
-            <ul className="mini-timeline">
-              {history.map((e) => (
-                <li key={e.id}>
-                  <span className={`mini-dot ${e.action.endsWith('disable') ? 'bad' : 'good'}`} />
-                  <span>
-                    <b>{actorName(e)}</b> {describe(e)}
-                  </span>
-                  <time className="muted" title={new Date(e.created_at).toLocaleString()}>
-                    {relativeTime(e.created_at)}
-                  </time>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Panel>
-      ) : null}
-
-      <Modal
-        open={confirm}
-        title={aiOn ? 'Turn AI off for everyone?' : 'Turn AI back on?'}
-        onClose={() => setConfirm(false)}
-        footer={
-          <>
-            <Button variant="ghost" onClick={() => setConfirm(false)}>
-              Cancel
-            </Button>
-            <Button variant={aiOn ? 'danger' : 'primary'} busy={busy} icon={<Power size={15} strokeWidth={2} />} onClick={() => void applyAI()}>
-              {aiOn ? 'Turn AI off' : 'Turn AI on'}
-            </Button>
-          </>
-        }
-      >
-        <p style={{ margin: 0, lineHeight: 1.6 }}>
-          {aiOn
-            ? 'All AI features stop immediately for every member, including Premium. Use this during provider outages, runaway costs or incidents. The change is recorded in the audit log.'
-            : 'Premium members get AI features back immediately. The change is recorded in the audit log.'}
-        </p>
-      </Modal>
-    </div>
-  );
-}
-
-/* --------------------------------------------------------------- account */
-
 function AccountSection() {
   const { me, hasPerm, logout } = useAuth();
   const navigate = useNavigate();
@@ -443,9 +239,9 @@ function AccountSection() {
         description={legacy ? 'Legacy admin account: full access until a role is assigned.' : `${granted} of ${totalPerms} granted by the ${role} role.`}
         icon={KeyRound}
         aside={
-          hasPerm('roles.manage') ? (
-            <Button size="sm" variant="secondary" onClick={() => navigate('/users?tab=roles')}>
-              Manage roles
+          hasPerm('roles.read') ? (
+            <Button size="sm" variant="secondary" onClick={() => navigate('/team?tab=roles')}>
+              Admins & roles
             </Button>
           ) : null
         }
@@ -481,11 +277,11 @@ function AccountSection() {
 const THEMES: { id: ThemeMode; label: string; icon: LucideIcon }[] = [
   { id: 'light', label: 'Light', icon: Sun },
   { id: 'dark', label: 'Dark', icon: Moon },
-  { id: 'system', label: 'System', icon: Monitor },
+  { id: 'system', label: 'Match device', icon: Monitor },
 ];
 
 function AppearanceSection() {
-  const [mode, setMode] = useThemeMode();
+  const [mode, setMode, dark] = useThemeMode();
   const [density, setDensity] = useDensity();
   const [motion, setMotion] = useMotion();
 
@@ -502,6 +298,7 @@ function AppearanceSection() {
               </span>
               <span className="theme-option-label">
                 <t.icon size={15} strokeWidth={2} /> {t.label}
+                {t.id === 'system' ? <span className="muted theme-option-now">now {dark ? 'dark' : 'light'}</span> : null}
                 {mode === t.id ? <Check size={15} strokeWidth={2.5} className="theme-option-check" /> : null}
               </span>
             </button>
@@ -653,7 +450,7 @@ function BillingSection() {
         description="Checkout isn’t wired up yet, so plans are switched by hand from a user’s profile."
         icon={Wallet}
         aside={
-          hasPerm('users.write') ? (
+          hasPerm('users.plan') ? (
             <Button size="sm" variant="secondary" onClick={() => navigate('/users')}>
               Go to users
             </Button>

@@ -8,6 +8,8 @@ import {
   Copy,
   Crown,
   History,
+  KeyRound,
+  LogOut,
   Mail,
   Phone,
   ShieldAlert,
@@ -15,22 +17,20 @@ import {
   UserCheck,
   Users as UsersIcon,
 } from 'lucide-react';
-import { api, type AdminRole, type AdminUser, type AuditEntry } from '../api';
+import { api, type AdminUser, type AuditEntry } from '../api';
 import { useAuth } from '../auth';
 import { Button } from '../components/Button';
 import { Modal } from '../components/Modal';
 import { ButtonGroup } from '../components/ButtonGroup';
 import { PageHeader } from '../components/PageHeader';
-import { PermissionGate } from '../components/PermissionGate';
 import { Table, type TableColumn } from '../components/Table';
 import { IconButton } from '../components/IconButton';
 import { Drawer, DetailList } from '../components/Drawer';
 import { actorName, describe, relativeTime } from '../lib/audit';
-import { RolesPanel } from './RolesPage';
 
 const LIMIT = 20;
 
-type Tab = 'users' | 'roles';
+type ConfirmKind = 'suspend' | 'plan' | 'sessions';
 
 const HUES = ['#159E9E', '#E07B12', '#2F7DD3', '#8B5CF6', '#E0457B', '#0E8A6A', '#C9A227', '#5B6B82'];
 
@@ -48,42 +48,10 @@ function initialsStyle(name: string) {
 }
 
 export function UsersPage() {
-  const { hasPerm } = useAuth();
-  const canRoles = hasPerm('roles.manage');
-  const [tab, setTab] = useState<Tab>('users');
-
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('tab') === 'roles' && canRoles) setTab('roles');
-  }, [canRoles]);
-
-  useEffect(() => {
-    const url = new URL(window.location.href);
-    if (tab === 'roles') url.searchParams.set('tab', 'roles');
-    else url.searchParams.delete('tab');
-    window.history.replaceState({}, '', url.toString());
-  }, [tab]);
-
-  useEffect(() => {
-    if (tab === 'roles' && !canRoles) setTab('users');
-  }, [tab, canRoles]);
-
   return (
     <div className="page">
-      <PageHeader icon={UsersIcon} title="User management" subtitle="Accounts, plans, and admin roles" />
-
-      <div className="segmented" style={{ marginBottom: 16 }}>
-        <button type="button" className={`segmented-btn${tab === 'users' ? ' active' : ''}`} onClick={() => setTab('users')}>
-          <UsersIcon size={15} strokeWidth={2} /> Users
-        </button>
-        {canRoles ? (
-          <button type="button" className={`segmented-btn${tab === 'roles' ? ' active' : ''}`} onClick={() => setTab('roles')}>
-            <ShieldCheck size={15} strokeWidth={2} /> Roles
-          </button>
-        ) : null}
-      </div>
-
-      {tab === 'users' ? <UsersPanel /> : <RolesPanel showHeader={false} />}
+      <PageHeader title="Users" />
+      <UsersPanel />
     </div>
   );
 }
@@ -98,9 +66,12 @@ function UsersPanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [roles, setRoles] = useState<AdminRole[]>([]);
-  // A change that needs a second click: suspending, unsuspending, or switching plan.
-  const [confirm, setConfirm] = useState<{ kind: 'suspend' | 'plan'; user: AdminUser } | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  // A change that needs a second click: suspending, switching plan, or signing out.
+  const [confirm, setConfirm] = useState<{ kind: ConfirmKind; user: AdminUser } | null>(null);
+  const canSuspend = hasPerm('users.suspend');
+  const canPlan = hasPerm('users.plan');
+  const canSessions = hasPerm('users.sessions');
   // The user whose details are open, loaded fresh from the server.
   const [detail, setDetail] = useState<AdminUser | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -144,14 +115,6 @@ function UsersPanel() {
   }, [load]);
 
   useEffect(() => {
-    if (!token || !hasPerm('roles.manage')) return;
-    api
-      .listRoles(token)
-      .then((res) => setRoles(res.roles ?? []))
-      .catch(() => setRoles([]));
-  }, [token, hasPerm]);
-
-  useEffect(() => {
     setOffset(0);
   }, [q, status]);
 
@@ -184,25 +147,15 @@ function UsersPanel() {
     }
   }
 
-  async function changeRole(user: AdminUser, roleId: string) {
+  async function signOut(user: AdminUser) {
     if (!token) return;
     setBusyId(user.id);
     setError(null);
     try {
-      const res = await api.setUserRole(token, user.id, roleId || null);
-      setUsers((prev) =>
-        prev.map((u) =>
-          u.id === res.user.id
-            ? {
-                ...u,
-                admin_role_id: res.user.admin_role_id,
-                admin_role_name: res.user.admin_role_name,
-              }
-            : u,
-        ),
-      );
+      await api.revokeSessions(token, user.id);
+      setNotice(`${user.display_name || user.email} was signed out on every device.`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not update role');
+      setError(e instanceof Error ? e.message : 'Could not sign them out');
     } finally {
       setBusyId(null);
     }
@@ -244,23 +197,13 @@ function UsersPanel() {
         key: 'role',
         header: 'Role',
         render: (u) =>
-          u.role === 'admin' && hasPerm('roles.manage') && roles.length > 0 ? (
-            <select
-              className="inline-select"
-              value={u.admin_role_id || ''}
-              disabled={busyId === u.id}
-              onClick={(e) => e.stopPropagation()}
-              onChange={(e) => void changeRole(u, e.target.value)}
-            >
-              <option value="">No role</option>
-              {roles.map((r) => (
-                <option key={r.id} value={r.id}>
-                  {r.name}
-                </option>
-              ))}
-            </select>
+          u.role === 'admin' ? (
+            <span className="team-role">
+              <KeyRound size={12} strokeWidth={2} />
+              {u.admin_role_name || 'Admin'}
+            </span>
           ) : (
-            <span className="mono muted">{u.admin_role_name || u.role}</span>
+            <span className="muted">User</span>
           ),
       },
       {
@@ -281,32 +224,44 @@ function UsersPanel() {
         key: 'actions',
         header: '',
         align: 'right',
-        width: 110,
+        width: 130,
         render: (u) => (
-          <PermissionGate perm="users.write">
-            <div className="row-actions" onClick={(e) => e.stopPropagation()}>
+          <div className="row-actions" onClick={(e) => e.stopPropagation()}>
+            {canPlan ? (
               <IconButton
                 size="sm"
                 icon={(u.plan_tier || 'free') === 'premium' ? ArrowDownCircle : Crown}
                 label={(u.plan_tier || 'free') === 'premium' ? 'Downgrade to Free' : 'Upgrade to Premium'}
-                variant={(u.plan_tier || 'free') === 'premium' ? 'ghost' : 'primary'}
+                variant="ghost"
                 disabled={busyId === u.id}
                 onClick={() => setConfirm({ kind: 'plan', user: u })}
               />
+            ) : null}
+            {canSessions ? (
+              <IconButton
+                size="sm"
+                icon={LogOut}
+                label="Sign out everywhere"
+                variant="ghost"
+                disabled={busyId === u.id}
+                onClick={() => setConfirm({ kind: 'sessions', user: u })}
+              />
+            ) : null}
+            {canSuspend ? (
               <IconButton
                 size="sm"
                 icon={u.status === 'suspended' ? UserCheck : ShieldAlert}
                 label={u.role === 'admin' ? 'Cannot suspend an admin' : u.status === 'suspended' ? 'Reactivate' : 'Suspend'}
-                variant={u.status === 'suspended' ? 'primary' : 'danger'}
+                variant={u.status === 'suspended' ? 'ghost' : 'danger'}
                 disabled={busyId === u.id || u.role === 'admin'}
                 onClick={() => setConfirm({ kind: 'suspend', user: u })}
               />
-            </div>
-          </PermissionGate>
+            ) : null}
+          </div>
         ),
       },
     ],
-    [busyId, hasPerm, roles],
+    [busyId, canPlan, canSessions, canSuspend],
   );
 
   const page = Math.floor(offset / LIMIT) + 1;
@@ -318,6 +273,11 @@ function UsersPanel() {
         <div className="alert alert-error">
           <AlertTriangle size={16} strokeWidth={2} />
           <span>{error}</span>
+        </div>
+      ) : null}
+      {notice ? (
+        <div className="alert banner-success" onClick={() => setNotice(null)}>
+          <span>{notice}</span>
         </div>
       ) : null}
 
@@ -393,6 +353,7 @@ function UsersPanel() {
         onClose={() => setDetail(null)}
         onPlan={(u) => setConfirm({ kind: 'plan', user: u })}
         onSuspend={(u) => setConfirm({ kind: 'suspend', user: u })}
+        onSignOut={(u) => setConfirm({ kind: 'sessions', user: u })}
       />
 
       <ConfirmModal
@@ -402,6 +363,7 @@ function UsersPanel() {
         onConfirm={async () => {
           if (!confirm) return;
           if (confirm.kind === 'suspend') await toggleSuspend(confirm.user);
+          else if (confirm.kind === 'sessions') await signOut(confirm.user);
           else await togglePlan(confirm.user);
           setConfirm(null);
         }}
@@ -416,13 +378,35 @@ function ConfirmModal({
   onCancel,
   onConfirm,
 }: {
-  confirm: { kind: 'suspend' | 'plan'; user: AdminUser } | null;
+  confirm: { kind: ConfirmKind; user: AdminUser } | null;
   busy: boolean;
   onCancel: () => void;
   onConfirm: () => void | Promise<void>;
 }) {
   if (!confirm) return null;
   const u = confirm.user;
+  if (confirm.kind === 'sessions') {
+    return (
+      <Modal
+        open
+        title={`Sign ${u.display_name} out everywhere?`}
+        subtitle={u.email}
+        onClose={onCancel}
+        footer={
+          <ButtonGroup>
+            <Button size="sm" variant="secondary" onClick={onCancel} disabled={busy}>
+              Cancel
+            </Button>
+            <Button size="sm" variant="danger" onClick={() => void onConfirm()} disabled={busy}>
+              {busy ? 'Working…' : 'Sign out'}
+            </Button>
+          </ButtonGroup>
+        }
+      >
+        <p style={{ margin: 0 }}>Every active session on their phones and browsers ends now. They can sign in again with their password.</p>
+      </Modal>
+    );
+  }
   const suspending = confirm.kind === 'suspend' && u.status !== 'suspended';
   const toPremium = confirm.kind === 'plan' && (u.plan_tier || 'free') !== 'premium';
   const title =
@@ -487,6 +471,7 @@ function UserDrawer({
   onClose,
   onPlan,
   onSuspend,
+  onSignOut,
 }: {
   user: AdminUser | null;
   loading: boolean;
@@ -494,6 +479,7 @@ function UserDrawer({
   onClose: () => void;
   onPlan: (u: AdminUser) => void;
   onSuspend: (u: AdminUser) => void;
+  onSignOut: (u: AdminUser) => void;
 }) {
   const { token, hasPerm } = useAuth();
   const navigate = useNavigate();
@@ -519,7 +505,10 @@ function UserDrawer({
   const name = u.display_name || u.email;
   const premium = (u.plan_tier || 'free') === 'premium';
   const fmtDate = (v?: string | null) => (v ? new Date(v).toLocaleString() : '—');
-  const canWrite = hasPerm('users.write');
+  const canPlan = hasPerm('users.plan');
+  const canSuspend = hasPerm('users.suspend');
+  const canSessions = hasPerm('users.sessions');
+  const canAccess = hasPerm('roles.assign');
 
   const profile: [ReactNode, ReactNode][] = [
     ['Username', u.username ? `@${u.username}` : '—'],
@@ -561,25 +550,44 @@ function UserDrawer({
         </span>
       }
       footer={
-        canWrite ? (
+        canPlan || canSuspend || canSessions || canAccess ? (
           <>
-            <Button
-              variant="secondary"
-              disabled={busy}
-              icon={premium ? <ArrowDownCircle size={15} strokeWidth={2} /> : <Crown size={15} strokeWidth={2} />}
-              onClick={() => onPlan(u)}
-            >
-              {premium ? 'Downgrade to Free' : 'Upgrade to Premium'}
-            </Button>
-            <Button
-              variant={u.status === 'suspended' ? 'primary' : 'danger'}
-              disabled={busy || u.role === 'admin'}
-              title={u.role === 'admin' ? 'Cannot suspend an admin' : undefined}
-              icon={u.status === 'suspended' ? <ShieldCheck size={15} strokeWidth={2} /> : <ShieldAlert size={15} strokeWidth={2} />}
-              onClick={() => onSuspend(u)}
-            >
-              {u.status === 'suspended' ? 'Reactivate' : 'Suspend'}
-            </Button>
+            {canAccess && u.status === 'active' ? (
+              <Button
+                variant="ghost"
+                icon={<KeyRound size={15} strokeWidth={2} />}
+                style={{ marginRight: 'auto' }}
+                onClick={() => navigate(u.role === 'admin' ? '/team' : `/team?add=${u.id}&label=${encodeURIComponent(name)}`)}
+              >
+                {u.role === 'admin' ? 'Manage access' : 'Make admin'}
+              </Button>
+            ) : null}
+            {canSessions ? (
+              <Button variant="secondary" disabled={busy} icon={<LogOut size={15} strokeWidth={2} />} onClick={() => onSignOut(u)}>
+                Sign out
+              </Button>
+            ) : null}
+            {canPlan ? (
+              <Button
+                variant="secondary"
+                disabled={busy}
+                icon={premium ? <ArrowDownCircle size={15} strokeWidth={2} /> : <Crown size={15} strokeWidth={2} />}
+                onClick={() => onPlan(u)}
+              >
+                {premium ? 'Downgrade' : 'Upgrade'}
+              </Button>
+            ) : null}
+            {canSuspend ? (
+              <Button
+                variant={u.status === 'suspended' ? 'primary' : 'danger'}
+                disabled={busy || u.role === 'admin'}
+                title={u.role === 'admin' ? 'Cannot suspend an admin' : undefined}
+                icon={u.status === 'suspended' ? <ShieldCheck size={15} strokeWidth={2} /> : <ShieldAlert size={15} strokeWidth={2} />}
+                onClick={() => onSuspend(u)}
+              >
+                {u.status === 'suspended' ? 'Reactivate' : 'Suspend'}
+              </Button>
+            ) : null}
           </>
         ) : null
       }

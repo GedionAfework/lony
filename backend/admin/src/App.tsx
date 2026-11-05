@@ -12,6 +12,9 @@ const CategoriesPage = lazy(() => import('./pages/CategoriesPage').then((m) => (
 const ThemesPage = lazy(() => import('./pages/ThemesPage').then((m) => ({ default: m.ThemesPage })));
 const AuditPage = lazy(() => import('./pages/AuditPage').then((m) => ({ default: m.AuditPage })));
 const SettingsPage = lazy(() => import('./pages/SettingsPage').then((m) => ({ default: m.SettingsPage })));
+const SystemPage = lazy(() => import('./pages/SystemPage').then((m) => ({ default: m.SystemPage })));
+const ControlsPage = lazy(() => import('./pages/ControlsPage').then((m) => ({ default: m.ControlsPage })));
+const TeamPage = lazy(() => import('./pages/RolesPage').then((m) => ({ default: m.TeamPage })));
 const LocalizationPage = lazy(() => import('./pages/LocalizationPage').then((m) => ({ default: m.LocalizationPage })));
 
 function PageLoader() {
@@ -62,7 +65,10 @@ function AppRoutes() {
         <Route path="themes" element={page(<ThemesPage />)} />
         <Route path="audit" element={page(<AuditPage />)} />
         <Route path="settings" element={page(<SettingsPage />)} />
-        <Route path="roles" element={<Navigate to="/users?tab=roles" replace />} />
+        <Route path="system" element={page(<SystemPage />)} />
+        <Route path="controls" element={page(<ControlsPage />)} />
+        <Route path="team" element={page(<TeamPage />)} />
+        <Route path="roles" element={<Navigate to="/team?tab=roles" replace />} />
         <Route path="localization" element={page(<LocalizationPage />)} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

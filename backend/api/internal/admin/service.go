@@ -16,12 +16,16 @@ import (
 )
 
 type Service struct {
-	store Store
-	fx    *fx.Client
+	store        Store
+	fx           *fx.Client
+	cache        settingsCache
+	env          string
+	integrations []Integration
+	startedAt    time.Time
 }
 
 func NewService(store Store) *Service {
-	return &Service{store: store}
+	return &Service{store: store, startedAt: time.Now().UTC()}
 }
 
 func (s *Service) SetFX(c *fx.Client) {

@@ -1,98 +1,55 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { useNavigate } from 'react-router-dom';
-import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Pie,
-  PieChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
-import {
-  Activity,
-  AlertTriangle,
-  ArrowLeftRight,
-  ArrowRight,
-  ArrowUpRight,
-  Bot,
-  CheckCircle2,
-  Coins,
-  HandCoins,
-  Languages,
-  Layers,
-  Palette,
-  Power,
-  RefreshCw,
-  ScrollText,
-  ServerCrash,
-  Sparkles,
-  UserPlus,
-  Users,
-  Wifi,
-  WifiOff,
-  type LucideIcon,
-} from 'lucide-react';
-import { api, type AuditEntry, type DayCount, type Overview } from '../api';
+import { Link, useNavigate } from 'react-router-dom';
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { AlertTriangle, ArrowDownRight, ArrowRight, ArrowUpRight, ChevronRight, RefreshCw } from 'lucide-react';
+import { api, type AuditEntry, type Control, type DayCount, type Overview, type SystemInfo } from '../api';
 import { useAuth } from '../auth';
 import { Button } from '../components/Button';
-import { Modal } from '../components/Modal';
-import { actionIcon, actorName, categoryOf, describe, relativeTime } from '../lib/audit';
-
-const TEAL = '#14B8A6';
-const CYAN = '#06B6D4';
-const VIOLET = '#7C6CF6';
-const AMBER = '#F59E0B';
-const ROSE = '#F43F5E';
-const SLATE = '#94A3B8';
-
-const TOOLTIP = {
-  background: 'var(--surface)',
-  border: '1px solid var(--line)',
-  borderRadius: 12,
-  fontSize: 12,
-  boxShadow: 'var(--shadow)',
-  color: 'var(--text)',
-};
+import { actorName, describe, relativeTime } from '../lib/audit';
 
 const RANGES = [7, 30, 90] as const;
 type Range = (typeof RANGES)[number];
 
 const nf = new Intl.NumberFormat();
 const compact = new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 });
+const pct = (n: number, d: number) => (d > 0 ? Math.round((n / d) * 100) : 0);
+
+type Tone = 'ok' | 'warn' | 'bad' | 'off';
+type Check = { label: string; tone: Tone; detail: string; to?: string };
+type Issue = { label: string; detail: string; tone: 'warn' | 'bad'; to?: string };
 
 export function OverviewPage() {
-  const { token, hasPerm, me } = useAuth();
-  const navigate = useNavigate();
+  const { token, hasPerm } = useAuth();
   const [overview, setOverview] = useState<Overview | null>(null);
   const [signups, setSignups] = useState<DayCount[]>([]);
-  const [range, setRange] = useState<Range>(30);
-  const [aiDisabled, setAIDisabled] = useState(false);
+  const [system, setSystem] = useState<SystemInfo | null>(null);
+  const [controls, setControls] = useState<Control[] | null>(null);
   const [recent, setRecent] = useState<AuditEntry[] | null>(null);
+  const [range, setRange] = useState<Range>(30);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [aiBusy, setAIBusy] = useState(false);
-  const [aiConfirm, setAIConfirm] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
+  const [, tick] = useState(0);
+
+  const canSystem = hasPerm('system.read');
+  const canControls = hasPerm('settings.platform') || hasPerm('settings.ai');
+  const canAudit = hasPerm('audit.read');
 
   const load = useCallback(async () => {
     if (!token) return;
     setLoading(true);
     setError(null);
     try {
-      const [ov, settings, audit] = await Promise.all([
+      const [ov, sys, ctl, audit] = await Promise.all([
         api.overview(token, range),
-        hasPerm('settings.ai') ? api.getSettings(token).catch(() => null) : Promise.resolve(null),
-        hasPerm('audit.read') ? api.audit(token, { limit: 6 }).catch(() => null) : Promise.resolve(null),
+        canSystem ? api.system(token).catch(() => null) : Promise.resolve(null),
+        !canSystem && canControls ? api.controls(token).catch(() => null) : Promise.resolve(null),
+        canAudit ? api.audit(token, { limit: 7 }).catch(() => null) : Promise.resolve(null),
       ]);
       setOverview(ov.overview);
       setSignups(ov.signups_by_day ?? []);
-      if (settings) setAIDisabled(Boolean(settings.settings?.ai_disabled));
+      setSystem(sys?.system ?? null);
+      setControls(sys?.system.controls ?? ctl?.controls ?? null);
       setRecent(audit ? audit.audit ?? [] : null);
       setUpdatedAt(Date.now());
     } catch (e) {
@@ -100,154 +57,96 @@ export function OverviewPage() {
     } finally {
       setLoading(false);
     }
-  }, [token, hasPerm, range]);
+  }, [token, range, canSystem, canControls, canAudit]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  async function toggleAI() {
-    if (!token) return;
-    setAIBusy(true);
-    try {
-      const res = await api.setAIDisabled(token, !aiDisabled);
-      setAIDisabled(Boolean(res.settings?.ai_disabled));
-      setAIConfirm(false);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Could not update AI setting');
-    } finally {
-      setAIBusy(false);
-    }
-  }
+  // Keep "updated x ago" honest without reloading.
+  useEffect(() => {
+    const t = window.setInterval(() => tick((n) => n + 1), 30_000);
+    return () => window.clearInterval(t);
+  }, []);
 
-  const series = useMemo(() => {
-    let running = 0;
-    return signups.map((d) => {
-      running += d.count;
-      return {
+  const series = useMemo(
+    () =>
+      signups.map((d) => ({
         label: new Date(`${d.day}T00:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
-        full: d.day,
         count: d.count,
-        total: running,
-      };
-    });
-  }, [signups]);
+      })),
+    [signups],
+  );
+  const rangeTotal = signups.reduce((n, d) => n + d.count, 0);
 
   if (loading && !overview) {
     return (
       <div className="page">
-        <div className="skeleton" style={{ height: 190 }} />
-        <div className="dash-kpis">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <div key={i} className="skeleton skeleton-card" />
-          ))}
+        <div className="page-header">
+          <div className="page-header-title">
+            <h1>Overview</h1>
+          </div>
         </div>
-        <div className="skeleton" style={{ height: 340 }} />
+        <div className="skeleton" style={{ height: 52 }} />
+        <div className="skeleton" style={{ height: 112 }} />
+        <div className="ov-grid">
+          <div className="skeleton" style={{ height: 320 }} />
+          <div className="skeleton" style={{ height: 320 }} />
+        </div>
       </div>
     );
   }
 
-  if (error && !overview) {
+  if (!overview) {
     return (
       <div className="page">
-        <div className="state-panel state-panel-error">
-          <AlertTriangle size={30} strokeWidth={1.5} />
-          <p>{error}</p>
-          <Button onClick={() => void load()}>Retry</Button>
+        <div className="alert alert-error">
+          <AlertTriangle size={16} strokeWidth={2} />
+          <span>{error ?? 'Overview unavailable'}</span>
+        </div>
+        <div>
+          <Button variant="secondary" onClick={() => void load()}>
+            Try again
+          </Button>
         </div>
       </div>
     );
   }
-  if (!overview) return null;
 
   const o = overview;
-  const firstName = (me?.display_name || '').trim().split(/\s+/)[0];
-  const hour = new Date().getHours();
-  const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
-  const rangeSignups = signups.reduce((n, d) => n + d.count, 0);
-  const prevHalf = signups.slice(0, Math.floor(signups.length / 2)).reduce((n, d) => n + d.count, 0);
-  const lastHalf = signups.slice(Math.floor(signups.length / 2)).reduce((n, d) => n + d.count, 0);
-  const trend = prevHalf ? Math.round(((lastHalf - prevHalf) / prevHalf) * 100) : null;
-  const stickiness = o.wau ? Math.round((o.dau / o.wau) * 100) : 0;
-  const activeShare = o.total_users ? Math.round((o.active_users / o.total_users) * 100) : 0;
-  const overdueShare = o.open_loans ? Math.round((o.overdue_loans / o.open_loans) * 100) : 0;
-  const jobsFailed = o.jobs_failed ?? 0;
-  const jobsPending = o.jobs_pending ?? 0;
+  const checks = buildChecks(o, system, controls);
+  const issues = buildIssues(o, system, controls);
+  const down = checks.filter((c) => c.tone === 'bad').length;
+  const degraded = checks.filter((c) => c.tone === 'warn').length;
+  const headline =
+    down > 0 ? `${down} system${down > 1 ? 's' : ''} down` : degraded > 0 ? `${degraded} need${degraded > 1 ? '' : 's'} a look` : 'All systems normal';
+  const headTone: Tone = down > 0 ? 'bad' : degraded > 0 ? 'warn' : 'ok';
 
-  const attention: { tone: 'error' | 'warning'; title: string; detail: string; to?: string }[] = [];
-  if (aiDisabled) attention.push({ tone: 'warning', title: 'AI is switched off', detail: 'Premium members have no AI right now.', to: '/settings#platform' });
-  if (o.fx_ok === false) attention.push({ tone: 'error', title: 'Exchange rates are down', detail: o.fx_error || 'The FX provider is unreachable.' });
-  if (jobsFailed > 0) attention.push({ tone: 'error', title: `${jobsFailed} background job${jobsFailed === 1 ? '' : 's'} failed`, detail: `${jobsPending} still pending.` });
-  if (o.overdue_loans > 0) attention.push({ tone: 'warning', title: `${o.overdue_loans} overdue loan${o.overdue_loans === 1 ? '' : 's'}`, detail: `${overdueShare}% of ${o.open_loans} open loans.` });
-  if (o.suspended_users > 0)
-    attention.push({ tone: 'warning', title: `${o.suspended_users} suspended account${o.suspended_users === 1 ? '' : 's'}`, detail: 'Review whether they should be reactivated.', to: '/users' });
-
-  const quick: { to: string; label: string; icon: LucideIcon; perm: string }[] = [
-    { to: '/users', label: 'Users', icon: Users, perm: 'users.read' },
-    { to: '/audit', label: 'Audit log', icon: ScrollText, perm: 'audit.read' },
-    { to: '/categories', label: 'Catalogs', icon: Layers, perm: 'categories.read' },
-    { to: '/themes', label: 'Themes', icon: Palette, perm: 'themes.read' },
-    { to: '/localization', label: 'Languages', icon: Languages, perm: 'localization.manage' },
-  ];
-
-  const accountMix = [
-    { name: 'Active', value: o.active_users, color: TEAL },
-    { name: 'Suspended', value: Math.max(o.suspended_users, 0), color: AMBER },
-    { name: 'Other', value: Math.max(o.total_users - o.active_users - o.suspended_users, 0), color: SLATE },
-  ].filter((d) => d.value > 0);
-
-  const aiBars = [
-    { name: 'Requests today', value: o.ai_requests_today ?? 0, fill: CYAN },
-    { name: 'Runs · 7d', value: o.ai_runs_7d ?? 0, fill: TEAL },
-    { name: 'Insights · 7d', value: o.ai_insights_7d, fill: VIOLET },
-    { name: 'AI users · 7d', value: o.ai_users_7d ?? 0, fill: AMBER },
-  ];
+  const signupDelta = o.signups_prev_7d != null ? o.signups_7d - o.signups_prev_7d : null;
+  const premium = o.premium_users ?? 0;
+  const aiPaused = controls?.find((c) => c.key === 'ai_disabled')?.enabled ?? false;
+  const activeBase = o.mau || o.wau || o.total_users;
 
   return (
-    <div className="page dash">
-      {/* ---------------------------------------------------------- hero */}
-      <section className="dash-hero">
-        <div className="dash-hero-glow" aria-hidden />
-        <div className="dash-hero-main">
-          <span className="dash-hero-date">{new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}</span>
-          <h1>
-            {greeting}
-            {firstName ? `, ${firstName}` : ''}.
-          </h1>
-          <p>
-            <b>{nf.format(o.total_users)}</b> people use Lony. <b>{nf.format(o.signups_7d)}</b> joined this week and <b>{nf.format(o.dau)}</b> were active
-            today.
-          </p>
-          <div className="dash-hero-status">
-            <StatusChip ok={!aiDisabled} icon={Bot} label={aiDisabled ? 'AI off' : 'AI on'} />
-            <StatusChip ok={o.fx_ok !== false} icon={o.fx_ok === false ? WifiOff : Wifi} label={o.fx_ok === false ? 'FX down' : `FX ${o.fx_base || 'OK'}`} />
-            <StatusChip ok={jobsFailed === 0} icon={jobsFailed ? ServerCrash : CheckCircle2} label={jobsFailed ? `${jobsFailed} jobs failed` : 'Jobs healthy'} />
-          </div>
+    <div className="page">
+      <div className="page-header">
+        <div className="page-header-title">
+          <h1>Overview</h1>
         </div>
-        <div className="dash-hero-side">
-          <div className="dash-hero-actions">
-            <button type="button" className="hero-btn" onClick={() => void load()} title="Refresh">
-              <RefreshCw size={16} className={loading ? 'spin' : undefined} />
-              {updatedAt ? `Updated ${relativeTime(new Date(updatedAt).toISOString())}` : 'Refresh'}
-            </button>
-            {hasPerm('settings.ai') ? (
-              <button type="button" className={`hero-btn${aiDisabled ? ' hero-btn-warn' : ''}`} onClick={() => setAIConfirm(true)}>
-                <Power size={16} /> {aiDisabled ? 'Turn AI on' : 'Turn AI off'}
+        <div className="page-header-actions">
+          {updatedAt ? <span className="muted ov-updated">Updated {relativeTime(new Date(updatedAt).toISOString())}</span> : null}
+          <div className="seg" role="tablist" aria-label="Range">
+            {RANGES.map((r) => (
+              <button key={r} type="button" className={range === r ? 'active' : ''} onClick={() => setRange(r)}>
+                {r}d
               </button>
-            ) : null}
+            ))}
           </div>
-          <div className="dash-hero-quick">
-            {quick
-              .filter((q) => hasPerm(q.perm))
-              .map((q) => (
-                <button key={q.to} type="button" onClick={() => navigate(q.to)}>
-                  <q.icon size={17} strokeWidth={2} />
-                  <span>{q.label}</span>
-                </button>
-              ))}
-          </div>
+          <button type="button" className="shell-icon-btn bordered" onClick={() => void load()} title="Refresh" aria-label="Refresh">
+            <RefreshCw size={15} strokeWidth={2} className={loading ? 'spin' : undefined} />
+          </button>
         </div>
-      </section>
+      </div>
 
       {error ? (
         <div className="alert alert-error">
@@ -256,432 +155,427 @@ export function OverviewPage() {
         </div>
       ) : null}
 
-      {/* ---------------------------------------------------------- KPIs */}
-      <div className="dash-kpis">
-        <Kpi
-          icon={Users}
-          color={TEAL}
+      {/* ---- status strip */}
+      <section className="ov-status card">
+        <div className="ov-status-head">
+          <span className={`dot dot-${headTone}`} />
+          <strong>{headline}</strong>
+        </div>
+        <div className="ov-status-checks">
+          {checks.map((c) => {
+            const inner = (
+              <>
+                <span className={`dot dot-${c.tone}`} />
+                <span>{c.label}</span>
+                <small>{c.detail}</small>
+              </>
+            );
+            return c.to ? (
+              <Link key={c.label} to={c.to} className="ov-check" title={c.detail}>
+                {inner}
+              </Link>
+            ) : (
+              <span key={c.label} className="ov-check" title={c.detail}>
+                {inner}
+              </span>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* ---- headline metrics */}
+      <section className="ov-metrics card">
+        <Metric
           label="Total users"
           value={nf.format(o.total_users)}
           foot={
             <>
-              <b>{activeShare}%</b> active · {nf.format(o.suspended_users)} suspended
+              <b>+{nf.format(o.signups_7d)}</b> this week
+              {signupDelta != null ? <Delta value={signupDelta} /> : null}
             </>
           }
-          spark={series.map((d) => d.total)}
         />
-        <Kpi
-          icon={Activity}
-          color={VIOLET}
-          label="Daily active"
+        <Metric
+          label="Active today"
           value={nf.format(o.dau)}
           foot={
             <>
-              <b>{stickiness}%</b> of {nf.format(o.wau)} weekly actives
+              <b>{pct(o.dau, o.total_users)}%</b> of all users
             </>
           }
-          meter={stickiness}
         />
-        <Kpi
-          icon={Sparkles}
-          color={CYAN}
-          label="AI runs · 7d"
-          value={nf.format(o.ai_runs_7d ?? 0)}
+        <Metric
+          label="Active this week"
+          value={nf.format(o.wau)}
           foot={
             <>
-              <b>{compact.format(o.ai_tokens_7d ?? 0)}</b> tokens · {nf.format(o.ai_users_7d ?? 0)} users
+              <b>{pct(o.dau, o.wau)}%</b> come back daily
             </>
           }
-          badge={aiDisabled ? { text: 'off', tone: 'warning' } : undefined}
         />
-        <Kpi
-          icon={HandCoins}
-          color={o.overdue_loans ? AMBER : TEAL}
-          label="Open loans"
-          value={nf.format(o.open_loans)}
+        <Metric
+          label="Premium"
+          value={nf.format(premium)}
           foot={
             <>
-              <b>{nf.format(o.overdue_loans)}</b> overdue{o.open_loans ? ` (${overdueShare}%)` : ''}
+              <b>{pct(premium, o.total_users)}%</b> of users
             </>
           }
-          meter={100 - overdueShare}
-          badge={o.overdue_loans ? { text: 'watch', tone: 'warning' } : undefined}
         />
-      </div>
+      </section>
 
-      {/* ---------------------------------------------------- main grid */}
-      <div className="dash-main">
-        <section className="card dash-growth">
-          <header className="dash-card-head">
+      {/* ---- growth + attention */}
+      <div className="ov-grid">
+        <section className="card ov-chart-card">
+          <header className="ov-card-head">
             <div>
-              <span className="dash-eyebrow">Growth</span>
-              <h3>
-                {nf.format(rangeSignups)} new signups
-                {trend !== null ? (
-                  <span className={`trend ${trend >= 0 ? 'up' : 'down'}`}>
-                    <ArrowUpRight size={14} style={{ transform: trend < 0 ? 'rotate(90deg)' : undefined }} />
-                    {Math.abs(trend)}%
-                  </span>
-                ) : null}
-              </h3>
-              <p className="muted">Last {range} days{trend !== null ? ', second half vs first half' : ''}</p>
-            </div>
-            <div className="seg" role="tablist" aria-label="Range">
-              {RANGES.map((r) => (
-                <button key={r} type="button" className={range === r ? 'active' : ''} onClick={() => setRange(r)}>
-                  {r}d
-                </button>
-              ))}
+              <h3>Sign-ups</h3>
+              <p className="ov-big">
+                {nf.format(rangeTotal)} <span className="muted">in the last {range} days</span>
+              </p>
             </div>
           </header>
-          <div className="dash-growth-chart">
-            {rangeSignups === 0 ? (
-              <div className="chart-state">
-                <UserPlus size={26} strokeWidth={1.5} />
-                <p>No signups in the last {range} days</p>
-              </div>
-            ) : (
+          <div className="ov-chart">
+            {series.length ? (
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={series} margin={{ top: 10, right: 6, left: -18, bottom: 0 }}>
+                <AreaChart data={series} margin={{ top: 8, right: 4, left: -18, bottom: 0 }}>
                   <defs>
-                    <linearGradient id="growthFill" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={TEAL} stopOpacity={0.35} />
-                      <stop offset="100%" stopColor={TEAL} stopOpacity={0} />
+                    <linearGradient id="ovFill" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="var(--primary)" stopOpacity={0.14} />
+                      <stop offset="100%" stopColor="var(--primary)" stopOpacity={0} />
                     </linearGradient>
                   </defs>
                   <CartesianGrid vertical={false} stroke="var(--line)" />
-                  <XAxis dataKey="label" tick={{ fontSize: 11, fill: 'var(--muted)' }} axisLine={false} tickLine={false} minTickGap={24} />
-                  <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: 'var(--muted)' }} axisLine={false} tickLine={false} width={40} />
+                  <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fill: 'var(--faint)', fontSize: 11 }} minTickGap={24} />
+                  <YAxis allowDecimals={false} tickLine={false} axisLine={false} tick={{ fill: 'var(--faint)', fontSize: 11 }} width={40} />
                   <Tooltip
-                    contentStyle={TOOLTIP}
-                    cursor={{ stroke: TEAL, strokeDasharray: '4 4' }}
-                    labelFormatter={(_, p) => String(p?.[0]?.payload?.full ?? '')}
-                    formatter={(v, name) => [v as number, name === 'count' ? 'Signups' : 'Running total']}
+                    cursor={{ stroke: 'var(--line-strong)' }}
+                    contentStyle={{
+                      background: 'var(--surface)',
+                      border: '1px solid var(--line)',
+                      borderRadius: 8,
+                      fontSize: 12.5,
+                      boxShadow: 'var(--shadow)',
+                    }}
+                    labelStyle={{ color: 'var(--muted)', marginBottom: 2 }}
+                    itemStyle={{ color: 'var(--text)' }}
+                    formatter={(v) => [nf.format(Number(v)), 'Sign-ups']}
                   />
-                  <Area type="monotone" dataKey="count" stroke={TEAL} strokeWidth={2.5} fill="url(#growthFill)" activeDot={{ r: 5, strokeWidth: 2, stroke: 'var(--surface)' }} />
+                  <Area type="monotone" dataKey="count" stroke="var(--primary)" strokeWidth={1.75} fill="url(#ovFill)" />
                 </AreaChart>
               </ResponsiveContainer>
+            ) : (
+              <div className="chart-state muted">No sign-ups in this range.</div>
             )}
           </div>
-          <footer className="dash-growth-foot">
-            <div>
-              <small>Last 7 days</small>
-              <b>{nf.format(o.signups_7d)}</b>
-            </div>
-            <div>
-              <small>Last 30 days</small>
-              <b>{nf.format(o.signups_30d)}</b>
-            </div>
-            <div>
-              <small>Weekly actives</small>
-              <b>{nf.format(o.wau)}</b>
-            </div>
-            <div>
-              <small>Cashflow entries · 7d</small>
-              <b>{nf.format(o.cashflow_entries_7d)}</b>
-            </div>
-          </footer>
         </section>
 
-        <section className="card dash-attention">
-          <header className="dash-card-head">
-            <div>
-              <span className="dash-eyebrow">Health</span>
-              <h3>Needs attention</h3>
-            </div>
-            <span className={`badge ${attention.length ? 'badge-warning' : 'badge-success'}`}>{attention.length ? attention.length : 'All clear'}</span>
+        <section className="card ov-attention">
+          <header className="ov-card-head">
+            <h3>Needs attention</h3>
+            {issues.length ? <span className="badge">{issues.length}</span> : null}
           </header>
-          {attention.length === 0 ? (
-            <div className="all-clear">
-              <CheckCircle2 size={30} strokeWidth={1.6} />
-              <div>
-                <strong>Everything looks healthy</strong>
-                <p className="muted">No failed jobs, FX is up, AI is on and nothing is overdue.</p>
-              </div>
-            </div>
+          {issues.length ? (
+            <ul className="ov-list">
+              {issues.map((i) => (
+                <li key={i.label}>
+                  {i.to ? (
+                    <Link to={i.to} className="ov-list-row">
+                      <span className={`dot dot-${i.tone}`} />
+                      <span className="cell-stack">
+                        <span>{i.label}</span>
+                        <small className="muted">{i.detail}</small>
+                      </span>
+                      <ChevronRight size={15} strokeWidth={2} className="ov-chev" />
+                    </Link>
+                  ) : (
+                    <div className="ov-list-row static">
+                      <span className={`dot dot-${i.tone}`} />
+                      <span className="cell-stack">
+                        <span>{i.label}</span>
+                        <small className="muted">{i.detail}</small>
+                      </span>
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ul>
           ) : (
-            <ul className="attention-list">
-              {attention.map((a) => (
-                <li key={a.title} className={`attention-${a.tone}`}>
-                  <span className="attention-dot" />
-                  <span className="cell-stack">
-                    <span>{a.title}</span>
-                    <span className="muted" style={{ fontSize: 12.5 }}>
-                      {a.detail}
-                    </span>
-                  </span>
-                  {a.to ? (
-                    <button type="button" className="icon-btn icon-btn-sm" onClick={() => navigate(a.to!)} aria-label={`Open ${a.title}`}>
-                      <ArrowRight size={15} strokeWidth={2} />
-                    </button>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
+            <div className="ov-empty">
+              <span className="dot dot-ok" />
+              <p>Nothing needs attention right now.</p>
+            </div>
           )}
-
-          <div className="dash-systems">
-            <SystemRow
-              ok={o.fx_ok !== false}
-              label="Exchange rates"
-              detail={o.fx_ok === false ? o.fx_error || 'Unreachable' : `${o.fx_base || 'USD'} base${o.fx_as_of ? ` · ${o.fx_as_of}` : ''}`}
-            />
-            <SystemRow ok={jobsFailed === 0} label="Job queue" detail={`${jobsFailed} failed · ${jobsPending} pending`} />
-            <SystemRow ok={!aiDisabled} label="AI services" detail={aiDisabled ? 'Disabled by an admin' : `${nf.format(o.ai_requests_today ?? 0)} requests today`} />
-          </div>
         </section>
       </div>
 
-      {/* ---------------------------------------------------- breakdowns */}
-      <div className="dash-row">
-        <section className="card dash-mini">
-          <header className="dash-card-head">
+      {/* ---- detail panels */}
+      <div className="ov-three">
+        <Panel title="Engagement" to="/users" toLabel="Users">
+          <BarRow label="Daily active" value={o.dau} max={activeBase} />
+          <BarRow label="Weekly active" value={o.wau} max={activeBase} />
+          {o.mau != null ? <BarRow label="Monthly active" value={o.mau} max={activeBase} /> : null}
+          <dl className="ov-facts">
             <div>
-              <span className="dash-eyebrow">Accounts</span>
-              <h3>Account status</h3>
+              <dt>Suspended</dt>
+              <dd>{nf.format(o.suspended_users)}</dd>
             </div>
-          </header>
-          <div className="dash-donut">
-            <div style={{ width: 150, height: 150, position: 'relative' }}>
-              {accountMix.length ? (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie data={accountMix} dataKey="value" nameKey="name" innerRadius={50} outerRadius={70} paddingAngle={3} cornerRadius={5} stroke="none">
-                      {accountMix.map((d) => (
-                        <Cell key={d.name} fill={d.color} />
-                      ))}
-                    </Pie>
-                    <Tooltip contentStyle={TOOLTIP} />
-                  </PieChart>
-                </ResponsiveContainer>
-              ) : null}
-              <div className="chart-center-label">
-                <div>
-                  <strong>{activeShare}%</strong>
-                  <small>active</small>
-                </div>
-              </div>
+            <div>
+              <dt>Sign-ups · 30d</dt>
+              <dd>{nf.format(o.signups_30d)}</dd>
             </div>
-            <ul className="legend-list">
-              {accountMix.map((d) => (
-                <li key={d.name}>
-                  <i style={{ background: d.color }} />
-                  <span>{d.name}</span>
-                  <b>{nf.format(d.value)}</b>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </section>
+          </dl>
+        </Panel>
 
-        <section className="card dash-mini">
-          <header className="dash-card-head">
+        <Panel title="Lending">
+          <div className="ov-pair">
             <div>
-              <span className="dash-eyebrow">AI</span>
-              <h3>AI activity</h3>
+              <small>Open loans</small>
+              <strong>{nf.format(o.open_loans)}</strong>
             </div>
-            <span className={`badge ${aiDisabled ? 'badge-warning' : 'badge-success'}`}>{aiDisabled ? 'off' : 'on'}</span>
-          </header>
-          <div style={{ height: 170 }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={aiBars} layout="vertical" margin={{ top: 0, right: 30, left: 0, bottom: 0 }} barSize={14}>
-                <XAxis type="number" hide allowDecimals={false} />
-                <YAxis type="category" dataKey="name" width={110} tick={{ fontSize: 12, fill: 'var(--muted)' }} axisLine={false} tickLine={false} />
-                <Tooltip contentStyle={TOOLTIP} cursor={{ fill: 'var(--surface-muted)' }} formatter={(v) => [nf.format(v as number), '']} />
-                <Bar dataKey="value" radius={[0, 8, 8, 0]} label={{ position: 'right', fontSize: 11, fill: 'var(--muted)' }}>
-                  {aiBars.map((d) => (
-                    <Cell key={d.name} fill={d.fill} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
+            <div>
+              <small>Overdue</small>
+              <strong className={o.overdue_loans > 0 ? 'tone-warn' : undefined}>{nf.format(o.overdue_loans)}</strong>
+            </div>
           </div>
-        </section>
+          <BarRow label="Overdue rate" value={o.overdue_loans} max={o.open_loans} asPercent warn />
+          <dl className="ov-facts">
+            <div>
+              <dt>New loans · 7d</dt>
+              <dd>{o.loans_created_7d != null ? nf.format(o.loans_created_7d) : '—'}</dd>
+            </div>
+            <div>
+              <dt>Cash-flow entries · 7d</dt>
+              <dd>{nf.format(o.cashflow_entries_7d)}</dd>
+            </div>
+          </dl>
+        </Panel>
 
-        <section className="card dash-mini">
-          <header className="dash-card-head">
+        <Panel title="AI" to={canControls ? '/controls' : undefined} toLabel="Controls">
+          <div className="ov-pair">
             <div>
-              <span className="dash-eyebrow">Money</span>
-              <h3>Lending & cashflow</h3>
+              <small>Runs · 7d</small>
+              <strong>{compact.format(o.ai_runs_7d ?? 0)}</strong>
             </div>
-          </header>
-          <div className="dash-stack-bars">
-            <StackBar label="Loans on time" value={o.open_loans - o.overdue_loans} total={o.open_loans} color={TEAL} />
-            <StackBar label="Loans overdue" value={o.overdue_loans} total={o.open_loans} color={ROSE} />
-            <StackBar label="Jobs pending" value={jobsPending} total={jobsPending + jobsFailed} color={SLATE} />
-            <StackBar label="Jobs failed" value={jobsFailed} total={jobsPending + jobsFailed} color={ROSE} />
+            <div>
+              <small>Requests today</small>
+              <strong>{compact.format(o.ai_requests_today ?? 0)}</strong>
+            </div>
           </div>
-          <div className="dash-inline-stat">
-            <ArrowLeftRight size={16} />
-            <span>
-              <b>{nf.format(o.cashflow_entries_7d)}</b> cashflow entries logged this week
-            </span>
-          </div>
-          <div className="dash-inline-stat">
-            <Coins size={16} />
-            <span>
-              <b>{nf.format(o.ai_insights_7d)}</b> AI insights generated this week
-            </span>
-          </div>
-        </section>
+          <dl className="ov-facts">
+            <div>
+              <dt>Users · 7d</dt>
+              <dd>{nf.format(o.ai_users_7d ?? 0)}</dd>
+            </div>
+            <div>
+              <dt>Tokens · 7d</dt>
+              <dd>{compact.format(o.ai_tokens_7d ?? 0)}</dd>
+            </div>
+            <div>
+              <dt>Insights · 7d</dt>
+              <dd>{nf.format(o.ai_insights_7d)}</dd>
+            </div>
+            <div>
+              <dt>Status</dt>
+              <dd>
+                {controls ? (
+                  <span className={`badge ${aiPaused ? 'badge-warning' : 'badge-success'}`}>{aiPaused ? 'Paused' : 'On'}</span>
+                ) : (
+                  '—'
+                )}
+              </dd>
+            </div>
+          </dl>
+        </Panel>
       </div>
 
-      {recent !== null ? (
+      {/* ---- activity + shortcuts */}
+      <div className="ov-grid">
         <section className="card">
-          <header className="dash-card-head">
-            <div>
-              <span className="dash-eyebrow">Audit</span>
-              <h3>Recent admin activity</h3>
-            </div>
-            <Button size="sm" variant="secondary" onClick={() => navigate('/audit')}>
-              Open audit log <ArrowRight size={14} />
-            </Button>
+          <header className="ov-card-head">
+            <h3>Recent admin activity</h3>
+            {canAudit ? (
+              <Link to="/audit" className="ov-link">
+                Audit log <ArrowRight size={14} strokeWidth={2} />
+              </Link>
+            ) : null}
           </header>
-          {recent.length === 0 ? (
-            <p className="muted" style={{ margin: 0 }}>
-              No admin actions recorded yet.
-            </p>
+          {recent === null ? (
+            <p className="muted ov-note">You don’t have access to the audit log.</p>
+          ) : recent.length === 0 ? (
+            <p className="muted ov-note">No admin activity yet.</p>
           ) : (
-            <ul className="feed feed-grid">
-              {recent.map((e) => {
-                const Icon = actionIcon(e.action);
-                const cat = categoryOf(e.action);
-                return (
-                  <li key={e.id}>
-                    <span className="audit-item-icon sm" style={{ ['--cat' as string]: cat.color }}>
-                      <Icon size={14} strokeWidth={2} />
-                    </span>
-                    <span className="feed-text">
-                      <b>{actorName(e)}</b> {describe(e)}
-                    </span>
-                    <time className="muted">{relativeTime(e.created_at)}</time>
-                  </li>
-                );
-              })}
+            <ul className="ov-feed">
+              {recent.map((e) => (
+                <li key={e.id}>
+                  <span className="ov-avatar">{initials(actorName(e))}</span>
+                  <span className="ov-feed-text">
+                    <b>{actorName(e)}</b> {describe(e)}
+                  </span>
+                  <time className="muted" title={new Date(e.created_at).toLocaleString()}>
+                    {relativeTime(e.created_at)}
+                  </time>
+                </li>
+              ))}
             </ul>
           )}
         </section>
-      ) : null}
 
-      <Modal
-        open={aiConfirm}
-        title={aiDisabled ? 'Turn AI back on?' : 'Turn AI off for everyone?'}
-        onClose={() => setAIConfirm(false)}
-        footer={
-          <>
-            <Button variant="ghost" onClick={() => setAIConfirm(false)}>
-              Cancel
-            </Button>
-            <Button variant={aiDisabled ? 'primary' : 'danger'} busy={aiBusy} icon={<Power size={15} />} onClick={() => void toggleAI()}>
-              {aiDisabled ? 'Turn AI on' : 'Turn AI off'}
-            </Button>
-          </>
-        }
-      >
-        <p style={{ margin: 0, lineHeight: 1.6 }}>
-          {aiDisabled
-            ? 'Premium members get AI features back immediately.'
-            : 'All AI features stop immediately for every member, including Premium.'}{' '}
-          The change is recorded in the audit log.
-        </p>
-      </Modal>
+        <Shortcuts />
+      </div>
     </div>
   );
 }
 
-/* ------------------------------------------------------------- pieces */
+/* ------------------------------------------------------------ pieces */
 
-function StatusChip({ ok, icon: Icon, label }: { ok: boolean; icon: LucideIcon; label: string }) {
+function Metric({ label, value, foot }: { label: string; value: ReactNode; foot: ReactNode }) {
   return (
-    <span className={`hero-chip${ok ? '' : ' bad'}`}>
-      <Icon size={13} strokeWidth={2.2} />
-      {label}
+    <div className="ov-metric">
+      <span className="ov-metric-label">{label}</span>
+      <strong className="ov-metric-value">{value}</strong>
+      <span className="ov-metric-foot">{foot}</span>
+    </div>
+  );
+}
+
+function Delta({ value }: { value: number }) {
+  if (value === 0) return <span className="ov-delta">· same as last week</span>;
+  const up = value > 0;
+  return (
+    <span className={`ov-delta ${up ? 'up' : 'down'}`} title="Compared with the week before">
+      {up ? <ArrowUpRight size={13} strokeWidth={2} /> : <ArrowDownRight size={13} strokeWidth={2} />}
+      {Math.abs(value)} vs last week
     </span>
   );
 }
 
-function Kpi({
-  icon: Icon,
-  color,
-  label,
-  value,
-  foot,
-  spark,
-  meter,
-  badge,
-}: {
-  icon: LucideIcon;
-  color: string;
-  label: string;
-  value: string;
-  foot: ReactNode;
-  spark?: number[];
-  meter?: number;
-  badge?: { text: string; tone: string };
-}) {
-  const points = spark && spark.length > 1 ? sparkPath(spark) : null;
+function Panel({ title, to, toLabel, children }: { title: string; to?: string; toLabel?: string; children: ReactNode }) {
   return (
-    <div className="kpi" style={{ ['--kpi' as string]: color }}>
-      <div className="kpi-top">
-        <span className="kpi-icon">
-          <Icon size={18} strokeWidth={2} />
-        </span>
-        <span className="kpi-label">{label}</span>
-        {badge ? <span className={`badge badge-${badge.tone}`}>{badge.text}</span> : null}
-      </div>
-      <strong className="kpi-value">{value}</strong>
-      {points ? (
-        <svg className="kpi-spark" viewBox="0 0 100 30" preserveAspectRatio="none" aria-hidden>
-          <path d={`${points} L100,30 L0,30 Z`} className="kpi-spark-fill" />
-          <path d={points} className="kpi-spark-line" />
-        </svg>
-      ) : meter !== undefined ? (
-        <div className="kpi-meter">
-          <span style={{ width: `${Math.max(0, Math.min(100, meter))}%` }} />
-        </div>
-      ) : null}
-      <div className="kpi-foot">{foot}</div>
-    </div>
+    <section className="card ov-panel">
+      <header className="ov-card-head">
+        <h3>{title}</h3>
+        {to ? (
+          <Link to={to} className="ov-link">
+            {toLabel} <ArrowRight size={14} strokeWidth={2} />
+          </Link>
+        ) : null}
+      </header>
+      <div className="stack">{children}</div>
+    </section>
   );
 }
 
-function sparkPath(values: number[]) {
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const span = max - min || 1;
-  return values
-    .map((v, i) => `${i === 0 ? 'M' : 'L'}${((i / (values.length - 1)) * 100).toFixed(2)},${(28 - ((v - min) / span) * 26).toFixed(2)}`)
-    .join(' ');
-}
-
-function SystemRow({ ok, label, detail }: { ok: boolean; label: string; detail: string }) {
+function BarRow({ label, value, max, asPercent, warn }: { label: string; value: number; max: number; asPercent?: boolean; warn?: boolean }) {
+  const share = max > 0 ? Math.min(100, (value / max) * 100) : 0;
+  const shown = asPercent ? `${Math.round(share)}%` : nf.format(value);
   return (
-    <div className="system-row">
-      <span className={`system-dot${ok ? '' : ' bad'}`} />
-      <span className="cell-stack" style={{ flex: 1 }}>
+    <div className="ov-bar">
+      <div className="ov-bar-top">
         <span>{label}</span>
-        <span className="muted" style={{ fontSize: 12 }}>
-          {detail}
-        </span>
-      </span>
-      <span className={`badge ${ok ? 'badge-success' : 'badge-error'}`}>{ok ? 'OK' : 'Issue'}</span>
+        <b>{shown}</b>
+      </div>
+      <div className="ov-bar-track">
+        <span className={warn && share >= 10 ? 'warn' : undefined} style={{ width: `${share}%` }} />
+      </div>
     </div>
   );
 }
 
-function StackBar({ label, value, total, color }: { label: string; value: number; total: number; color: string }) {
-  const p = total ? Math.round((value / total) * 100) : 0;
+function Shortcuts() {
+  const { hasPerm } = useAuth();
+  const navigate = useNavigate();
+  const items = [
+    { label: 'Find a user', hint: 'Search accounts', to: '/users', ok: hasPerm('users.read') },
+    { label: 'Manage admin access', hint: 'Team, roles and permissions', to: '/team', ok: hasPerm('roles.read') },
+    { label: 'Platform controls', hint: 'Maintenance, sign-ups, features', to: '/controls', ok: hasPerm('settings.platform') || hasPerm('settings.ai') },
+    { label: 'System health', hint: 'Database, jobs, integrations', to: '/system', ok: hasPerm('system.read') },
+  ].filter((i) => i.ok);
+  if (!items.length) return null;
   return (
-    <div className="stack-bar">
-      <div className="stack-bar-top">
-        <span>{label}</span>
-        <b>
-          {nf.format(value)} <span className="muted">· {p}%</span>
-        </b>
-      </div>
-      <div className="stack-bar-track">
-        <span style={{ width: `${p}%`, background: color }} />
-      </div>
-    </div>
+    <section className="card">
+      <header className="ov-card-head">
+        <h3>Shortcuts</h3>
+      </header>
+      <ul className="ov-list">
+        {items.map((i) => (
+          <li key={i.to}>
+            <button type="button" className="ov-list-row" onClick={() => navigate(i.to)}>
+              <span className="cell-stack">
+                <span>{i.label}</span>
+                <small className="muted">{i.hint}</small>
+              </span>
+              <ChevronRight size={15} strokeWidth={2} className="ov-chev" />
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
+}
+
+function initials(name: string) {
+  const parts = name.trim().split(/\s+/);
+  return ((parts[0]?.[0] || '?') + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
+}
+
+/* ------------------------------------------------------------ status */
+
+function shortName(label: string) {
+  return label.replace(/\s*\(.*\)$/, '');
+}
+
+function buildChecks(o: Overview, sys: SystemInfo | null, controls: Control[] | null): Check[] {
+  const out: Check[] = [];
+  if (sys) {
+    const db = sys.database;
+    out.push({
+      label: 'Database',
+      tone: !db.ok ? 'bad' : db.latency_ms > 250 ? 'warn' : 'ok',
+      detail: db.ok ? `${db.latency_ms.toFixed(1)} ms` : 'unreachable',
+      to: '/system',
+    });
+    const j = sys.jobs;
+    out.push({ label: 'Jobs', tone: j.failed > 0 ? 'warn' : 'ok', detail: j.failed > 0 ? `${j.failed} failed` : `${j.due} due`, to: '/system' });
+    for (const i of sys.integrations) {
+      if (!i.configured) continue;
+      out.push({
+        label: shortName(i.label),
+        tone: i.status === 'ok' ? 'ok' : i.status === 'error' ? 'bad' : 'off',
+        detail: i.status === 'ok' ? 'ok' : i.status,
+        to: '/system',
+      });
+    }
+  } else {
+    out.push({ label: 'Exchange rates', tone: o.fx_ok === false ? 'bad' : 'ok', detail: o.fx_ok === false ? 'failing' : 'ok' });
+    out.push({ label: 'Jobs', tone: (o.jobs_failed ?? 0) > 0 ? 'warn' : 'ok', detail: (o.jobs_failed ?? 0) > 0 ? `${o.jobs_failed} failed` : 'ok' });
+  }
+  if (controls) {
+    const maint = controls.find((c) => c.key === 'maintenance_mode')?.enabled;
+    const paused = controls.filter((c) => c.group !== 'platform' && c.kind === 'bool' && c.enabled).length;
+    out.push({ label: 'App', tone: maint ? 'bad' : paused ? 'warn' : 'ok', detail: maint ? 'maintenance' : paused ? `${paused} paused` : 'open', to: '/controls' });
+  }
+  return out;
+}
+
+function buildIssues(o: Overview, sys: SystemInfo | null, controls: Control[] | null): Issue[] {
+  const out: Issue[] = [];
+  if (controls?.find((c) => c.key === 'maintenance_mode')?.enabled)
+    out.push({ label: 'Maintenance mode is on', detail: 'Users can’t use the app', tone: 'bad', to: '/controls' });
+  const paused = controls?.filter((c) => c.group !== 'platform' && c.kind === 'bool' && c.enabled) ?? [];
+  if (paused.length)
+    out.push({ label: `${paused.length} feature${paused.length > 1 ? 's' : ''} paused`, detail: paused.map((c) => c.label).join(', '), tone: 'warn', to: '/controls' });
+  if (sys && !sys.database.ok) out.push({ label: 'Database unreachable', detail: sys.database.error || 'Ping failed', tone: 'bad', to: '/system' });
+  const failed = sys ? sys.jobs.failed : o.jobs_failed ?? 0;
+  if (failed > 0) out.push({ label: `${nf.format(failed)} failed reminder job${failed > 1 ? 's' : ''}`, detail: 'Retry them from System', tone: 'warn', to: '/system' });
+  for (const i of sys?.integrations ?? []) {
+    if (i.status === 'error') out.push({ label: `${shortName(i.label)} is failing`, detail: i.detail || 'Check System', tone: 'bad', to: '/system' });
+  }
+  if (o.overdue_loans > 0)
+    out.push({ label: `${nf.format(o.overdue_loans)} overdue loan${o.overdue_loans > 1 ? 's' : ''}`, detail: `${pct(o.overdue_loans, o.open_loans)}% of open loans`, tone: 'warn' });
+  const pending = o.deletion_pending ?? 0;
+  if (pending > 0) out.push({ label: `${nf.format(pending)} account deletion${pending > 1 ? 's' : ''} pending`, detail: 'Accounts waiting to be removed', tone: 'warn', to: '/users' });
+  if (o.suspended_users > 0)
+    out.push({ label: `${nf.format(o.suspended_users)} suspended account${o.suspended_users > 1 ? 's' : ''}`, detail: 'Review and reinstate if needed', tone: 'warn', to: '/users' });
+  return out;
 }

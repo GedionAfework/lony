@@ -46,7 +46,7 @@ func (a adminStoreAdapter) SignupsByDay(ctx context.Context, days int) ([]admin.
 }
 
 func (s *SQLStore) AdminListPermissions(ctx context.Context) ([]admin.Permission, error) {
-	rows, err := s.pool.Query(ctx, `SELECT code, label, sort_order FROM admin_permissions ORDER BY sort_order, code`)
+	rows, err := s.pool.Query(ctx, `SELECT code, label, sort_order, area, description, level FROM admin_permissions ORDER BY sort_order, code`)
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +54,7 @@ func (s *SQLStore) AdminListPermissions(ctx context.Context) ([]admin.Permission
 	var out []admin.Permission
 	for rows.Next() {
 		var p admin.Permission
-		if err := rows.Scan(&p.Code, &p.Label, &p.SortOrder); err != nil {
+		if err := rows.Scan(&p.Code, &p.Label, &p.SortOrder, &p.Area, &p.Description, &p.Level); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -65,7 +65,8 @@ func (s *SQLStore) AdminListPermissions(ctx context.Context) ([]admin.Permission
 func (s *SQLStore) AdminListRoles(ctx context.Context) ([]admin.Role, error) {
 	rows, err := s.pool.Query(ctx, `
 		SELECT r.id, r.name, COALESCE(r.description,''), r.is_system, r.created_at, r.updated_at,
-		       COALESCE(array_agg(rp.permission_code ORDER BY rp.permission_code) FILTER (WHERE rp.permission_code IS NOT NULL), '{}')
+		       COALESCE(array_agg(rp.permission_code ORDER BY rp.permission_code) FILTER (WHERE rp.permission_code IS NOT NULL), '{}'),
+		       (SELECT COUNT(*)::int FROM users mu WHERE mu.admin_role_id = r.id AND mu.role = 'admin' AND mu.deleted_at IS NULL)
 		FROM admin_roles r
 		LEFT JOIN admin_role_permissions rp ON rp.role_id = r.id
 		GROUP BY r.id
@@ -79,7 +80,7 @@ func (s *SQLStore) AdminListRoles(ctx context.Context) ([]admin.Role, error) {
 	for rows.Next() {
 		var r admin.Role
 		var perms []string
-		if err := rows.Scan(&r.ID, &r.Name, &r.Description, &r.IsSystem, &r.CreatedAt, &r.UpdatedAt, &perms); err != nil {
+		if err := rows.Scan(&r.ID, &r.Name, &r.Description, &r.IsSystem, &r.CreatedAt, &r.UpdatedAt, &perms, &r.MemberCount); err != nil {
 			return nil, err
 		}
 		r.Permissions = perms
@@ -93,12 +94,13 @@ func (s *SQLStore) AdminGetRole(ctx context.Context, id uuid.UUID) (admin.Role, 
 	var perms []string
 	err := s.pool.QueryRow(ctx, `
 		SELECT r.id, r.name, COALESCE(r.description,''), r.is_system, r.created_at, r.updated_at,
-		       COALESCE(array_agg(rp.permission_code ORDER BY rp.permission_code) FILTER (WHERE rp.permission_code IS NOT NULL), '{}')
+		       COALESCE(array_agg(rp.permission_code ORDER BY rp.permission_code) FILTER (WHERE rp.permission_code IS NOT NULL), '{}'),
+		       (SELECT COUNT(*)::int FROM users mu WHERE mu.admin_role_id = r.id AND mu.role = 'admin' AND mu.deleted_at IS NULL)
 		FROM admin_roles r
 		LEFT JOIN admin_role_permissions rp ON rp.role_id = r.id
 		WHERE r.id = $1
 		GROUP BY r.id
-	`, id).Scan(&r.ID, &r.Name, &r.Description, &r.IsSystem, &r.CreatedAt, &r.UpdatedAt, &perms)
+	`, id).Scan(&r.ID, &r.Name, &r.Description, &r.IsSystem, &r.CreatedAt, &r.UpdatedAt, &perms, &r.MemberCount)
 	if err != nil {
 		return r, err
 	}

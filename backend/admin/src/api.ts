@@ -27,6 +27,11 @@ export type Overview = {
   ai_users_7d?: number;
   ai_tokens_7d?: number;
   ai_requests_today?: number;
+  premium_users?: number;
+  deletion_pending?: number;
+  signups_prev_7d?: number;
+  mau?: number;
+  loans_created_7d?: number;
   jobs_failed?: number;
   jobs_pending?: number;
   fx_ok?: boolean;
@@ -95,10 +100,97 @@ export type AuditStats = {
   top_actors: { actor_id: string; email: string; name: string; count: number }[];
 };
 
+export type PermissionLevel = 'read' | 'write' | 'danger';
+
 export type Permission = {
   code: string;
   label: string;
   sort_order: number;
+  area: string;
+  description: string;
+  level: PermissionLevel;
+  /** Permissions this one needs; the server adds them automatically. */
+  requires: string[];
+};
+
+export type AdminMember = {
+  id: string;
+  email: string;
+  display_name: string;
+  status: string;
+  admin_role_id?: string | null;
+  admin_role_name?: string | null;
+  active_sessions: number;
+  last_active_at?: string | null;
+  last_action_at?: string | null;
+  actions_30d: number;
+  created_at: string;
+};
+
+export type Control = {
+  key: string;
+  label: string;
+  description: string;
+  group: 'platform' | 'features' | 'ai';
+  kind: 'bool' | 'text';
+  danger: boolean;
+  paths?: string[];
+  value: string;
+  enabled: boolean;
+};
+
+export type Integration = {
+  key: string;
+  label: string;
+  configured: boolean;
+  status: 'ok' | 'off' | 'error';
+  detail?: string;
+};
+
+export type SystemInfo = {
+  generated_at: string;
+  runtime: {
+    env: string;
+    go_version: string;
+    os: string;
+    arch: string;
+    cpus: number;
+    goroutines: number;
+    heap_alloc_bytes: number;
+    heap_sys_bytes: number;
+    sys_bytes: number;
+    num_gc: number;
+    last_gc_pause_ns: number;
+    started_at: string;
+    uptime_sec: number;
+    revision?: string;
+    build_time?: string;
+    modified?: boolean;
+  };
+  database: {
+    ok: boolean;
+    error?: string;
+    latency_ms: number;
+    version: string;
+    size_bytes: number;
+    pool: { total: number; idle: number; acquired: number; max: number };
+    migration: string;
+    migration_at?: string;
+    migrations_count: number;
+    tables: { name: string; rows: number; bytes: number }[];
+  };
+  jobs: {
+    pending: number;
+    due: number;
+    failed: number;
+    completed_24h: number;
+    cancelled: number;
+    oldest_due_at?: string;
+    recent_failures: { id: string; kind: string; attempts: number; last_error: string; run_at: string }[];
+  };
+  sessions: { active: number; used_24h: number; used_1h: number; admins_live: number };
+  integrations: Integration[];
+  controls: Control[];
 };
 
 export type AdminRole = {
@@ -107,6 +199,7 @@ export type AdminRole = {
   description?: string;
   is_system: boolean;
   permissions: string[];
+  member_count?: number;
   created_at: string;
   updated_at: string;
 };
@@ -385,6 +478,34 @@ export const api = {
         headers: { 'Idempotency-Key': idem() },
         body: JSON.stringify({ plan_tier }),
       },
+      token,
+    ),
+  setAdminAccess: (token: string, id: string, admin: boolean, role_id?: string | null) =>
+    request<{ user: AdminUser }>(
+      `/api/v1/admin/users/${id}/admin`,
+      { method: 'POST', headers: { 'Idempotency-Key': idem() }, body: JSON.stringify({ admin, role_id: role_id ?? null }) },
+      token,
+    ),
+  revokeSessions: (token: string, id: string) =>
+    request<{ user: AdminUser }>(
+      `/api/v1/admin/users/${id}/sessions/revoke`,
+      { method: 'POST', headers: { 'Idempotency-Key': idem() }, body: '{}' },
+      token,
+    ),
+  listAdmins: (token: string) => request<{ admins: AdminMember[] }>('/api/v1/admin/admins', { method: 'GET' }, token),
+  deleteRole: (token: string, id: string) => request<void>(`/api/v1/admin/roles/${id}`, { method: 'DELETE' }, token),
+  controls: (token: string) => request<{ controls: Control[] }>('/api/v1/admin/controls', { method: 'GET' }, token),
+  setControls: (token: string, values: Record<string, string>) =>
+    request<{ controls: Control[] }>(
+      '/api/v1/admin/controls',
+      { method: 'PATCH', headers: { 'Idempotency-Key': idem() }, body: JSON.stringify({ values }) },
+      token,
+    ),
+  system: (token: string) => request<{ system: SystemInfo }>('/api/v1/admin/system', { method: 'GET' }, token),
+  retryFailedJobs: (token: string) =>
+    request<{ retried: number }>(
+      '/api/v1/admin/system/jobs/retry',
+      { method: 'POST', headers: { 'Idempotency-Key': idem() }, body: '{}' },
       token,
     ),
   setUserRole: (token: string, id: string, admin_role_id: string | null) =>

@@ -102,7 +102,10 @@ export function AuditPage() {
   // filters
   const [qInput, setQInput] = useState('');
   const q = useDebounced(qInput);
-  const [category, setCategory] = useState('');
+  const [category, setCategory] = useState(() => {
+    const a = new URLSearchParams(window.location.search).get('action') ?? '';
+    return a.endsWith('.') ? a : '';
+  });
   const [action, setAction] = useState('');
   const [range, setRange] = useState<Range>('30d');
   const [customFrom, setCustomFrom] = useState('');
@@ -314,12 +317,6 @@ export function AuditPage() {
             {chartData.some((d) => d.count > 0) ? (
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={chartData} margin={{ top: 4, right: 0, left: 0, bottom: 0 }}>
-                  <defs>
-                    <linearGradient id="auditBar" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor="#14b8a6" />
-                      <stop offset="100%" stopColor="#0891b2" stopOpacity={0.55} />
-                    </linearGradient>
-                  </defs>
                   <XAxis dataKey="label" tick={{ fontSize: 10, fill: 'var(--muted)' }} axisLine={false} tickLine={false} interval={4} />
                   <Tooltip
                     cursor={{ fill: 'var(--surface-muted)' }}
@@ -327,7 +324,7 @@ export function AuditPage() {
                     labelFormatter={(_, p) => String(p?.[0]?.payload?.full ?? '')}
                     formatter={(v) => [v as number, 'Events']}
                   />
-                  <Bar dataKey="count" fill="url(#auditBar)" radius={[5, 5, 2, 2]} />
+                  <Bar dataKey="count" fill="#0D9488" radius={[3, 3, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             ) : (

@@ -88,6 +88,12 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 	fxClient := fx.New()
 	adminSvc := admin.NewService(store.AdminAdapter(sqlStore))
 	adminSvc.SetFX(fxClient)
+	adminSvc.SetEnvironment(cfg.AppEnv, []admin.Integration{
+		integration("email", "Email (SMTP)", cfg.SMTPHost != "", cfg.SMTPHost),
+		integration("ai", "AI provider", cfg.OpenAIAPIKey != "", cfg.OpenAIModel),
+		integration("plaid", "Bank linking (Plaid)", cfg.PlaidClientID != "" && cfg.PlaidSecret != "", cfg.PlaidEnv),
+		integration("telegram", "Telegram sign-in", cfg.TelegramBotToken != "", cfg.TelegramBotUsername),
+	})
 	if n, err := adminSvc.BootstrapAdmins(context.Background(), cfg.AdminEmails); err != nil {
 		panic(err)
 	} else if n > 0 {
@@ -246,7 +252,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 	r.Route("/api/v1", func(r chi.Router) {
 		r.Group(func(r chi.Router) {
 			r.Use(authLimit.Middleware)
-			r.With(idem.Handler("auth.register")).Post("/auth/register", authH.Register)
+			r.With(adminSvc.SignupGate, idem.Handler("auth.register")).Post("/auth/register", authH.Register)
 			r.With(idem.Handler("auth.verify")).Post("/auth/verify", authH.Verify)
 			r.With(idem.Handler("auth.resend")).Post("/auth/resend-verification", authH.ResendVerification)
 			r.With(idem.Handler("auth.forgot")).Post("/auth/forgot-password", authH.ForgotPassword)
@@ -268,6 +274,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 		r.Group(func(r chi.Router) {
 			r.Use(sessionLimit.Middleware)
 			r.Use(auth.Middleware(cfg.JWTSecret, sqlStore))
+			r.Use(adminSvc.PlatformGate)
 			r.Post("/auth/logout", authH.Logout)
 			r.With(idem.Handler("auth.password")).Post("/me/password", authH.ChangePassword)
 			r.Get("/me", authH.Me)
@@ -371,14 +378,20 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 				r.With(admin.RequirePerm(adminSvc, admin.PermOverviewRead)).Get("/overview", adminH.Overview)
 				r.With(admin.RequirePerm(adminSvc, admin.PermUsersRead)).Get("/users", adminH.ListUsers)
 				r.With(admin.RequirePerm(adminSvc, admin.PermUsersRead)).Get("/users/{userID}", adminH.GetUser)
-				r.With(admin.RequirePerm(adminSvc, admin.PermUsersWrite), idem.Handler("admin.suspend")).Post("/users/{userID}/suspend", adminH.Suspend)
-				r.With(admin.RequirePerm(adminSvc, admin.PermUsersWrite), idem.Handler("admin.unsuspend")).Post("/users/{userID}/unsuspend", adminH.Unsuspend)
-				r.With(admin.RequirePerm(adminSvc, admin.PermUsersWrite), idem.Handler("admin.plan")).Patch("/users/{userID}/plan", adminH.SetPlanTier)
-				r.With(admin.RequirePerm(adminSvc, admin.PermRolesManage)).Patch("/users/{userID}/role", adminH.SetUserRole)
+				r.With(admin.RequirePerm(adminSvc, admin.PermUsersSuspend), idem.Handler("admin.suspend")).Post("/users/{userID}/suspend", adminH.Suspend)
+				r.With(admin.RequirePerm(adminSvc, admin.PermUsersSuspend), idem.Handler("admin.unsuspend")).Post("/users/{userID}/unsuspend", adminH.Unsuspend)
+				r.With(admin.RequirePerm(adminSvc, admin.PermUsersPlan), idem.Handler("admin.plan")).Patch("/users/{userID}/plan", adminH.SetPlanTier)
+				r.With(admin.RequirePerm(adminSvc, admin.PermRolesAssign)).Patch("/users/{userID}/role", adminH.SetUserRole)
+				r.With(admin.RequirePerm(adminSvc, admin.PermRolesAssign), idem.Handler("admin.access")).Post("/users/{userID}/admin", adminH.SetAdminAccess)
+				r.With(admin.RequirePerm(adminSvc, admin.PermUsersSessions), idem.Handler("admin.sessions")).Post("/users/{userID}/sessions/revoke", adminH.RevokeSessions)
 				r.With(admin.RequirePerm(adminSvc, admin.PermAuditRead)).Get("/audit", adminH.ListAudit)
 				r.With(admin.RequirePerm(adminSvc, admin.PermAuditRead)).Get("/audit/stats", adminH.AuditStats)
-				r.With(admin.RequirePerm(adminSvc, admin.PermAuditRead)).Get("/audit/export", adminH.ExportAudit)
-				r.With(admin.RequirePerm(adminSvc, admin.PermSettingsAI)).Get("/settings", adminH.GetSettings)
+				r.With(admin.RequirePerm(adminSvc, admin.PermAuditExport)).Get("/audit/export", adminH.ExportAudit)
+				r.With(admin.RequireAnyPerm(adminSvc, admin.PermSettingsAI, admin.PermSettingsPlatform, admin.PermSystemRead)).Get("/settings", adminH.GetSettings)
+				r.With(admin.RequireAnyPerm(adminSvc, admin.PermSettingsAI, admin.PermSettingsPlatform, admin.PermSystemRead)).Get("/controls", adminH.GetControls)
+				r.With(admin.RequirePerm(adminSvc, admin.PermSettingsPlatform), idem.Handler("admin.controls")).Patch("/controls", adminH.SetControls)
+				r.With(admin.RequirePerm(adminSvc, admin.PermSystemRead)).Get("/system", adminH.System)
+				r.With(admin.RequirePerm(adminSvc, admin.PermSystemJobs), idem.Handler("admin.jobs.retry")).Post("/system/jobs/retry", adminH.RetryFailedJobs)
 				r.With(admin.RequirePerm(adminSvc, admin.PermSettingsAI), idem.Handler("admin.ai")).Post("/settings/ai", adminH.SetAIDisabled)
 				r.With(admin.RequirePerm(adminSvc, admin.PermCategoriesRead)).Get("/catalogs/types", adminH.ListCatalogTypesAdmin)
 				r.With(admin.RequirePerm(adminSvc, admin.PermCategoriesWrite), idem.Handler("admin.catalog.type")).Post("/catalogs/types", adminH.CreateCatalogType)
@@ -392,17 +405,19 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 				r.With(admin.RequirePerm(adminSvc, admin.PermThemesRead)).Get("/themes", adminH.ListThemesAdmin)
 				r.With(admin.RequirePerm(adminSvc, admin.PermThemesWrite), idem.Handler("admin.theme")).Post("/themes", adminH.CreateTheme)
 				r.With(admin.RequirePerm(adminSvc, admin.PermThemesWrite)).Patch("/themes/{themeID}", adminH.UpdateTheme)
-				r.With(admin.RequirePerm(adminSvc, admin.PermLocalization)).Get("/locales", locH.ListLocalesAdmin)
-				r.With(admin.RequirePerm(adminSvc, admin.PermLocalization)).Get("/locales/catalog", locH.Catalog)
+				r.With(admin.RequirePerm(adminSvc, admin.PermLocalizationRead)).Get("/locales", locH.ListLocalesAdmin)
+				r.With(admin.RequirePerm(adminSvc, admin.PermLocalizationRead)).Get("/locales/catalog", locH.Catalog)
 				r.With(admin.RequirePerm(adminSvc, admin.PermLocalization), idem.Handler("admin.locale")).Post("/locales", locH.UploadLocale)
 				r.With(admin.RequirePerm(adminSvc, admin.PermLocalization)).Patch("/locales/{code}", locH.PatchLocale)
 				r.With(admin.RequirePerm(adminSvc, admin.PermLocalization)).Delete("/locales/{code}", locH.DeleteLocale)
-				r.With(admin.RequirePerm(adminSvc, admin.PermLocalization)).Get("/calendars", locH.ListCalendarsAdmin)
+				r.With(admin.RequirePerm(adminSvc, admin.PermLocalizationRead)).Get("/calendars", locH.ListCalendarsAdmin)
 				r.With(admin.RequirePerm(adminSvc, admin.PermLocalization)).Patch("/calendars/{id}", locH.PatchCalendar)
-				r.With(admin.RequirePerm(adminSvc, admin.PermRolesManage)).Get("/permissions", adminH.ListPermissions)
-				r.With(admin.RequirePerm(adminSvc, admin.PermRolesManage)).Get("/roles", adminH.ListRoles)
+				r.With(admin.RequirePerm(adminSvc, admin.PermRolesRead)).Get("/permissions", adminH.ListPermissions)
+				r.With(admin.RequirePerm(adminSvc, admin.PermRolesRead)).Get("/roles", adminH.ListRoles)
+				r.With(admin.RequirePerm(adminSvc, admin.PermRolesRead)).Get("/admins", adminH.ListAdmins)
 				r.With(admin.RequirePerm(adminSvc, admin.PermRolesManage), idem.Handler("admin.role")).Post("/roles", adminH.CreateRole)
 				r.With(admin.RequirePerm(adminSvc, admin.PermRolesManage)).Patch("/roles/{roleID}", adminH.UpdateRole)
+				r.With(admin.RequirePerm(adminSvc, admin.PermRolesManage)).Delete("/roles/{roleID}", adminH.DeleteRole)
 			})
 
 			r.With(idem.Handler("ai.plan_chat")).Post("/ai/plan-chat", aiH.PlanChat)
@@ -466,4 +481,12 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 	})
 
 	return r
+}
+
+func integration(key, label string, configured bool, detail string) admin.Integration {
+	out := admin.Integration{Key: key, Label: label, Configured: configured, Status: "off", Detail: "Not configured"}
+	if configured {
+		out.Status, out.Detail = "ok", detail
+	}
+	return out
 }

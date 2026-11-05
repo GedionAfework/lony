@@ -11,25 +11,14 @@ type Props = {
   tone?: Tone;
 };
 
-const TAG: Record<Tone, string | null> = {
-  default: null,
-  success: 'Healthy',
-  warning: 'Watch',
-  error: 'Action',
-};
-
 export function StatCard({ icon: Icon, label, value, hint, tone = 'default' }: Props) {
-  const tag = TAG[tone];
   return (
     <div className={`stat-card stat-${tone}`}>
       <div className="stat-card-top">
-        <div className="stat-card-icon">
-          <Icon size={19} strokeWidth={2} />
-        </div>
-        {tag ? <span className="stat-card-tag">{tag}</span> : null}
+        <span className="stat-card-label">{label}</span>
+        <Icon size={16} strokeWidth={1.75} className="stat-card-icon" />
       </div>
       <div className="stat-card-body">
-        <span className="stat-card-label">{label}</span>
         <strong className="stat-card-value">{value}</strong>
         {hint ? (
           <span className="stat-card-hint muted" title={hint}>

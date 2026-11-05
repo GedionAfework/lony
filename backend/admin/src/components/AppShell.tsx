@@ -16,8 +16,11 @@ import {
   Moon,
   Monitor,
   Menu,
-  Search,
   ShieldCheck,
+  Search,
+  Activity,
+  SlidersHorizontal,
+  KeyRound,
   type LucideIcon,
 } from 'lucide-react';
 import { useAuth } from '../auth';
@@ -30,19 +33,24 @@ type NavItem = {
   label: string;
   icon: LucideIcon;
   perm?: string;
+  /** Visible when the admin holds any one of these. */
+  anyPerm?: string[];
   end?: boolean;
   group: string;
   keywords?: string;
 };
 
 const NAV: NavItem[] = [
-  { to: '/', label: 'Overview', icon: LayoutDashboard, perm: 'overview.read', end: true, group: 'Insights', keywords: 'dashboard home stats' },
-  { to: '/users', label: 'Users', icon: Users, perm: 'users.read', group: 'People', keywords: 'accounts roles members' },
-  { to: '/audit', label: 'Audit log', icon: ScrollText, perm: 'audit.read', group: 'People', keywords: 'history events activity' },
+  { to: '/', label: 'Overview', icon: LayoutDashboard, perm: 'overview.read', end: true, group: 'Monitor', keywords: 'dashboard home stats' },
+  { to: '/system', label: 'System', icon: Activity, perm: 'system.read', group: 'Monitor', keywords: 'health database jobs runtime uptime' },
+  { to: '/audit', label: 'Audit log', icon: ScrollText, perm: 'audit.read', group: 'Monitor', keywords: 'history events activity' },
+  { to: '/users', label: 'Users', icon: Users, perm: 'users.read', group: 'Manage', keywords: 'accounts members suspend plan' },
+  { to: '/team', label: 'Admins & roles', icon: KeyRound, perm: 'roles.read', group: 'Manage', keywords: 'rbac permissions team access roles' },
+  { to: '/controls', label: 'Controls', icon: SlidersHorizontal, anyPerm: ['settings.platform', 'settings.ai'], group: 'Manage', keywords: 'maintenance signups features kill switch ai' },
   { to: '/categories', label: 'Categories', icon: Layers, perm: 'categories.read', group: 'Content', keywords: 'catalog institutions banks' },
   { to: '/themes', label: 'Themes', icon: Palette, perm: 'themes.read', group: 'Content', keywords: 'colors appearance' },
-  { to: '/localization', label: 'Languages', icon: Languages, perm: 'localization.manage', group: 'Content', keywords: 'translations i18n calendars' },
-  { to: '/settings', label: 'Settings', icon: Settings, group: 'System', keywords: 'ai config account appearance notes' },
+  { to: '/localization', label: 'Languages', icon: Languages, perm: 'localization.read', group: 'Content', keywords: 'translations i18n calendars' },
+  { to: '/settings', label: 'Settings', icon: Settings, group: 'Account', keywords: 'account appearance notes preferences' },
 ];
 
 const THEME_OPTIONS: { id: ThemeMode; label: string; icon: LucideIcon }[] = [
@@ -79,7 +87,7 @@ export function AppShell() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-  const [themeMode, setThemeMode] = useThemeMode();
+  const [, setThemeMode, isDark] = useThemeMode();
 
   useEffect(() => {
     try {
@@ -135,14 +143,13 @@ export function AppShell() {
     navigate('/login', { replace: true });
   }
 
-  const visibleNav = NAV.filter((item) => !item.perm || hasPerm(item.perm));
+  const visibleNav = NAV.filter(
+    (item) => (!item.perm || hasPerm(item.perm)) && (!item.anyPerm || item.anyPerm.some((p) => hasPerm(p))),
+  );
   const current =
     visibleNav.find((item) => (item.end ? location.pathname === item.to : item.to !== '/' && location.pathname.startsWith(item.to))) ??
     null;
   const roleName = me?.admin_role || (me?.role === 'admin' ? 'Admin' : '');
-  const hour = new Date().getHours();
-  const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
-  const firstName = (me?.display_name || '').trim().split(/\s+/)[0] || '';
   const today = new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
 
   const commands = useMemo<Command[]>(
@@ -203,12 +210,6 @@ export function AppShell() {
           </button>
         </div>
 
-        <button type="button" className="shell-search-btn" onClick={() => setPaletteOpen(true)} title="Search (Ctrl K)">
-          <Search size={16} strokeWidth={2} />
-          <span>Search…</span>
-          <kbd>{IS_MAC ? '⌘' : 'Ctrl'} K</kbd>
-        </button>
-
         <nav className="shell-nav">
           {visibleNav.map((item, i) => (
             <div key={item.to} style={{ display: 'contents' }}>
@@ -225,17 +226,6 @@ export function AppShell() {
             </div>
           ))}
         </nav>
-
-        <div className="shell-sidebar-user">
-          <span className="shell-user-avatar">{avatar}</span>
-          <span className="shell-sidebar-user-meta">
-            <strong>{me?.display_name || me?.email}</strong>
-            {roleName ? <small>{roleName}</small> : null}
-          </span>
-          <button type="button" className="shell-sidebar-logout" onClick={() => void onLogout()} title="Log out" aria-label="Log out">
-            <LogOut size={16} strokeWidth={2} />
-          </button>
-        </div>
       </aside>
 
       <div className="shell-main">
@@ -248,47 +238,31 @@ export function AppShell() {
             <div className="shell-crumbs">
               {current ? (
                 <>
-                  {current.group}
-                  <ChevronRight size={12} strokeWidth={2.5} />
+                  <span>{current.group}</span>
+                  <ChevronRight size={13} strokeWidth={2} />
                   <b>{current.label}</b>
                 </>
               ) : (
-                today
+                <b>{today}</b>
               )}
             </div>
-            <strong>
-              {greeting}
-              {firstName ? `, ${firstName}` : ''} 👋
-            </strong>
           </div>
 
           <button type="button" className="shell-topbar-search" onClick={() => setPaletteOpen(true)} aria-label="Search">
-            <Search size={16} strokeWidth={2} />
-            <span>Search or jump to…</span>
+            <Search size={15} strokeWidth={2} />
+            <span>Jump to…</span>
             <kbd>{IS_MAC ? '⌘' : 'Ctrl'} K</kbd>
           </button>
 
-          <span className="shell-status" title="Admin session active">
-            <span className="status-dot" />
-            Live
-          </span>
-
-          <div className="theme-toggle" role="radiogroup" aria-label="Appearance">
-            {THEME_OPTIONS.map((opt) => (
-              <button
-                key={opt.id}
-                type="button"
-                role="radio"
-                aria-checked={themeMode === opt.id}
-                title={opt.label}
-                aria-label={opt.label}
-                className={themeMode === opt.id ? 'active' : ''}
-                onClick={() => setThemeMode(opt.id)}
-              >
-                <opt.icon size={15} strokeWidth={2} />
-              </button>
-            ))}
-          </div>
+          <button
+            type="button"
+            className="shell-icon-btn"
+            onClick={() => setThemeMode(isDark ? 'light' : 'dark')}
+            title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+            aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+          >
+            {isDark ? <Sun size={16} strokeWidth={2} /> : <Moon size={16} strokeWidth={2} />}
+          </button>
 
           <div className="shell-account" ref={menuRef}>
             <button
