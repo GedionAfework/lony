@@ -3,7 +3,6 @@ import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
   Banknote,
   Bell,
-  ChevronDown,
   House,
   Landmark,
   LayoutGrid,
@@ -13,7 +12,9 @@ import {
   Moon,
   Plus,
   Settings as SettingsIcon,
+  Sparkles,
   Sun,
+  User as UserIcon,
   Target,
   Wallet,
   type LucideIcon,
@@ -22,6 +23,7 @@ import { useAuth } from '../auth/AuthContext';
 import { useTheme } from '../lib/theme';
 import { api, type AppNotification } from '../lib/api';
 import { Avatar } from '../components/Avatar';
+import { TIER_LABEL, tierOf } from '../lib/plans';
 
 type NavItem = { to: string; label: string; icon: LucideIcon; end?: boolean; group: string };
 
@@ -33,7 +35,6 @@ const NAV_ITEMS: NavItem[] = [
   { to: '/loans', label: 'Loans', icon: Banknote, group: 'People' },
   { to: '/chats', label: 'Chats', icon: MessageCircle, group: 'People' },
   { to: '/banks', label: 'Banks', icon: Landmark, group: 'More' },
-  { to: '/settings', label: 'Settings', icon: SettingsIcon, group: 'More' },
 ];
 
 const BOTTOM_TABS = [
@@ -162,57 +163,71 @@ export function AppShell() {
   }
 
   const name = user?.display_name || user?.username || 'Account';
+  const tier = tierOf(user);
   const current =
     NAV_ITEMS.find((i) => (i.end ? location.pathname === i.to : location.pathname.startsWith(i.to))) ??
-    (location.pathname.startsWith('/cashflow') ? NAV_ITEMS[0] : location.pathname.startsWith('/people') ? NAV_ITEMS[5] : null);
+    (location.pathname.startsWith('/cashflow')
+      ? NAV_ITEMS[0]
+      : location.pathname.startsWith('/people')
+        ? NAV_ITEMS[5]
+        : location.pathname.startsWith('/settings') || location.pathname.startsWith('/themes')
+          ? { label: 'Settings' }
+          : null);
 
   return (
     <div className="app-shell">
       {sidebarOpen ? <div className="sidebar-scrim" onClick={() => setSidebarOpen(false)} /> : null}
-      <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
-        <div className="sidebar-brand">
-          <img src="/lony-logo.png" alt="" width={34} height={34} />
-          <div className="name">Lony</div>
-        </div>
+      <aside className={`rail ${sidebarOpen ? 'open' : ''}`}>
+        <NavLink to="/" className="rail-brand" title="Lony" onClick={() => setSidebarOpen(false)}>
+          <img src="/lony-logo.png" alt="Lony" width={34} height={34} />
+          <span className="rail-brand-name">Lony</span>
+        </NavLink>
 
-        <nav className="nav-group">
-          {NAV_ITEMS.map((item, i) => (
-            <div key={item.to} className="nav-slot">
-              {i === 0 || NAV_ITEMS[i - 1].group !== item.group ? <div className="nav-heading">{item.group}</div> : null}
-              <NavLink
-                to={item.to}
-                end={item.end}
-                className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
-                onClick={() => setSidebarOpen(false)}
-              >
-                <item.icon size={18} strokeWidth={2} />
-                <span>{item.label}</span>
-                {item.to === '/chats' && chatUnread > 0 ? <span className="nav-count">{chatUnread > 9 ? '9+' : chatUnread}</span> : null}
-              </NavLink>
-            </div>
+        <nav className="rail-nav">
+          {NAV_ITEMS.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.end}
+              title={item.label}
+              className={({ isActive }) => `rail-link ${isActive ? 'active' : ''}`}
+              onClick={() => setSidebarOpen(false)}
+            >
+              <span className="rail-icon">
+                <item.icon size={20} strokeWidth={2} />
+                {item.to === '/chats' && chatUnread > 0 ? <span className="rail-badge">{chatUnread > 9 ? '9+' : chatUnread}</span> : null}
+              </span>
+              <span className="rail-label">{item.label}</span>
+            </NavLink>
           ))}
         </nav>
 
-        <div className="sidebar-footer">
-          <button type="button" className="sidebar-user" onClick={() => navigate('/settings')}>
-            <Avatar src={user?.avatar_url} token={token} letter={name} />
-            <div className="who">
-              <strong>{name}</strong>
-              <small>{user?.email}</small>
-            </div>
+        <div className="rail-foot">
+          <button type="button" className="rail-link" title={mode === 'dark' ? 'Light mode' : 'Dark mode'} onClick={toggle}>
+            <span className="rail-icon">{mode === 'dark' ? <Sun size={20} /> : <Moon size={20} />}</span>
+            <span className="rail-label">{mode === 'dark' ? 'Light' : 'Dark'}</span>
           </button>
-          <button type="button" className="icon-btn ghost" aria-label="Sign out" title="Sign out" onClick={onLogout}>
-            <LogOut size={16} />
-          </button>
+          <NavLink
+            to="/settings"
+            title="Settings"
+            className={({ isActive }) => `rail-link ${isActive ? 'active' : ''}`}
+            onClick={() => setSidebarOpen(false)}
+          >
+            <span className="rail-icon">
+              <SettingsIcon size={20} />
+            </span>
+            <span className="rail-label">Settings</span>
+          </NavLink>
         </div>
       </aside>
 
-      <div className="app-main">
+      <div className={`app-main ${location.pathname.startsWith('/settings') ? 'flush' : ''}`}>
         <header className={`topbar ${scrolled ? 'scrolled' : ''}`}>
           <button className="icon-btn menu-toggle" aria-label="Menu" onClick={() => setSidebarOpen((v) => !v)}>
             <Menu size={18} />
           </button>
-          <div className="topbar-title">{current?.label ?? ''}</div>
+          {/* Settings has its own pane headers, like a messenger's settings. */}
+          <div className="topbar-title">{location.pathname.startsWith('/settings') ? '' : current?.label ?? ''}</div>
           <div className="spacer" />
 
           <div className="dropdown" ref={addRef}>
@@ -239,10 +254,6 @@ export function AppShell() {
               </div>
             ) : null}
           </div>
-
-          <button className="icon-btn" aria-label={mode === 'dark' ? 'Light mode' : 'Dark mode'} title={mode === 'dark' ? 'Light mode' : 'Dark mode'} onClick={toggle}>
-            {mode === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
-          </button>
 
           <div className="dropdown" ref={notifRef}>
             <button className="icon-btn" aria-label="Notifications" onClick={() => setNotifOpen((v) => !v)}>
@@ -277,27 +288,59 @@ export function AppShell() {
           </div>
 
           <div className="dropdown topbar-user" ref={userRef}>
-            <button type="button" className="user-chip" onClick={() => setUserMenuOpen((v) => !v)}>
+            <button
+              type="button"
+              className="avatar-btn"
+              aria-label="Account menu"
+              aria-haspopup="menu"
+              aria-expanded={userMenuOpen}
+              onClick={() => setUserMenuOpen((v) => !v)}
+            >
               <Avatar src={user?.avatar_url} token={token} letter={name} />
-              <ChevronDown size={14} />
             </button>
             {userMenuOpen ? (
-              <div className="dropdown-panel menu-panel" role="menu">
+              <div className="dropdown-panel menu-panel account-menu" role="menu">
                 <div className="menu-who">
-                  <strong>{name}</strong>
-                  <small>{user?.email}</small>
+                  <Avatar src={user?.avatar_url} token={token} letter={name} size={40} />
+                  <div className="menu-who-text">
+                    <strong>{name}</strong>
+                    <small>{user?.email}</small>
+                  </div>
+                  <span className={`tier-chip tier-${tier}`}>{TIER_LABEL[tier]}</span>
                 </div>
+                {[
+                  { label: 'Profile', icon: UserIcon, to: '/settings/profile' },
+                  { label: tier === 'free' ? 'Upgrade plan' : 'Plan & billing', icon: Sparkles, to: '/settings/plan', accent: tier === 'free' },
+                  { label: 'Settings', icon: SettingsIcon, to: '/settings' },
+                ].map((m) => (
+                  <button
+                    key={m.to}
+                    type="button"
+                    role="menuitem"
+                    className={`menu-item ${m.accent ? 'accent' : ''}`}
+                    onClick={() => {
+                      setUserMenuOpen(false);
+                      navigate(m.to);
+                    }}
+                  >
+                    <m.icon size={16} />
+                    {m.label}
+                  </button>
+                ))}
                 <button
                   type="button"
+                  role="menuitem"
                   className="menu-item"
                   onClick={() => {
-                    setUserMenuOpen(false);
-                    navigate('/settings');
+                    toggle();
                   }}
                 >
-                  Settings
+                  {mode === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
+                  {mode === 'dark' ? 'Light mode' : 'Dark mode'}
                 </button>
-                <button type="button" className="menu-item danger" onClick={onLogout}>
+                <div className="menu-sep" />
+                <button type="button" role="menuitem" className="menu-item danger" onClick={onLogout}>
+                  <LogOut size={16} />
                   Sign out
                 </button>
               </div>

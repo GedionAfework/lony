@@ -7,6 +7,7 @@ import { PageHeader } from '../components/PageHeader';
 import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { Field, SelectField } from '../components/Field';
+import { PhoneField } from '../components/PhoneField';
 import { EmptyState } from '../components/EmptyState';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/Confirm';
@@ -263,7 +264,11 @@ export function BanksPage() {
         <SelectField label="Payment type" value={rail} onChange={onRailChange} options={railOptions.map((r) => ({ id: r.code, label: r.label }))} placeholder="Select payment type" />
         <Field label="Label" value={label} onChange={setLabel} />
         <Field label="Institution" value={institution} onChange={setInstitution} />
-        <Field label="Account or wallet number" value={identifier} onChange={setIdentifier} />
+        {profileType === 'mobile_money' ? (
+          <PhoneField label="Mobile money number" value={identifier} onChange={setIdentifier} defaultCountry={country} />
+        ) : (
+          <Field label="Account or wallet number" value={identifier} onChange={setIdentifier} />
+        )}
         <Field label="Currency (optional)" value={currency} onChange={setCurrency} placeholder="USD" />
         <Button onClick={onCreate} disabled={busy || !identifier.trim() || !country || !rail} busy={busy} block>
           {busy ? 'Working…' : 'Save encrypted profile'}

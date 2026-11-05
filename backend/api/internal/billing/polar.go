@@ -217,3 +217,42 @@ func (s polarSubscription) metaString(key string) string {
 	}
 	return ""
 }
+
+// ProductPrice is the fixed recurring price of a Polar product.
+type ProductPrice struct {
+	Name        string
+	AmountCents int
+	Currency    string
+	Interval    string
+}
+
+// Product reads a product's name and its first fixed price.
+func (p *Polar) Product(ctx context.Context, id string) (ProductPrice, error) {
+	var out struct {
+		Name              string `json:"name"`
+		RecurringInterval string `json:"recurring_interval"`
+		IsArchived        bool   `json:"is_archived"`
+		Prices            []struct {
+			AmountType        string `json:"amount_type"`
+			PriceAmount       int    `json:"price_amount"`
+			PriceCurrency     string `json:"price_currency"`
+			RecurringInterval string `json:"recurring_interval"`
+			IsArchived        bool   `json:"is_archived"`
+		} `json:"prices"`
+	}
+	if err := p.do(ctx, http.MethodGet, "/v1/products/"+id, nil, &out); err != nil {
+		return ProductPrice{}, err
+	}
+	pp := ProductPrice{Name: out.Name, Interval: out.RecurringInterval}
+	for _, pr := range out.Prices {
+		if pr.IsArchived || pr.AmountType != "fixed" {
+			continue
+		}
+		pp.AmountCents, pp.Currency = pr.PriceAmount, pr.PriceCurrency
+		if pr.RecurringInterval != "" {
+			pp.Interval = pr.RecurringInterval
+		}
+		break
+	}
+	return pp, nil
+}

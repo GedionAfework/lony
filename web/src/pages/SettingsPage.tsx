@@ -1,33 +1,102 @@
-import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Bell, Camera, ChevronRight, CreditCard, FileText, Lock, Palette, Shield, SlidersHorizontal, User, Wrench, type LucideIcon } from 'lucide-react';
+import { useEffect, useState, type ReactNode } from 'react';
+import { useNavigate, useParams } from 'react-router-dom';
+import {
+  ArrowLeft,
+  Bell,
+  Camera,
+  ChevronRight,
+  Download,
+  FileText,
+  Flag,
+  Globe,
+  KeyRound,
+  Landmark,
+  LogOut,
+  Moon,
+  Palette,
+  Shield,
+  Sparkles,
+  Sun,
+  Table,
+  Trash2,
+  Users,
+  Wand2,
+  Wrench,
+  type LucideIcon,
+} from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
-import { api, isPremiumPlan, type AppCalendar, type AppLocale } from '../lib/api';
+import { api, type AppCalendar, type AppLocale } from '../lib/api';
 import { COUNTRIES, TIMEZONES } from '../lib/catalogs';
+import { TIER_LABEL, tierOf } from '../lib/plans';
+import { useTheme } from '../lib/theme';
 import { applyDocumentDirection, parseLocaleMessages, setActivePack, t } from '../i18n';
-import { PageHeader } from '../components/PageHeader';
 import { Avatar, prepareAvatar, primeAvatar } from '../components/Avatar';
-import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { Field, SelectField } from '../components/Field';
+import { PhoneField } from '../components/PhoneField';
 import { Segmented } from '../components/Segmented';
+import { BillingPanel } from '../components/BillingPanel';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/Confirm';
 
-type Page = 'hub' | 'profile' | 'region' | 'payments' | 'notifications' | 'privacy' | 'security' | 'legal';
+type Section = 'profile' | 'plan' | 'region' | 'appearance' | 'notifications' | 'security' | 'privacy' | 'legal';
+const SECTIONS: Section[] = ['profile', 'plan', 'region', 'appearance', 'notifications', 'security', 'privacy', 'legal'];
 
-function HubRow({ title, subtitle, onClick, icon: Icon }: { title: string; subtitle: string; onClick: () => void; icon: LucideIcon }) {
+type Tint = 'teal' | 'blue' | 'orange' | 'violet' | 'pink' | 'green' | 'slate' | 'red' | 'gold';
+
+/** Rounded block of rows with a small heading, like phone settings. */
+function Group({ title, footer, children }: { title?: string; footer?: ReactNode; children: ReactNode }) {
   return (
-    <button type="button" className="tx-row hub-row" onClick={onClick}>
-      <span className="hub-icon">
-        <Icon size={18} />
-      </span>
-      <div className="tx-main">
-        <div className="tx-title">{title}</div>
-        <div className="tx-sub">{subtitle}</div>
-      </div>
-      <ChevronRight size={18} className="hub-chevron" />
+    <div className="set-group">
+      {title ? <div className="set-group-title">{title}</div> : null}
+      <div className="set-group-body">{children}</div>
+      {footer ? <div className="set-group-foot">{footer}</div> : null}
+    </div>
+  );
+}
+
+function RowIcon({ icon: Icon, tint }: { icon: LucideIcon; tint: Tint }) {
+  return (
+    <span className={`set-icon tint-${tint}`}>
+      <Icon size={16} strokeWidth={2.2} />
+    </span>
+  );
+}
+
+function NavRow({
+  icon,
+  tint = 'teal',
+  title,
+  value,
+  onClick,
+  active,
+  danger,
+}: {
+  icon: LucideIcon;
+  tint?: Tint;
+  title: string;
+  value?: ReactNode;
+  onClick: () => void;
+  active?: boolean;
+  danger?: boolean;
+}) {
+  return (
+    <button type="button" className={`set-row ${active ? 'active' : ''} ${danger ? 'danger' : ''}`} onClick={onClick}>
+      <RowIcon icon={icon} tint={danger ? 'red' : tint} />
+      <span className="set-row-title">{title}</span>
+      {value ? <span className="set-row-value">{value}</span> : null}
+      {danger ? null : <ChevronRight size={17} className="set-row-chevron" />}
     </button>
+  );
+}
+
+function ToggleRow({ icon, tint = 'teal', title, value, onChange }: { icon: LucideIcon; tint?: Tint; title: string; value: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <label className="set-row">
+      <RowIcon icon={icon} tint={tint} />
+      <span className="set-row-title">{title}</span>
+      <input type="checkbox" className="switch" checked={value} onChange={(e) => onChange(e.target.checked)} />
+    </label>
   );
 }
 
@@ -36,12 +105,36 @@ const HOUR_CYCLES = [
   { value: '12h', labelKey: 'settings.hourCycle.12h' },
 ] as const;
 
+const NOTIFY_KEY = 'lony_notify_prefs_v1';
+type NotifyPrefs = { loans: boolean; splits: boolean; goals: boolean; inbox: boolean };
+const DEFAULT_NOTIFY: NotifyPrefs = { loans: true, splits: true, goals: true, inbox: true };
+
+function readNotify(): NotifyPrefs {
+  try {
+    const raw = localStorage.getItem(NOTIFY_KEY);
+    return raw ? { ...DEFAULT_NOTIFY, ...JSON.parse(raw) } : DEFAULT_NOTIFY;
+  } catch {
+    return DEFAULT_NOTIFY;
+  }
+}
+
+function download(name: string, type: string, body: string) {
+  const url = URL.createObjectURL(new Blob([body], { type }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export function SettingsPage() {
   const { user, token, setUser, logout, busy: authBusy } = useAuth();
+  const { mode, setMode } = useTheme();
   const navigate = useNavigate();
+  const params = useParams();
   const { showError, show } = useToast();
   const confirm = useConfirm();
-  const [page, setPage] = useState<Page>('hub');
+  const section = SECTIONS.includes(params.section as Section) ? (params.section as Section) : null;
   const [busy, setBusy] = useState(false);
 
   const [username, setUsername] = useState(user?.username || '');
@@ -50,7 +143,7 @@ export function SettingsPage() {
   const [lastName, setLastName] = useState(user?.last_name || '');
   const [displayName, setDisplayName] = useState(user?.display_name || '');
   const [country, setCountry] = useState(user?.country_code || '');
-  const [currency] = useState(user?.default_currency_code || '');
+  const [phone, setPhone] = useState(user?.phone_e164 || '');
   const [locale, setLocale] = useState(user?.locale || 'en');
   const [timezone, setTimezone] = useState(user?.timezone || 'UTC');
   const [calendarId, setCalendarId] = useState(user?.calendar_id || 'gregorian');
@@ -60,16 +153,25 @@ export function SettingsPage() {
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
 
-  const [pushLoans, setPushLoans] = useState(true);
-  const [pushSplits, setPushSplits] = useState(true);
-  const [pushGoals, setPushGoals] = useState(true);
-  const [inAppAll, setInAppAll] = useState(true);
+  const [notify, setNotify] = useState<NotifyPrefs>(readNotify);
+  function setPref(key: keyof NotifyPrefs) {
+    return (v: boolean) =>
+      setNotify((prev) => {
+        const next = { ...prev, [key]: v };
+        try {
+          localStorage.setItem(NOTIFY_KEY, JSON.stringify(next));
+        } catch {
+          /* storage blocked */
+        }
+        return next;
+      });
+  }
 
   const [locales, setLocales] = useState<AppLocale[]>([]);
   const [calendars, setCalendars] = useState<AppCalendar[]>([]);
 
   const isAdmin = user?.role === 'admin';
-  const isPremium = isPremiumPlan(user);
+  const tier = tierOf(user);
 
   useEffect(() => {
     let cancelled = false;
@@ -80,12 +182,7 @@ export function SettingsPage() {
         if ('locales' in locRes) {
           setLocales(locRes.locales ?? []);
           for (const loc of locRes.locales ?? []) {
-            setActivePack({
-              locale: loc.code,
-              name: loc.name,
-              dir: loc.dir,
-              messages: parseLocaleMessages(loc.messages),
-            });
+            setActivePack({ locale: loc.code, name: loc.name, dir: loc.dir, messages: parseLocaleMessages(loc.messages) });
           }
         }
         setCalendars(calRes.calendars ?? []);
@@ -117,8 +214,9 @@ export function SettingsPage() {
         first_name: firstName.trim(),
         middle_name: middleName.trim() || undefined,
         last_name: lastName.trim(),
+        phone_e164: phone.trim() || undefined,
         country_code: country.trim().toUpperCase() || undefined,
-        default_currency_code: currency.trim().toUpperCase() || undefined,
+        default_currency_code: (user?.default_currency_code || '').trim().toUpperCase() || undefined,
         preferred_auth_provider: authPref,
       });
       setUser(res.user);
@@ -143,12 +241,7 @@ export function SettingsPage() {
       setUser(res.user);
       const pack = locales.find((l) => l.code === (res.user.locale || locale));
       if (pack) {
-        setActivePack({
-          locale: pack.code,
-          name: pack.name,
-          dir: pack.dir,
-          messages: parseLocaleMessages(pack.messages),
-        });
+        setActivePack({ locale: pack.code, name: pack.name, dir: pack.dir, messages: parseLocaleMessages(pack.messages) });
       } else {
         setActivePack({ locale: res.user.locale || 'en' });
       }
@@ -201,13 +294,7 @@ export function SettingsPage() {
     setBusy(true);
     try {
       const res = await api.exportMyData(token);
-      const blob = new Blob([JSON.stringify(res.export, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'lony-export.json';
-      a.click();
-      URL.revokeObjectURL(url);
+      download('lony-export.json', 'application/json', JSON.stringify(res.export, null, 2));
       show('Export downloaded');
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Export failed');
@@ -221,16 +308,11 @@ export function SettingsPage() {
     setBusy(true);
     try {
       const res = await api.exportLedgerCSV(token);
-      const blob = new Blob(
-        [`# cashflow\n${res.cashflow_csv}\n\n# transfers\n${res.transfers_csv}\n\n# accounts\n${res.accounts_csv}`],
-        { type: 'text/csv' },
+      download(
+        'lony-ledger.csv',
+        'text/csv',
+        `# cashflow\n${res.cashflow_csv}\n\n# transfers\n${res.transfers_csv}\n\n# accounts\n${res.accounts_csv}`,
       );
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'lony-ledger.csv';
-      a.click();
-      URL.revokeObjectURL(url);
       show('Ledger CSV downloaded');
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Export failed');
@@ -276,234 +358,294 @@ export function SettingsPage() {
   }
 
   async function onLogout() {
+    const ok = await confirm({ title: 'Sign out?', body: 'You can sign back in any time.', confirmLabel: 'Sign out' });
+    if (!ok) return;
     await logout();
     navigate('/login');
   }
 
-  function Back({ title }: { title: string }) {
-    return <PageHeader title={title} back onBack={() => setPage('hub')} />;
+  const go = (s: Section | null) => navigate(s ? `/settings/${s}` : '/settings');
+  const name = user?.display_name || [user?.first_name, user?.last_name].filter(Boolean).join(' ') || user?.username || 'You';
+  const languageName = locales.find((l) => l.code === (user?.locale || 'en'))?.name ?? (user?.locale || 'en').toUpperCase();
+
+  const localeOpts =
+    locales.length > 0 ? locales.map((l) => ({ id: l.code, label: `${l.name} (${l.code})` })) : [{ id: locale || 'en', label: locale || 'en' }];
+  const calendarOpts =
+    calendars.length > 0
+      ? calendars.map((c) => ({ id: c.id, label: c.name }))
+      : [
+          { id: 'gregorian', label: 'Gregorian' },
+          { id: 'ethiopic', label: 'Ethiopic' },
+          { id: 'hijri', label: 'Hijri' },
+        ];
+  const hourOpts = HOUR_CYCLES.map((h) => ({ id: h.value, label: t(locale, h.labelKey) }));
+
+  const TITLES: Record<Section, string> = {
+    profile: t(locale, 'settings.profile'),
+    plan: 'Plan & billing',
+    region: 'Language & region',
+    appearance: 'Appearance',
+    notifications: t(locale, 'settings.notifications'),
+    security: t(locale, 'settings.security'),
+    privacy: t(locale, 'settings.privacy'),
+    legal: 'About & legal',
+  };
+
+  function detail(s: Section): ReactNode {
+    switch (s) {
+      case 'profile':
+        return (
+          <>
+            <div className="set-hero">
+              <label className="avatar-picker" title={user?.avatar_url ? 'Change photo' : 'Add photo'}>
+                <Avatar src={user?.avatar_url} token={token} letter={displayName || firstName || '?'} size={88} />
+                <span className="avatar-picker-badge">{busy ? <span className="spinner" /> : <Camera size={15} />}</span>
+                <input
+                  type="file"
+                  accept="image/*"
+                  style={{ display: 'none' }}
+                  disabled={busy}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    e.target.value = '';
+                    if (f) void onPickAvatar(f);
+                  }}
+                />
+              </label>
+              <div className="muted">{user?.email}</div>
+            </div>
+            {!user?.profile_complete ? <div className="notice warn">Finish your account details to use Lony fully.</div> : null}
+            <Group title="Name">
+              <div className="set-inset">
+                <div className="form-row">
+                  <Field label="First name" value={firstName} onChange={setFirstName} />
+                  <Field label="Last name" value={lastName} onChange={setLastName} />
+                </div>
+                <div className="form-row">
+                  <Field label="Middle name" value={middleName} onChange={setMiddleName} />
+                  <Field label="Display name" value={displayName} onChange={setDisplayName} />
+                </div>
+              </div>
+            </Group>
+            <Group title="Account">
+              <div className="set-inset">
+                <div className="form-row">
+                  <Field label="Username" value={username} onChange={setUsername} />
+                  <SelectField label="Country" value={country} onChange={setCountry} options={COUNTRIES} placeholder="Select" />
+                </div>
+                <PhoneField value={phone} onChange={setPhone} defaultCountry={country} />
+              </div>
+            </Group>
+            <Group title="Sign-in preference">
+              <div className="set-inset">
+                <Segmented
+                  value={authPref}
+                  onChange={(v) => setAuthPref(v as 'email' | 'google' | 'telegram')}
+                  options={[
+                    { id: 'email', label: 'Email' },
+                    { id: 'google', label: 'Google' },
+                    { id: 'telegram', label: 'Telegram' },
+                  ]}
+                />
+              </div>
+            </Group>
+            <div className="set-actions">
+              <Button onClick={onSaveProfile} busy={busy} disabled={!username.trim() || !firstName.trim() || !lastName.trim()}>
+                {busy ? 'Saving…' : t(locale, 'common.save')}
+              </Button>
+            </div>
+          </>
+        );
+      case 'plan':
+        return <BillingPanel />;
+      case 'region':
+        return (
+          <>
+            <Group title="Language">
+              <div className="set-inset">
+                <SelectField
+                  label={t(locale, 'settings.language')}
+                  value={locale}
+                  onChange={(code) => {
+                    setLocale(code);
+                    const pack = locales.find((l) => l.code === code);
+                    if (pack) {
+                      setActivePack({ locale: pack.code, name: pack.name, dir: pack.dir, messages: parseLocaleMessages(pack.messages) });
+                      applyDocumentDirection(pack.code);
+                    }
+                  }}
+                  options={localeOpts}
+                />
+              </div>
+            </Group>
+            <Group title="Dates & time">
+              <div className="set-inset">
+                <div className="form-row">
+                  <SelectField label={t(locale, 'settings.calendar')} value={calendarId} onChange={setCalendarId} options={calendarOpts} />
+                  <SelectField
+                    label={t(locale, 'settings.hourCycle')}
+                    value={hourCycle === 'ethiopian_6' ? '24h' : hourCycle}
+                    onChange={setHourCycle}
+                    options={hourOpts}
+                  />
+                </div>
+                <SelectField label={t(locale, 'settings.timezone')} value={timezone} onChange={setTimezone} options={TIMEZONES} />
+              </div>
+            </Group>
+            <div className="set-actions">
+              <Button onClick={onSaveRegion} busy={busy}>
+                {busy ? 'Saving…' : t(locale, 'common.save')}
+              </Button>
+            </div>
+          </>
+        );
+      case 'appearance':
+        return (
+          <Group title="Theme">
+            <div className="set-inset">
+              <div className="theme-pick">
+                <button type="button" className={mode === 'light' ? 'active' : ''} onClick={() => setMode('light')}>
+                  <span className="theme-swatch light">
+                    <Sun size={18} />
+                  </span>
+                  Light
+                </button>
+                <button type="button" className={mode === 'dark' ? 'active' : ''} onClick={() => setMode('dark')}>
+                  <span className="theme-swatch dark">
+                    <Moon size={18} />
+                  </span>
+                  Dark
+                </button>
+              </div>
+            </div>
+          </Group>
+        );
+      case 'notifications':
+        return (
+          <Group title="Tell me about" footer="Applies to alerts on this device.">
+            <ToggleRow icon={Landmark} tint="orange" title="Loan & repayment alerts" value={notify.loans} onChange={setPref('loans')} />
+            <ToggleRow icon={Users} tint="violet" title="Expense splits" value={notify.splits} onChange={setPref('splits')} />
+            <ToggleRow icon={Flag} tint="green" title="Goal reminders" value={notify.goals} onChange={setPref('goals')} />
+            <ToggleRow icon={Bell} tint="blue" title="In-app inbox" value={notify.inbox} onChange={setPref('inbox')} />
+          </Group>
+        );
+      case 'security':
+        return (
+          <Group title="Password" footer={`Changes the password for ${user?.email ?? 'your account'}.`}>
+            <div className="set-inset">
+              <Field label="Current password" type="password" value={currentPassword} onChange={setCurrentPassword} autoComplete="current-password" />
+              <Field label="New password" type="password" value={newPassword} onChange={setNewPassword} autoComplete="new-password" />
+              <div>
+                <Button onClick={onChangePassword} busy={busy} disabled={!currentPassword || !newPassword}>
+                  {busy ? 'Working…' : 'Update password'}
+                </Button>
+              </div>
+            </div>
+          </Group>
+        );
+      case 'privacy':
+        return (
+          <>
+            <Group title="Your data">
+              <NavRow icon={Download} tint="blue" title="Export my data (JSON)" onClick={onExportData} />
+              <NavRow icon={Table} tint="green" title="Export ledger (CSV)" onClick={onExportLedger} />
+            </Group>
+            <Group title="AI">
+              <NavRow icon={Wand2} tint="violet" title="Clear AI insights & coach chat" onClick={onClearAI} />
+            </Group>
+            <Group footer="Deletes your profile, accounts, records and chats for good.">
+              <NavRow icon={Trash2} title="Delete account" danger onClick={onDeleteAccount} />
+            </Group>
+          </>
+        );
+      case 'legal':
+        return (
+          <Group
+            footer={
+              user?.tos_accepted_at ? (
+                `Accepted ${new Date(user.tos_accepted_at).toLocaleDateString()} · ${user.tos_version ?? ''}`
+              ) : (
+                <span style={{ color: 'var(--error)' }}>Terms not accepted yet</span>
+              )
+            }
+          >
+            <NavRow icon={FileText} tint="slate" title="Terms of Service" onClick={() => navigate('/tos')} />
+          </Group>
+        );
+    }
   }
 
-  if (page === 'profile') {
-    return (
-      <div className="page page-narrow">
-        <Back title={t(locale, 'settings.profile')} />
-        {!user?.profile_complete ? <p style={{ color: 'var(--error)' }}>Finish your account details to use Lony fully.</p> : null}
-        <Card>
-          <div className="flex-col" style={{ alignItems: 'center', gap: 12, marginBottom: 8 }}>
-            <label className="avatar-picker" title={user?.avatar_url ? 'Change photo' : 'Add photo'}>
-              <Avatar src={user?.avatar_url} token={token} letter={displayName || firstName || '?'} size={104} />
-              <span className="avatar-picker-badge">{busy ? <span className="spinner" /> : <Camera size={16} />}</span>
-              <input
-                type="file"
-                accept="image/*"
-                style={{ display: 'none' }}
-                disabled={busy}
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  e.target.value = '';
-                  if (f) void onPickAvatar(f);
-                }}
-              />
-            </label>
-            <div className="muted" style={{ fontSize: 13 }}>{busy ? 'Uploading…' : 'Tap the photo to change it'}</div>
-          </div>
-          <div className="muted">{user?.email}</div>
-          <Field label="Username" value={username} onChange={setUsername} />
-          <div className="form-row">
-            <Field label="First name" value={firstName} onChange={setFirstName} />
-            <Field label="Last name" value={lastName} onChange={setLastName} />
-          </div>
-          <Field label="Middle name" value={middleName} onChange={setMiddleName} />
-          <Field label="Display name" value={displayName} onChange={setDisplayName} />
-          <div className="form-row">
-            <SelectField label="Country" value={country} onChange={setCountry} options={COUNTRIES} placeholder="Select" />
-          </div>
-          <div className="section-label">Sign-in preference</div>
-          <Segmented value={authPref} onChange={(v) => setAuthPref(v as 'email' | 'google' | 'telegram')} options={[{ id: 'email', label: 'Email' }, { id: 'google', label: 'Google' }, { id: 'telegram', label: 'Telegram' }]} />
-          <Button onClick={onSaveProfile} busy={busy} disabled={!username.trim() || !firstName.trim() || !lastName.trim()} block>
-            {busy ? 'Saving…' : t(locale, 'common.save')}
-          </Button>
-        </Card>
-      </div>
-    );
-  }
-
-  if (page === 'region') {
-    const localeOpts =
-      locales.length > 0
-        ? locales.map((l) => ({ id: l.code, label: `${l.name} (${l.code})` }))
-        : [{ id: locale || 'en', label: locale || 'en' }];
-    const calendarOpts =
-      calendars.length > 0
-        ? calendars.map((c) => ({ id: c.id, label: c.name }))
-        : [
-            { id: 'gregorian', label: 'Gregorian' },
-            { id: 'ethiopic', label: 'Ethiopic' },
-            { id: 'hijri', label: 'Hijri' },
-          ];
-    const hourOpts = HOUR_CYCLES.map((h) => ({ id: h.value, label: t(locale, h.labelKey) }));
-    return (
-      <div className="page page-narrow">
-        <Back title="Preferences" />
-        <Card>
-          <SelectField
-            label={t(locale, 'settings.language')}
-            value={locale}
-            onChange={(code) => {
-              setLocale(code);
-              const pack = locales.find((l) => l.code === code);
-              if (pack) {
-                setActivePack({
-                  locale: pack.code,
-                  name: pack.name,
-                  dir: pack.dir,
-                  messages: parseLocaleMessages(pack.messages),
-                });
-                applyDocumentDirection(pack.code);
-              }
-            }}
-            options={localeOpts}
-          />
-          <SelectField label={t(locale, 'settings.calendar')} value={calendarId} onChange={setCalendarId} options={calendarOpts} />
-          <SelectField
-            label={t(locale, 'settings.hourCycle')}
-            value={hourCycle === 'ethiopian_6' ? '24h' : hourCycle}
-            onChange={setHourCycle}
-            options={hourOpts}
-          />
-          <SelectField label={t(locale, 'settings.timezone')} value={timezone} onChange={setTimezone} options={TIMEZONES} />
-          <Button onClick={onSaveRegion} busy={busy} block>
-            {busy ? 'Saving…' : t(locale, 'common.save')}
-          </Button>
-        </Card>
-      </div>
-    );
-  }
-
-  if (page === 'payments') {
-    return (
-      <div className="page page-narrow">
-        <Back title={t(locale, 'settings.payments')} />
-        <Card>
-          <p className="muted">Banks and wallets used when sharing how to get paid on loans.</p>
-          <Button onClick={() => navigate('/banks')} block>
-            Manage banks &amp; wallets
-          </Button>
-        </Card>
-      </div>
-    );
-  }
-
-  if (page === 'notifications') {
-    const rows: [string, boolean, (v: boolean) => void][] = [
-      ['Loan & repayment alerts', pushLoans, setPushLoans],
-      ['Expense splits', pushSplits, setPushSplits],
-      ['Goal reminders', pushGoals, setPushGoals],
-      ['In-app inbox', inAppAll, setInAppAll],
-    ];
-    return (
-      <div className="page page-narrow">
-        <Back title={t(locale, 'settings.notifications')} />
-        <Card>
-          <p className="muted" style={{ fontSize: 13 }}>Choose what you want to hear about.</p>
-          {rows.map(([label, value, setter]) => (
-            <label key={label} className="checkbox-row" style={{ justifyContent: 'space-between' }}>
-              {label}
-              <input type="checkbox" checked={value} onChange={() => setter(!value)} />
-            </label>
-          ))}
-        </Card>
-      </div>
-    );
-  }
-
-  if (page === 'privacy') {
-    return (
-      <div className="page page-narrow">
-        <Back title={t(locale, 'settings.privacy')} />
-        <Card>
-          <p className="muted" style={{ fontSize: 13 }}>Download a copy of your Lony data, clear AI insight history, or delete your account.</p>
-          <Button variant="secondary" onClick={onExportData} disabled={busy} block>
-            {busy ? 'Working…' : 'Export my data'}
-          </Button>
-          <Button variant="secondary" onClick={onExportLedger} disabled={busy} block>
-            {busy ? 'Working…' : 'Export ledger CSV'}
-          </Button>
-          <Button variant="secondary" onClick={onClearAI} disabled={busy} block>
-            {busy ? 'Working…' : 'Clear AI insights'}
-          </Button>
-          <Button variant="danger" onClick={onDeleteAccount} disabled={busy} block>
-            Delete account
-          </Button>
-        </Card>
-      </div>
-    );
-  }
-
-  if (page === 'security') {
-    return (
-      <div className="page page-narrow">
-        <Back title={t(locale, 'settings.security')} />
-        <Card>
-          <p className="muted" style={{ fontSize: 13 }}>Change the password for {user?.email}.</p>
-          <Field label="Current password" type="password" value={currentPassword} onChange={setCurrentPassword} />
-          <Field label="New password" type="password" value={newPassword} onChange={setNewPassword} />
-          <Button onClick={onChangePassword} busy={busy} disabled={!currentPassword || !newPassword} block>
-            {busy ? 'Working…' : 'Update password'}
-          </Button>
-        </Card>
-      </div>
-    );
-  }
-
-  if (page === 'legal') {
-    return (
-      <div className="page page-narrow">
-        <Back title={t(locale, 'settings.legal')} />
-        <Card>
-          <Button variant="secondary" onClick={() => navigate('/tos')} block>
-            Terms of Service
-          </Button>
-          {user?.tos_accepted_at ? (
-            <p className="muted" style={{ fontSize: 13 }}>Accepted · {user.tos_version}</p>
-          ) : (
-            <p style={{ color: 'var(--error)', fontSize: 13 }}>Terms not accepted yet</p>
-          )}
-        </Card>
-      </div>
-    );
-  }
+  // Wide screens show the profile when nothing is picked; phones show the list.
+  const shown: Section = section ?? 'profile';
 
   return (
-    <div className="page page-narrow">
-      <PageHeader title={t(locale, 'settings.title')} />
-      {!user?.profile_complete ? <p style={{ color: 'var(--error)' }}>Finish your profile to use Lony fully.</p> : null}
-      {!isPremium ? (
-        <Card>
-          <div style={{ fontWeight: 700 }}>Free plan</div>
-          <p className="muted" style={{ fontSize: 13, marginTop: 4 }}>Voice add, receipt scan, Plan AI, and Coach require Premium. Ask an admin to upgrade your account.</p>
-        </Card>
-      ) : (
-        <Card>
-          <div style={{ fontWeight: 700 }}>Premium</div>
-          <p className="muted" style={{ fontSize: 13, marginTop: 4 }}>All AI features are unlocked for this account.</p>
-        </Card>
-      )}
-      <Card tight>
-        <HubRow title={t(locale, 'settings.profile')} subtitle={t(locale, 'settings.profileSubtitle')} onClick={() => setPage('profile')} icon={User} />
-        <HubRow title="Preferences" subtitle={t(locale, 'settings.regionSubtitle')} onClick={() => setPage('region')} icon={SlidersHorizontal} />
-        <HubRow title={t(locale, 'settings.themes')} subtitle={t(locale, 'settings.themesSubtitle')} onClick={() => navigate('/themes')} icon={Palette} />
-        <HubRow title={t(locale, 'settings.payments')} subtitle={t(locale, 'settings.paymentsSubtitle')} onClick={() => setPage('payments')} icon={CreditCard} />
-        <HubRow title={t(locale, 'settings.notifications')} subtitle={t(locale, 'settings.notificationsSubtitle')} onClick={() => setPage('notifications')} icon={Bell} />
-        <HubRow title={t(locale, 'settings.privacy')} subtitle={t(locale, 'settings.privacySubtitle')} onClick={() => setPage('privacy')} icon={Shield} />
-        <HubRow title={t(locale, 'settings.security')} subtitle={t(locale, 'settings.securitySubtitle')} onClick={() => setPage('security')} icon={Lock} />
-        <HubRow title={t(locale, 'settings.legal')} subtitle={t(locale, 'settings.legalSubtitle')} onClick={() => setPage('legal')} icon={FileText} />
-        {isAdmin ? <HubRow title={t(locale, 'settings.admin')} subtitle={t(locale, 'settings.adminSubtitle')} onClick={() => navigate('/admin')} icon={Wrench} /> : null}
-      </Card>
-      <Button variant="secondary" onClick={onLogout} busy={authBusy} block>
-        {t(locale, 'common.signOut')}
-      </Button>
+    <div className={`settings-split ${section ? 'has-section' : ''}`}>
+      <aside className="settings-list">
+        <div className="settings-list-head">
+          <h1>{t(locale, 'settings.title')}</h1>
+        </div>
+        <div className="settings-list-body">
+          <button type="button" className={`set-profile ${shown === 'profile' ? 'active' : ''}`} onClick={() => go('profile')}>
+            <Avatar src={user?.avatar_url} token={token} letter={name} size={52} />
+            <span className="set-profile-text">
+              <strong>{name}</strong>
+              <small>{user?.username ? `@${user.username}` : user?.email}</small>
+            </span>
+            <span className={`tier-chip tier-${tier}`}>{TIER_LABEL[tier]}</span>
+          </button>
+
+          {!user?.profile_complete ? (
+            <button type="button" className="notice warn as-button" onClick={() => go('profile')}>
+              Finish your profile to use Lony fully.
+            </button>
+          ) : null}
+
+          <Group>
+            <NavRow
+              icon={Sparkles}
+              tint="gold"
+              title="Plan & billing"
+              value={tier === 'free' ? 'Upgrade' : TIER_LABEL[tier]}
+              active={section === 'plan'}
+              onClick={() => go('plan')}
+            />
+          </Group>
+
+          <Group title="General">
+            <NavRow icon={Globe} tint="blue" title="Language & region" value={`${languageName} · ${user?.default_currency_code || '—'}`} active={section === 'region'} onClick={() => go('region')} />
+            <NavRow icon={Palette} tint="pink" title="Appearance" value={mode === 'dark' ? 'Dark' : 'Light'} active={section === 'appearance'} onClick={() => go('appearance')} />
+            <NavRow icon={Bell} tint="red" title={t(locale, 'settings.notifications')} active={section === 'notifications'} onClick={() => go('notifications')} />
+          </Group>
+
+          <Group title="Money">
+            <NavRow icon={Landmark} tint="teal" title="Payment methods" onClick={() => navigate('/banks')} />
+          </Group>
+
+          <Group title="Privacy">
+            <NavRow icon={KeyRound} tint="slate" title={t(locale, 'settings.security')} active={section === 'security'} onClick={() => go('security')} />
+            <NavRow icon={Shield} tint="violet" title={t(locale, 'settings.privacy')} active={section === 'privacy'} onClick={() => go('privacy')} />
+          </Group>
+
+          <Group>
+            <NavRow icon={FileText} tint="slate" title="About & legal" active={section === 'legal'} onClick={() => go('legal')} />
+            {isAdmin ? <NavRow icon={Wrench} tint="orange" title={t(locale, 'settings.admin')} onClick={() => navigate('/admin')} /> : null}
+          </Group>
+
+          <Group>
+            <NavRow icon={LogOut} title={authBusy ? 'Signing out…' : t(locale, 'common.signOut')} danger onClick={onLogout} />
+          </Group>
+        </div>
+      </aside>
+
+      <section className="settings-detail">
+        <div className="settings-detail-head">
+          <button type="button" className="icon-btn ghost settings-back" aria-label="Back" onClick={() => go(null)}>
+            <ArrowLeft size={18} />
+          </button>
+          <h2>{TITLES[shown]}</h2>
+        </div>
+        <div className={`settings-detail-body ${shown === 'plan' ? 'wide' : ''}`}>{detail(shown)}</div>
+      </section>
     </div>
   );
 }

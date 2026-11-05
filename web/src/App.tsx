@@ -114,6 +114,7 @@ export function App() {
             <Route path="plan" element={<PlanPage />} />
             <Route path="banks" element={<BanksPage />} />
             <Route path="settings" element={<SettingsPage />} />
+            <Route path="settings/:section" element={<SettingsPage />} />
             <Route path="themes" element={<ThemesPage />} />
             <Route path="admin" element={<AdminPage />} />
           </Route>

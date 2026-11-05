@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Camera, Plus, Trash2 } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { api, isPremiumPlan, type Goal, type GoalDraft, type MoneyAccount, type PlanAssistantSource } from '../lib/api';
 import { savingAdvice } from '../lib/planAdvice';
@@ -506,7 +507,12 @@ export function PlanPage() {
         {advice ? <p className="muted" style={{ fontSize: 13, margin: '6px 0' }}>{advice}</p> : null}
           </>
         ) : (
-          <p className="muted" style={{ fontSize: 13 }}>Plan AI is included with Premium.</p>
+          <p className="muted" style={{ fontSize: 13 }}>
+            Plan AI is included with Plus and Pro.{' '}
+            <Link to="/settings/plan" style={{ color: 'var(--primary)', fontWeight: 600 }}>
+              See plans
+            </Link>
+          </p>
         )}
         <div className="muted" style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, marginTop: 8 }}>
           Or paste a link

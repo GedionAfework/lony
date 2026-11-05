@@ -181,7 +181,69 @@ function idemKey(prefix: string): string {
 export const DISCLAIMER =
   'Lony is a shared ledger and reminder app, not a bank, wallet, escrow, or payment processor. Money moves outside the app. Records are for personal tracking only and are not legally binding contracts.';
 
+export type PlanTier = 'free' | 'plus' | 'pro';
+
+export type PlanLimits = {
+  /** -1 = unlimited, 0 = not included. */
+  ai_monthly: number;
+  ai_daily: number;
+  captures_monthly: number;
+  insights_every_days: number;
+  reports: boolean;
+  bank_links: number;
+  trips: boolean;
+};
+
+export type PlanOption = {
+  key: string;
+  tier: PlanTier;
+  interval?: 'month' | 'year' | string;
+  name?: string;
+  amount_cents?: number;
+  currency?: string;
+};
+
+export type BillingCatalog = {
+  tiers: { tier: PlanTier; limits: PlanLimits }[];
+  plans: PlanOption[];
+  checkout_ready: boolean;
+  trial_days: number;
+  trial_tier: PlanTier;
+};
+
+export type BillingSubscription = {
+  id: string;
+  plan_key?: string;
+  tier?: PlanTier;
+  status: string;
+  amount_cents: number;
+  currency: string;
+  interval?: string;
+  current_period_end?: string;
+  cancel_at_period_end: boolean;
+  trial_end?: string;
+};
+
+export type MyBilling = {
+  tier: PlanTier;
+  source: 'free' | 'trial' | 'admin' | 'polar';
+  expires_at?: string;
+  limits: PlanLimits;
+  usage: { ai_this_month: number; captures_this_month: number; bank_links: number };
+  subscription: BillingSubscription | null;
+  can_manage: boolean;
+};
+
 export const api = {
+  billingCatalog: () => request<BillingCatalog>('/billing/plans', { method: 'GET' }),
+  myBilling: (token: string) => request<MyBilling>('/billing/me', { method: 'GET' }, token),
+  startCheckout: (token: string, plan: string) =>
+    request<{ url: string }>('/billing/checkout', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('checkout') },
+      body: JSON.stringify({ plan }),
+    }, token),
+  billingPortal: (token: string) => request<{ url: string }>('/billing/portal', { method: 'POST', body: '{}' }, token),
   register: (email: string, password: string, displayName: string, acceptedDisclaimer: boolean) =>
     request<{ user: User; verification_code?: string; verification_hint: string }>('/auth/register', {
       method: 'POST',

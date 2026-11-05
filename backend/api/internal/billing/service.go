@@ -131,6 +131,10 @@ type Service struct {
 	mu     sync.Mutex
 	cached map[string]Limits
 	at     time.Time
+
+	priceMu  sync.Mutex
+	prices   map[string]ProductPrice // by product ID
+	pricesAt time.Time
 }
 
 func NewService(store Store, polar *Polar, cfg Config) *Service {
@@ -245,9 +249,12 @@ func (s *Service) RequireBankLinkSlot(userIDFrom func(context.Context) uuid.UUID
 // ---------------------------------------------------------------- user-facing
 
 type PlanOption struct {
-	Key      string `json:"key"`
-	Tier     string `json:"tier"`
-	Interval string `json:"interval,omitempty"`
+	Key         string `json:"key"`
+	Tier        string `json:"tier"`
+	Interval    string `json:"interval,omitempty"`
+	Name        string `json:"name,omitempty"`
+	AmountCents int    `json:"amount_cents,omitempty"`
+	Currency    string `json:"currency,omitempty"`
 }
 
 type TierInfo struct {
@@ -269,9 +276,17 @@ func (s *Service) Catalog(ctx context.Context) Catalog {
 	for _, t := range Tiers {
 		out.Tiers = append(out.Tiers, TierInfo{Tier: t, Limits: all[t]})
 	}
-	for k := range s.cfg.Products {
+	prices := s.productPrices(ctx)
+	for k, productID := range s.cfg.Products {
 		if tier := TierOfPlanKey(k); tier != "" {
-			out.Plans = append(out.Plans, PlanOption{Key: k, Tier: tier, Interval: IntervalOfPlanKey(k)})
+			opt := PlanOption{Key: k, Tier: tier, Interval: IntervalOfPlanKey(k)}
+			if pp, ok := prices[productID]; ok {
+				opt.Name, opt.AmountCents, opt.Currency = pp.Name, pp.AmountCents, pp.Currency
+				if opt.Interval == "" {
+					opt.Interval = pp.Interval
+				}
+			}
+			out.Plans = append(out.Plans, opt)
 		}
 	}
 	sort.Slice(out.Plans, func(i, j int) bool { return out.Plans[i].Key < out.Plans[j].Key })
@@ -279,6 +294,51 @@ func (s *Service) Catalog(ctx context.Context) Catalog {
 		out.Plans = []PlanOption{}
 	}
 	out.TrialDays, out.TrialTier = s.trial(ctx)
+	return out
+}
+
+const priceTTL = 15 * time.Minute
+
+// productPrices returns Polar prices for the configured products, cached so
+// the public plan list never waits on Polar more than once per TTL. Products
+// that fail to load are simply left without a price.
+func (s *Service) productPrices(ctx context.Context) map[string]ProductPrice {
+	if !s.polar.Configured() || len(s.cfg.Products) == 0 {
+		return nil
+	}
+	s.priceMu.Lock()
+	defer s.priceMu.Unlock()
+	if s.prices != nil && s.now().Sub(s.pricesAt) < priceTTL {
+		return s.prices
+	}
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	type res struct {
+		id  string
+		pp  ProductPrice
+		err error
+	}
+	ids := map[string]bool{}
+	for _, id := range s.cfg.Products {
+		ids[id] = true
+	}
+	ch := make(chan res, len(ids))
+	for id := range ids {
+		go func(id string) {
+			pp, err := s.polar.Product(ctx, id)
+			ch <- res{id, pp, err}
+		}(id)
+	}
+	out := map[string]ProductPrice{}
+	for range ids {
+		r := <-ch
+		if r.err != nil {
+			log.Printf("polar product %s: %v", r.id, r.err)
+			continue
+		}
+		out[r.id] = r.pp
+	}
+	s.prices, s.pricesAt = out, s.now()
 	return out
 }
 

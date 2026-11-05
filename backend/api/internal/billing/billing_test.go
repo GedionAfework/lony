@@ -92,7 +92,9 @@ func newMem() *memStore {
 	return &memStore{plans: map[uuid.UUID]UserPlan{}, subs: map[string]Subscription{}, events: map[string]bool{}}
 }
 
-func (m *memStore) UserPlan(_ context.Context, id uuid.UUID) (UserPlan, error) { return m.plans[id], nil }
+func (m *memStore) UserPlan(_ context.Context, id uuid.UUID) (UserPlan, error) {
+	return m.plans[id], nil
+}
 func (m *memStore) SetUserPlan(_ context.Context, id uuid.UUID, tier, source string, exp *time.Time) error {
 	p := m.plans[id]
 	p.Tier, p.Source, p.ExpiresAt = tier, source, exp

@@ -395,7 +395,8 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     setProfileTimezone(next.timezone || 'UTC');
     setCurrency((c) => c || next.default_currency_code || '');
     setDashCurrency((c) => c || next.default_currency_code || '');
-    setOnboardingTos(Boolean(next.tos_accepted_at));
+    // Incomplete profiles must accept the current terms again (they may have accepted an older version).
+    setOnboardingTos(Boolean(next.profile_complete && next.tos_accepted_at));
     void loadLocalePack(next.locale || 'en');
   }
 
@@ -1331,7 +1332,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
     setBusy(true);
     setError(null);
     try {
-      if (onboardingTos && !user?.tos_accepted_at) {
+      if (onboardingTos && !user?.profile_complete) {
         await api.acceptTOS(token);
       }
       const res = await api.patchMe(token, {
@@ -1354,6 +1355,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
       setDashCurrency(res.user.default_currency_code ?? '');
       setSettingsDetailOpen(false);
       setScreen(res.user.profile_complete ? 'home' : 'onboarding');
+      if (!res.user.profile_complete) setError('Some details are still missing. Check every field and accept the Terms.');
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not update profile');
     } finally {
@@ -2589,7 +2591,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               phone={profilePhone}
               country={profileCountry}
               currency={profileCurrency}
-              tosAccepted={onboardingTos || Boolean(user.tos_accepted_at)}
+              tosAccepted={onboardingTos}
               busy={busy}
               onUsername={setProfileUsername}
               onFirstName={setProfileFirstName}

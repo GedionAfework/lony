@@ -465,9 +465,9 @@ export function InsightsPage() {
           <div className="page-subtitle muted">How your money is doing, in plain words.</div>
         </div>
         {!isPremium ? (
-          <span className="premium-chip">
-            <Sparkles size={13} /> AI tips & chat come with Premium
-          </span>
+          <button type="button" className="premium-chip" onClick={() => navigate('/settings/plan')}>
+            <Sparkles size={13} /> Unlock AI tips & chat with Plus
+          </button>
         ) : null}
       </div>
 
