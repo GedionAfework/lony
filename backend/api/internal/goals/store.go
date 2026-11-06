@@ -2,6 +2,7 @@ package goals
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -225,6 +226,9 @@ func toDTO(rec Goal, monthlyRate *decimal.Decimal) GoalDTO {
 	}
 	if rec.CoverImageKey != nil && *rec.CoverImageKey != "" {
 		url := "/api/v1/media/" + *rec.CoverImageKey
+		if strings.HasPrefix(*rec.CoverImageKey, "https://") {
+			url = *rec.CoverImageKey // a store picture kept as a link
+		}
 		dto.CoverImageURL = &url
 	}
 	if rec.TargetDate != nil {

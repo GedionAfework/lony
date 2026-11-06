@@ -57,7 +57,6 @@ type SettingsPage =
   | 'security'
   | 'extraFactor'
   | 'themes'
-  | 'legal'
   | 'admin';
 
 type Props = {
@@ -897,24 +896,6 @@ export function SettingsScreen(props: Props) {
     );
   }
 
-  if (page === 'legal') {
-    return (
-      <View style={{ gap: space.lg }}>
-        <Back title={t(L, 'settings.about')} />
-        <Group
-          footer={
-            props.tosAccepted ? t(L, 'settings.accepted').replace('{version}', props.tosVersion || '') : t(L, 'settings.notAccepted')
-          }
-        >
-          <NavRow icon="file-text-o" tint="slate" title={t(L, 'settings.termsOfService')} onPress={props.onTos} last />
-        </Group>
-        <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 12, textAlign: 'center' }}>
-          Lony {appVersion}
-        </Text>
-      </View>
-    );
-  }
-
   // Hub
   return (
     <View style={{ gap: space.lg }}>
@@ -988,7 +969,14 @@ export function SettingsScreen(props: Props) {
       </Group>
 
       <Group>
-        <NavRow icon="info-circle" tint="slate" title={t(L, 'settings.about')} onPress={() => goPage('legal')} last={!props.isAdmin} />
+        <NavRow
+          icon="file-text-o"
+          tint="slate"
+          title={t(L, 'settings.termsOfService')}
+          value={props.tosAccepted ? undefined : t(L, 'settings.notAccepted')}
+          onPress={props.onTos}
+          last={!props.isAdmin}
+        />
         {props.isAdmin ? <NavRow icon="wrench" tint="orange" title={t(L, 'admin')} onPress={() => goPage('admin')} last /> : null}
       </Group>
 

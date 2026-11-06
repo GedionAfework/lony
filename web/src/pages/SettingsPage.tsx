@@ -33,6 +33,7 @@ import { Button } from '../components/Button';
 import { Field, SelectField } from '../components/Field';
 import { PhoneField } from '../components/PhoneField';
 import { Segmented } from '../components/Segmented';
+import { TosPage } from './TosPage';
 import { BillingPanel } from '../components/BillingPanel';
 import { ThemePicker } from '../components/ThemePicker';
 import { BanksPage } from './BanksPage';
@@ -399,7 +400,7 @@ export function SettingsPage() {
     payments: 'Payment methods',
     security: t(locale, 'settings.security'),
     privacy: t(locale, 'settings.privacy'),
-    legal: 'About & legal',
+    legal: 'Terms of Service',
   };
 
   function detail(s: Section): ReactNode {
@@ -561,19 +562,7 @@ export function SettingsPage() {
           </>
         );
       case 'legal':
-        return (
-          <Group
-            footer={
-              user?.tos_accepted_at ? (
-                `Accepted ${new Date(user.tos_accepted_at).toLocaleDateString()} · ${user.tos_version ?? ''}`
-              ) : (
-                <span style={{ color: 'var(--error)' }}>Terms not accepted yet</span>
-              )
-            }
-          >
-            <NavRow icon={FileText} tint="slate" title="Terms of Service" onClick={() => navigate('/tos')} />
-          </Group>
-        );
+        return <TosPage embedded />;
     }
   }
 
@@ -636,7 +625,7 @@ export function SettingsPage() {
           </Group>
 
           <Group>
-            <NavRow icon={FileText} tint="slate" title="About & legal" active={section === 'legal'} onClick={() => go('legal')} />
+            <NavRow icon={FileText} tint="slate" title="Terms of Service" active={section === 'legal'} onClick={() => go('legal')} />
             {isAdmin ? <NavRow icon={Wrench} tint="orange" title={t(locale, 'settings.admin')} onClick={() => navigate('/admin')} /> : null}
           </Group>
 

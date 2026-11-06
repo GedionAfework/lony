@@ -3926,3 +3926,14 @@ button.premium-chip:hover { filter: brightness(0.97); }
 
 .banks-embedded { display: flex; flex-direction: column; gap: 14px; }
 .banks-embedded .card { border-radius: 16px; }
+
+/* ------------------------------------------- terms inside settings */
+.terms-embedded { display: flex; flex-direction: column; gap: 12px; }
+.terms-embedded .terms-card { margin: 0; }
+
+/* Home: Income / Expense / Loan share one row under the greeting on phones. */
+@media (max-width: 560px) {
+  .home .page-head { flex-wrap: wrap; }
+  .home .page-actions { width: 100%; display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .home .page-actions .btn { justify-content: center; padding-left: 8px; padding-right: 8px; }
+}

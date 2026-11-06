@@ -471,31 +471,32 @@ export function InsightsPage() {
         ) : null}
       </div>
 
+      <Hero
+        label={`Left over in ${monthLabel}`}
+        value={`${netNum < 0 ? '−' : ''}${formatMoney(Math.abs(netNum).toFixed(2), preferred, locale)}`}
+        sub={heroSentence}
+        aside={
+          <>
+            <div className="hero-stat stacked">
+              <small>Money in</small>
+              <strong>{formatMoney(overview?.income ?? '0', preferred, locale)}</strong>
+              <Change value={overview?.income_mom_percent} goodWhenUp />
+            </div>
+            <div className="hero-stat stacked">
+              <small>Money out</small>
+              <strong>{formatMoney(overview?.expense ?? '0', preferred, locale)}</strong>
+              <Change value={overview?.expense_mom_percent} goodWhenUp={false} />
+            </div>
+          </>
+        }
+      />
+
       <div className="tabs-row">
         <Segmented value={tab} onChange={(v) => setTab(v as Tab)} options={tabs} />
       </div>
 
       {tab === 'overview' ? (
         <>
-          <Hero
-            label={`Left over in ${monthLabel}`}
-            value={`${netNum < 0 ? '−' : ''}${formatMoney(Math.abs(netNum).toFixed(2), preferred, locale)}`}
-            sub={heroSentence}
-            aside={
-              <>
-                <div className="hero-stat stacked">
-                  <small>Money in</small>
-                  <strong>{formatMoney(overview?.income ?? '0', preferred, locale)}</strong>
-                  <Change value={overview?.income_mom_percent} goodWhenUp />
-                </div>
-                <div className="hero-stat stacked">
-                  <small>Money out</small>
-                  <strong>{formatMoney(overview?.expense ?? '0', preferred, locale)}</strong>
-                  <Change value={overview?.expense_mom_percent} goodWhenUp={false} />
-                </div>
-              </>
-            }
-          />
 
           <div className="kpi-strip">
             <div className="kpi-tile">

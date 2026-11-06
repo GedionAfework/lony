@@ -14,6 +14,7 @@ import { Modal } from '../components/Modal';
 import { EmptyState } from '../components/EmptyState';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/Confirm';
+import { MediaImg } from '../components/Avatar';
 
 const FALLBACK_GOAL_TYPES = [
   { id: 'travel', label: 'Travel' },
@@ -357,7 +358,7 @@ export function PlanPage() {
       <div className="page page-narrow">
         <PageHeader title={selected.title} back onBack={() => setSelectedId(null)} />
         <Card>
-          {selected.cover_image_url ? <img src={selected.cover_image_url} alt={selected.title} className="cover-image" /> : null}
+          <MediaImg src={selected.cover_image_url} token={token} alt={selected.title} className="cover-image" />
           <div className="muted">
             {typeDisplay(selected, goalTypes)}
             {selected.target_date ? ` · ${selected.target_date}` : ''}
@@ -447,13 +448,18 @@ export function PlanPage() {
                 }}
                 style={{ cursor: 'pointer' }}
               >
-                {g.cover_image_url ? (
-                  <img src={g.cover_image_url} alt={g.title} className="cover-image" style={{ height: 130 }} />
-                ) : (
-                  <div className={`goal-cover goal-${g.goal_type}`}>
-                    <span>{typeDisplay(g, goalTypes)}</span>
-                  </div>
-                )}
+                <MediaImg
+                  src={g.cover_image_url}
+                  token={token}
+                  alt={g.title}
+                  className="cover-image"
+                  style={{ height: 130 }}
+                  fallback={
+                    <div className={`goal-cover goal-${g.goal_type}`}>
+                      <span>{typeDisplay(g, goalTypes)}</span>
+                    </div>
+                  }
+                />
                 <div className="card-row">
                   <div>
                     <div style={{ fontWeight: 700 }}>{g.title}</div>

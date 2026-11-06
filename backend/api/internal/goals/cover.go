@@ -124,12 +124,23 @@ func (h *Handler) CoverFromURL(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, httpx.E(http.StatusServiceUnavailable, "MEDIA_UNAVAILABLE", "media storage is not configured"))
 		return
 	}
+	actor := auth.UserIDFrom(r.Context())
 	raw, mime, err := downloadImage(r.Context(), body.ImageURL)
 	if err != nil {
+		// Many stores refuse server downloads but still let browsers and phones show the
+		// picture, so a public link is kept as the cover instead of losing it.
+		if link, ok := publicImageLink(body.ImageURL); ok {
+			out, serr := h.svc.SetCoverImage(r.Context(), actor, id, link)
+			if serr != nil {
+				httpx.Error(w, serr)
+				return
+			}
+			httpx.JSON(w, http.StatusOK, map[string]any{"goal": out})
+			return
+		}
 		httpx.Error(w, err)
 		return
 	}
-	actor := auth.UserIDFrom(r.Context())
 	key, size, err := h.disk.Save(r.Context(), "goal-cover", mime, raw)
 	if err != nil {
 		httpx.Error(w, err)
@@ -194,4 +205,16 @@ func downloadImage(ctx context.Context, raw string) ([]byte, string, error) {
 		return nil, "", bad("that link is not a picture")
 	}
 	return data, mime, nil
+}
+
+// publicImageLink returns the cleaned link when it is a public https picture address.
+func publicImageLink(raw string) (string, bool) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Scheme != "https" || u.Host == "" || isPrivateHost(u.Hostname()) {
+		return "", false
+	}
+	if len(u.String()) > 2000 {
+		return "", false
+	}
+	return u.String(), true
 }

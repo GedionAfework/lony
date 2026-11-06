@@ -49,7 +49,8 @@ function TermsBody({ markdown }: { markdown: string }) {
   return <div className="terms-body">{blocks}</div>;
 }
 
-export function TosPage() {
+/** The Terms. `embedded` drops the page frame so Settings can show them in its own pane. */
+export function TosPage({ embedded = false }: { embedded?: boolean }) {
   const { token, user, refreshMe } = useAuth();
   const navigate = useNavigate();
   const { showError } = useToast();
@@ -82,7 +83,7 @@ export function TosPage() {
       await api.acceptTOS(token);
       setJustAccepted(true);
       await refreshMe().catch(() => undefined);
-      navigate(-1);
+      if (!embedded) navigate(-1);
     } catch (e) {
       showError(e instanceof Error ? e.message : 'Could not accept Terms');
     } finally {
@@ -91,7 +92,10 @@ export function TosPage() {
   }
 
   return (
-    <div className="page page-narrow">
+    <div className={embedded ? 'terms-embedded' : 'page page-narrow'}>
+      {embedded ? (
+        version ? <div className="muted" style={{ fontSize: 13 }}>Version {version.replace(/^tos-/, '')}</div> : null
+      ) : (
       <div className="terms-head">
         <button type="button" className="icon-btn" aria-label="Back" onClick={() => navigate(-1)}>
           <ArrowLeft size={18} />
@@ -101,6 +105,7 @@ export function TosPage() {
           {version ? <div className="muted" style={{ fontSize: 13 }}>Version {version.replace(/^tos-/, '')}</div> : null}
         </div>
       </div>
+      )}
       <div className="card terms-card">{document ? <TermsBody markdown={document} /> : <p className="muted">Loading…</p>}</div>
       {accepted ? (
         <div className="terms-accepted">

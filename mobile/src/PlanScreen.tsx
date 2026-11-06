@@ -84,6 +84,12 @@ function resolveMediaURL(path: string | null | undefined): string | null {
   return `${origin}${path.startsWith('/') ? path : `/${path}`}`;
 }
 
+/** Store pictures kept as links: shown directly, never sent the sign-in token. */
+function isExternalMedia(uri: string): boolean {
+  const origin = apiBaseUrl.replace(/\/api\/v1\/?$/, '');
+  return /^https?:\/\//.test(uri) && !uri.startsWith(origin);
+}
+
 function typeDisplay(g: Goal, goalTypes: { id: string; label: string }[]): string {
   if (g.goal_type === 'custom' && g.type_label) return g.type_label;
   const id = g.goal_type === 'custom' ? 'other' : g.goal_type;
@@ -215,6 +221,8 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
   const [productUrl, setProductUrl] = useState('');
   const [urlBusy, setUrlBusy] = useState(false);
   const [pendingCover, setPendingCover] = useState<CoverDraft | null>(null);
+  // A product picture the phone could not download: the server saves it instead.
+  const coverLinkRef = useRef<string | null>(null);
   // The product page's own price and currency, so price tracking compares like with like.
   const listingRef = useRef<{ url: string; price?: string; currency?: string } | null>(null);
 
@@ -400,6 +408,7 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
     setNote('');
     setProductUrl('');
     setPendingCover(null);
+    coverLinkRef.current = null;
     setCreateTab('detail');
     // AI chat intentionally survives leaving the screen; "Clear chat" wipes it explicitly.
   }
@@ -527,6 +536,7 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
     let nextCover = pendingCover;
     if (d.image_url) {
       nextCover = await fetchCoverFromUrl(d.image_url, d.image_thumb_url);
+      coverLinkRef.current = nextCover ? null : d.image_url;
     }
 
     return {
@@ -613,7 +623,10 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
           mime: fields.cover.mime,
           attachment_base64: fields.cover.attachment_base64,
         });
+      } else if (coverLinkRef.current && res.goal?.id) {
+        await api.setGoalCoverFromUrl(token, res.goal.id, coverLinkRef.current).catch(() => undefined);
       }
+      coverLinkRef.current = null;
       goIndex();
       await reload();
     } catch (e) {
@@ -1419,7 +1432,10 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
               onPress={() => void pickCover()}
             />
             {pendingCover ? (
-              <SecondaryButton label={t(user.locale, 'plan.removePhoto')} onPress={() => setPendingCover(null)} />
+              <SecondaryButton label={t(user.locale, 'plan.removePhoto')} onPress={() => {
+                    setPendingCover(null);
+                    coverLinkRef.current = null;
+                  }} />
             ) : null}
             <PrimaryButton
               label={busy ? t(user.locale, 'common.saving') : t(user.locale, 'common.create')}
@@ -1768,7 +1784,7 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
             <Image
               source={{
                 uri: cover,
-                headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+                headers: token && !isExternalMedia(cover) ? { Authorization: `Bearer ${token}` } : undefined,
               }}
               style={{ width: '100%', height: 180, borderRadius: radii.lg }}
               resizeMode="cover"
@@ -2047,7 +2063,7 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
                   <Image
                     source={{
                       uri: cover,
-                      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+                      headers: token && !isExternalMedia(cover) ? { Authorization: `Bearer ${token}` } : undefined,
                     }}
                     style={{ width: '100%', height: 120, borderRadius: radii.lg }}
                     resizeMode="cover"

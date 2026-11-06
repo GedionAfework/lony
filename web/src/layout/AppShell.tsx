@@ -10,7 +10,6 @@ import {
   Menu,
   MessageCircle,
   Moon,
-  Plus,
   Settings as SettingsIcon,
   Sparkles,
   Sun,
@@ -45,12 +44,6 @@ const BOTTOM_TABS = [
   { to: '/settings', label: 'You', icon: SettingsIcon },
 ];
 
-const ADD_ACTIONS = [
-  { label: 'Expense', to: '/cashflow/new?kind=expense' },
-  { label: 'Income', to: '/cashflow/new?kind=income' },
-  { label: 'Loan', to: '/loans/new' },
-];
-
 function timeAgo(iso: string): string {
   const d = new Date(iso).getTime();
   const diff = Math.max(0, Date.now() - d);
@@ -70,13 +63,11 @@ export function AppShell() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
-  const [addOpen, setAddOpen] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [chatUnread, setChatUnread] = useState(0);
   const notifRef = useRef<HTMLDivElement>(null);
   const userRef = useRef<HTMLDivElement>(null);
-  const addRef = useRef<HTMLDivElement>(null);
 
   const loadNotifications = useCallback(async () => {
     if (!token) return;
@@ -106,13 +97,11 @@ export function AppShell() {
       const t = e.target as Node;
       if (notifRef.current && !notifRef.current.contains(t)) setNotifOpen(false);
       if (userRef.current && !userRef.current.contains(t)) setUserMenuOpen(false);
-      if (addRef.current && !addRef.current.contains(t)) setAddOpen(false);
     }
     function onKey(e: KeyboardEvent) {
       if (e.key !== 'Escape') return;
       setNotifOpen(false);
       setUserMenuOpen(false);
-      setAddOpen(false);
       setSidebarOpen(false);
     }
     document.addEventListener('mousedown', onClick);
@@ -229,31 +218,6 @@ export function AppShell() {
           {/* Settings has its own pane headers, like a messenger's settings. */}
           <div className="topbar-title">{location.pathname.startsWith('/settings') ? '' : current?.label ?? ''}</div>
           <div className="spacer" />
-
-          <div className="dropdown" ref={addRef}>
-            <button className="btn btn-primary topbar-add" onClick={() => setAddOpen((v) => !v)} aria-haspopup="menu" aria-expanded={addOpen}>
-              <Plus size={16} strokeWidth={2.5} />
-              <span>Add</span>
-            </button>
-            {addOpen ? (
-              <div className="dropdown-panel menu-panel" role="menu">
-                {ADD_ACTIONS.map((a) => (
-                  <button
-                    key={a.to}
-                    type="button"
-                    role="menuitem"
-                    className="menu-item"
-                    onClick={() => {
-                      setAddOpen(false);
-                      navigate(a.to);
-                    }}
-                  >
-                    {a.label}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
 
           <div className="dropdown" ref={notifRef}>
             <button className="icon-btn" aria-label="Notifications" onClick={() => setNotifOpen((v) => !v)}>

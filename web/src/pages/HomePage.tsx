@@ -509,8 +509,11 @@ export function HomePage() {
           <Button onClick={() => navigate('/cashflow/new?kind=income')} variant="secondary">
             <Plus size={15} /> Income
           </Button>
-          <Button onClick={() => navigate('/cashflow/new?kind=expense')}>
+          <Button onClick={() => navigate('/cashflow/new?kind=expense')} variant="secondary">
             <Plus size={15} /> Expense
+          </Button>
+          <Button onClick={() => navigate('/loans/new')}>
+            <Plus size={15} /> Loan
           </Button>
         </div>
       </div>

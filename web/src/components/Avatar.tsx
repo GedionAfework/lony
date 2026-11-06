@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type CSSProperties, type ReactNode } from 'react';
 import { apiBaseUrl } from '../lib/api';
 import { hueFor } from './Visuals';
 
@@ -130,4 +130,52 @@ export async function prepareAvatar(file: File): Promise<{ blob: Blob; base64: s
   } catch {
     return fallback();
   }
+}
+
+/** A private picture (plan cover, receipt…): fetched with the sign-in token, cached for the visit. */
+export function MediaImg({
+  src,
+  token,
+  alt = '',
+  className,
+  style,
+  fallback = null,
+}: {
+  src?: string | null;
+  token?: string | null;
+  alt?: string;
+  className?: string;
+  style?: CSSProperties;
+  fallback?: ReactNode;
+}) {
+  const [uri, setUri] = useState<string | null>(() => (src ? loaded.get(src) ?? null : null));
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    setFailed(false);
+    if (!src) {
+      setUri(null);
+      return;
+    }
+    const hit = loaded.get(src);
+    if (hit) {
+      setUri(hit);
+      return;
+    }
+    let cancelled = false;
+    setUri(null);
+    // Outside pictures are shown directly; the API's own media needs the token.
+    const apiOrigin = apiBaseUrl.startsWith('http') ? new URL(apiBaseUrl).origin : window.location.origin;
+    const external = /^https?:\/\//.test(src) && !src.startsWith(apiOrigin);
+    void loadAvatar(src, external ? null : token).then((u) => {
+      if (cancelled) return;
+      if (u) setUri(u);
+      else setFailed(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [src, token]);
+  if (!src || failed) return <>{fallback}</>;
+  if (!uri) return <div className={className} style={{ ...style, background: 'var(--surface-muted)' }} aria-hidden />;
+  return <img src={uri} alt={alt} className={className} style={style} onError={() => setFailed(true)} />;
 }

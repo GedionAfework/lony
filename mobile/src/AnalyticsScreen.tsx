@@ -932,26 +932,26 @@ export function AnalyticsScreen({
         </Card>
       ) : (
         <>
+          <HeroCard
+            label={t(L, 'insights.leftOver').replace('{month}', monthLabel)}
+            value={`${netNum < 0 ? '−' : ''}${formatMoney(Math.abs(netNum).toFixed(2), preferred, L)}`}
+            sub={
+              incomeNum === 0 && spentNum === 0
+                ? t(L, 'insights.addToSee')
+                : netNum >= 0
+                  ? t(L, 'insights.keptShare').replace('{percent}', savingsRate != null ? `${Math.round(savingsRate)}%` : '—').replace('{month}', monthLabel)
+                  : t(L, 'insights.spentMore').replace('{month}', monthLabel)
+            }
+            tiles={[
+              { label: t(L, 'insights.moneyIn'), value: formatMoney(overview?.income ?? '0', preferred, L), note: changeNote(overview?.income_mom_percent) },
+              { label: t(L, 'insights.moneyOut'), value: formatMoney(overview?.expense ?? '0', preferred, L), note: changeNote(overview?.expense_mom_percent) },
+            ]}
+          />
+
           <TabBar tabs={tabs} value={tab} onChange={setTab} />
 
           {tab === 'overview' ? (
             <>
-              <HeroCard
-                label={t(L, 'insights.leftOver').replace('{month}', monthLabel)}
-                value={`${netNum < 0 ? '−' : ''}${formatMoney(Math.abs(netNum).toFixed(2), preferred, L)}`}
-                sub={
-                  incomeNum === 0 && spentNum === 0
-                    ? t(L, 'insights.addToSee')
-                    : netNum >= 0
-                      ? t(L, 'insights.keptShare').replace('{percent}', savingsRate != null ? `${Math.round(savingsRate)}%` : '—').replace('{month}', monthLabel)
-                      : t(L, 'insights.spentMore').replace('{month}', monthLabel)
-                }
-                tiles={[
-                  { label: t(L, 'insights.moneyIn'), value: formatMoney(overview?.income ?? '0', preferred, L), note: changeNote(overview?.income_mom_percent) },
-                  { label: t(L, 'insights.moneyOut'), value: formatMoney(overview?.expense ?? '0', preferred, L), note: changeNote(overview?.expense_mom_percent) },
-                ]}
-              />
-
               <KpiStrip
                 items={[
                   { label: t(L, 'insights.kpiSaved'), value: savingsRate != null ? `${Math.round(savingsRate)}%` : '—', icon: 'leaf', color: colors.success },
