@@ -3991,3 +3991,24 @@ button.premium-chip:hover { filter: brightness(0.97); }
 @media (prefers-reduced-motion: reduce) {
   .brand-loader-mark img, .brand-loader-ring, .brand-loader-bar span { animation: none; }
 }
+
+/* Plan card: monthly/yearly switch, deal badge and countdown. */
+.bill-switch { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.bill-switch .on { color: var(--text); font-weight: 700; }
+.bill-switch em { font-style: normal; margin-left: 6px; }
+.switch-btn {
+  position: relative; width: 40px; height: 22px; border-radius: 999px; border: none; padding: 0;
+  background: var(--border-strong); cursor: pointer; transition: background 0.15s;
+}
+.switch-btn span {
+  position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%;
+  background: #fff; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25); transition: transform 0.15s;
+}
+.switch-btn.on { background: var(--primary); }
+.switch-btn.on span { transform: translateX(18px); }
+.plan-was { font-size: 0.55em; font-weight: 600; color: var(--muted); margin-right: 6px; }
+.plan-deal { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12.5px; }
+.plan-deal-badge { padding: 2px 8px; border-radius: 999px; font-weight: 800; color: #fff; background: var(--error, #dc3b3b); }
+.plan-deal-label { font-weight: 700; color: var(--text); }
+.plan-deal-timer { color: var(--muted); }
+.plan-deal-timer b { color: var(--error, #dc3b3b); font-weight: 700; }

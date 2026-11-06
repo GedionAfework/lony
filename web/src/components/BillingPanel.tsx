@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Check, CreditCard, ExternalLink, Sparkles, X } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
-import { api, type BillingCatalog, type MyBilling, type PlanOption, type PlanTier } from '../lib/api';
+import { api, type BillingCatalog, type MyBilling, type PlanLimits, type PlanOption, type PlanTier } from '../lib/api';
+import { useCountdown } from './Countdown';
 import { TIER_BLURB, TIER_LABEL, featureLines, formatPrice, planStatusLine } from '../lib/plans';
 import { Button } from './Button';
 import { useToast } from './Toast';
@@ -123,10 +124,6 @@ export function BillingPanel() {
     );
   }
 
-  /** How much cheaper a year is than twelve months, in whole percent. */
-  const saving = (m?: PlanOption, y?: PlanOption) =>
-    m?.amount_cents && y?.amount_cents && m.currency === y.currency ? Math.round((1 - y.amount_cents / (m.amount_cents * 12)) * 100) : 0;
-
   return (
     <div className="billing">
       <div className={`plan-now tier-${mine.tier}`}>
@@ -167,90 +164,175 @@ export function BillingPanel() {
       ) : null}
 
       <div className="plan-grid">
-        {catalog.tiers.map(({ tier, limits }) => {
-          const monthly = catalog.plans.find((p) => p.tier === tier && p.interval === 'month');
-          const yearly = catalog.plans.find((p) => p.tier === tier && p.interval === 'year');
-          const monthPrice = formatPrice(monthly);
-          const yearPrice = formatPrice(yearly);
-          const save = saving(monthly, yearly);
-          const current = mine.tier === tier;
-          return (
-            <div key={tier} className={`plan-card ${current ? 'current' : ''} ${tier === 'pro' ? 'featured' : ''}`}>
-              <div className="plan-card-head">
-                <div className="plan-card-name">
-                  {TIER_LABEL[tier]}
-                  {tier === 'pro' && !current ? <span className="plan-pill">Best value</span> : null}
-                  {current ? <span className="plan-pill current">Current</span> : null}
-                </div>
-                <div className="plan-card-blurb">{TIER_BLURB[tier as PlanTier]}</div>
-              </div>
-              {tier === 'free' ? (
-                <div className="plan-prices">
-                  <div className="plan-card-price">
-                    $0<small>/forever</small>
-                  </div>
-                  <div className="plan-price-alt">No card needed</div>
-                </div>
-              ) : (
-                <div className="plan-prices">
-                  <div className="plan-card-price">
-                    {monthPrice ?? '—'}
-                    {monthPrice ? <small>/month</small> : null}
-                  </div>
-                  {yearPrice ? (
-                    <div className="plan-price-alt">
-                      or <strong>{yearPrice}</strong>/year
-                      {save > 0 ? <span className="plan-save">save {save}%</span> : null}
-                    </div>
-                  ) : null}
-                </div>
-              )}
-              <ul className="plan-features">
-                {featureLines(limits).map((f) => (
-                  <li key={f.text} className={f.on ? '' : 'off'}>
-                    {f.on ? <Check size={14} /> : <X size={14} />}
-                    {f.text}
-                  </li>
-                ))}
-              </ul>
-              <div className="plan-card-action">
-                {tier === 'free' ? (
-                  current ? <Button variant="secondary" block disabled>Current plan</Button> : null
-                ) : subscribed ? (
-                  current ? (
-                    <Button variant="secondary" block disabled>Current plan</Button>
-                  ) : (
-                    <Button variant="secondary" block onClick={onManage} busy={busyKey === 'portal'}>
-                      Switch in billing <ExternalLink size={14} />
-                    </Button>
-                  )
-                ) : (
-                  <div className="plan-buy">
-                    {([monthly, yearly] as const).map((opt) =>
-                      opt ? (
-                        <Button
-                          key={opt.key}
-                          block
-                          variant={opt.interval === 'year' ? 'primary' : 'secondary'}
-                          disabled={!opt.available || busyKey !== null}
-                          busy={busyKey === opt.key}
-                          onClick={() => onUpgrade(opt.key)}
-                        >
-                          {opt.interval === 'year' ? 'Yearly' : 'Monthly'} · {formatPrice(opt) ?? ''}
-                        </Button>
-                      ) : null,
-                    )}
-                    {current && mine.source === 'trial' ? <div className="plan-price-alt">Keep {TIER_LABEL[tier]} after your trial</div> : null}
-                  </div>
-                )}
-              </div>
-            </div>
-          );
-        })}
+        {catalog.tiers.map(({ tier, limits }) => (
+          <PlanCard
+            key={tier}
+            tier={tier}
+            limits={limits}
+            options={catalog.plans.filter((p) => p.tier === tier)}
+            current={mine.tier === tier}
+            trial={mine.source === 'trial'}
+            subscribed={subscribed}
+            busyKey={busyKey}
+            onBuy={onUpgrade}
+            onManage={onManage}
+            onExpired={() => void load()}
+          />
+        ))}
       </div>
       <p className="muted billing-fine">
         Payments are handled securely by Polar. Cancel any time from Manage billing; you keep your plan until the end of the paid period.
       </p>
+    </div>
+  );
+}
+
+function DiscountLine({ option, onExpired }: { option: PlanOption; onExpired: () => void }) {
+  const left = useCountdown(option.discount?.ends_at, onExpired);
+  const d = option.discount;
+  if (!d) return null;
+  const off = d.kind === 'percent' ? `${Math.round(d.value)}% off` : `${formatPrice({ amount_cents: d.off_cents, currency: option.currency })} off`;
+  return (
+    <div className="plan-deal">
+      <span className="plan-deal-badge">{off}</span>
+      {d.label ? <span className="plan-deal-label">{d.label}</span> : null}
+      {left ? (
+        <span className="plan-deal-timer" title={d.ends_at ? new Date(d.ends_at).toLocaleString() : undefined}>
+          Ends in <b className="mono">{left}</b>
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+/** One tier: a monthly/yearly switch, the price (with any discount and its countdown) and features. */
+function PlanCard({
+  tier,
+  limits,
+  options,
+  current,
+  trial,
+  subscribed,
+  busyKey,
+  onBuy,
+  onManage,
+  onExpired,
+}: {
+  tier: PlanTier;
+  limits: PlanLimits;
+  options: PlanOption[];
+  current: boolean;
+  trial: boolean;
+  subscribed: boolean;
+  busyKey: string | null;
+  onBuy: (key: string) => void;
+  onManage: () => void;
+  onExpired: () => void;
+}) {
+  const monthly = options.find((o) => o.interval === 'month');
+  const yearly = options.find((o) => o.interval === 'year');
+  const [period, setPeriod] = useState<'month' | 'year'>(monthly ? 'month' : 'year');
+  const chosen = period === 'year' ? yearly ?? monthly : monthly ?? yearly;
+  const price = formatPrice(chosen);
+  const list = chosen?.discount && chosen.list_cents ? formatPrice({ amount_cents: chosen.list_cents, currency: chosen.currency }) : null;
+  const yearSave =
+    monthly?.amount_cents && yearly?.amount_cents && monthly.currency === yearly.currency
+      ? Math.round((1 - yearly.amount_cents / (monthly.amount_cents * 12)) * 100)
+      : 0;
+  const offered = tier === 'free' || options.length > 0;
+
+  return (
+    <div className={`plan-card ${current ? 'current' : ''} ${tier === 'pro' ? 'featured' : ''}`}>
+      <div className="plan-card-head">
+        <div className="plan-card-name">
+          {TIER_LABEL[tier]}
+          {tier === 'pro' && !current ? <span className="plan-pill">Best value</span> : null}
+          {current ? <span className="plan-pill current">Current</span> : null}
+        </div>
+        <div className="plan-card-blurb">{TIER_BLURB[tier]}</div>
+      </div>
+
+      {monthly && yearly ? (
+        <div className="bill-switch">
+          <span className={period === 'month' ? 'on' : ''}>Monthly</span>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={period === 'year'}
+            aria-label="Bill yearly"
+            className={`switch-btn${period === 'year' ? ' on' : ''}`}
+            onClick={() => setPeriod(period === 'year' ? 'month' : 'year')}
+          >
+            <span />
+          </button>
+          <span className={period === 'year' ? 'on' : ''}>
+            Yearly{yearSave > 0 ? <em className="plan-save">save {yearSave}%</em> : null}
+          </span>
+        </div>
+      ) : null}
+
+      <div className="plan-prices">
+        {tier === 'free' ? (
+          <div className="plan-card-price">
+            $0<small>/forever</small>
+          </div>
+        ) : offered ? (
+          <>
+            <div className="plan-card-price">
+              {list ? <s className="plan-was">{list}</s> : null}
+              {price ?? '—'}
+              {price ? <small>/{chosen?.interval === 'year' ? 'year' : 'month'}</small> : null}
+            </div>
+            {chosen?.interval === 'year' && chosen.amount_cents ? (
+              <div className="plan-price-alt">
+                {formatPrice({ amount_cents: Math.round(chosen.amount_cents / 12), currency: chosen.currency })} a month, billed yearly
+              </div>
+            ) : null}
+            {chosen ? <DiscountLine key={chosen.key} option={chosen} onExpired={onExpired} /> : null}
+          </>
+        ) : (
+          <div className="plan-price-alt">Not offered right now</div>
+        )}
+      </div>
+
+      <ul className="plan-features">
+        {featureLines(limits).map((f) => (
+          <li key={f.text} className={f.on ? '' : 'off'}>
+            {f.on ? <Check size={14} /> : <X size={14} />}
+            {f.text}
+          </li>
+        ))}
+      </ul>
+
+      <div className="plan-card-action">
+        {tier === 'free' ? (
+          current ? (
+            <Button variant="secondary" block disabled>
+              Current plan
+            </Button>
+          ) : null
+        ) : subscribed ? (
+          current ? (
+            <Button variant="secondary" block disabled>
+              Current plan
+            </Button>
+          ) : (
+            <Button variant="secondary" block onClick={onManage} busy={busyKey === 'portal'}>
+              Switch in billing <ExternalLink size={14} />
+            </Button>
+          )
+        ) : chosen ? (
+          <Button
+            block
+            variant={tier === 'pro' ? 'primary' : 'secondary'}
+            disabled={!chosen.available || busyKey !== null}
+            busy={busyKey === chosen.key}
+            onClick={() => onBuy(chosen.key)}
+          >
+            {current && trial ? `Keep ${TIER_LABEL[tier]}` : `Get ${TIER_LABEL[tier]}`} · {price}/{chosen.interval === 'year' ? 'yr' : 'mo'}
+          </Button>
+        ) : null}
+      </div>
     </div>
   );
 }

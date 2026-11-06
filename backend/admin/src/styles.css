@@ -2014,3 +2014,24 @@ a.ov-list-row:hover, button.ov-list-row:hover { background: var(--surface-hover)
 .bill-event-user { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .bill-event-err { max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--error); font-size: 12px; }
 .bill-events time { flex: none; font-size: 12px; }
+
+/* ------------------------------------------------ price cards editor */
+.price-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 14px; padding: 4px 16px 16px; }
+.price-card { border: 1px solid var(--border); border-radius: 14px; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+.price-card-head { display: flex; align-items: baseline; justify-content: space-between; }
+.price-card-head strong { font-size: 16px; }
+.price-row { display: flex; flex-direction: column; gap: 10px; padding: 12px; border-radius: 12px; background: var(--surface-muted, rgba(127,127,127,0.06)); }
+.price-row-main, .price-row-discount { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+.price-field { display: flex; flex-direction: column; gap: 4px; min-width: 110px; }
+.price-field.grow { flex: 1; min-width: 120px; }
+.price-field input, .price-field select { height: 34px; }
+.price-remove { margin-left: auto; }
+.price-preview { font-size: 13px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.price-warn { display: inline-flex; align-items: center; gap: 4px; color: var(--warning, #b45309); margin-left: 6px; }
+.price-add {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 10px; border-radius: 12px; border: 1.5px dashed var(--border); background: transparent;
+  color: var(--primary); font: inherit; font-weight: 600; cursor: pointer;
+}
+.price-add:hover { border-color: var(--primary); }
+@media (max-width: 520px) { .price-cards { grid-template-columns: 1fr; } }

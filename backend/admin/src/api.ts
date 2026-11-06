@@ -126,6 +126,23 @@ export type BillingEvent = {
   received_at: string;
 };
 
+export type PlanDiscount = {
+  kind: 'percent' | 'flat';
+  /** Percent off (20) or cents off (500). */
+  value: number;
+  label?: string;
+  starts_at?: string;
+  ends_at?: string;
+};
+
+export type PlanPrice = {
+  tier: PlanTier;
+  interval: 'month' | 'year';
+  amount_cents: number;
+  currency: string;
+  discount?: PlanDiscount;
+};
+
 export type BillingOverview = {
   stats: {
     mrr: { currency: string; cents: number }[];
@@ -154,6 +171,9 @@ export type BillingOverview = {
   };
   subscriptions: BillingSubscription[];
   events: BillingEvent[];
+  prices: PlanPrice[];
+  prices_saved: boolean;
+  polar_prices?: Record<string, number>;
 };
 
 export type AuditEntry = {
@@ -570,7 +590,7 @@ export const api = {
     ),
   updateBillingSettings: (
     token: string,
-    body: { limits?: Record<PlanTier, PlanLimits>; trial_days?: number; trial_tier?: 'plus' | 'pro' },
+    body: { limits?: Record<PlanTier, PlanLimits>; trial_days?: number; trial_tier?: 'plus' | 'pro'; prices?: PlanPrice[] },
   ) =>
     request<BillingOverview>(
       '/api/v1/admin/billing/settings',

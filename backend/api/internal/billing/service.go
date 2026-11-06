@@ -273,6 +273,9 @@ type PlanOption struct {
 	Currency    string `json:"currency,omitempty"`
 	// Available: this plan can be bought now (a Polar product is set up for it).
 	Available bool `json:"available"`
+	// ListCents is the price before Discount; AmountCents is what is paid now.
+	ListCents int             `json:"list_cents,omitempty"`
+	Discount  *ActiveDiscount `json:"discount,omitempty"`
 }
 
 type TierInfo struct {
@@ -288,12 +291,8 @@ type Catalog struct {
 	TrialTier     string       `json:"trial_tier"`
 }
 
-func (s *Service) Catalog(ctx context.Context) Catalog {
-	all := s.AllLimits(ctx)
-	out := Catalog{CheckoutReady: s.polar.Configured() && len(s.cfg.Products) > 0}
-	for _, t := range Tiers {
-		out.Tiers = append(out.Tiers, TierInfo{Tier: t, Limits: all[t]})
-	}
+// defaultPlans lists every standard plan with Polar's price, else the list price.
+func (s *Service) defaultPlans(ctx context.Context, out *Catalog) {
 	prices := s.productPrices(ctx)
 	keys := map[string]bool{}
 	for _, k := range StandardPlans {
@@ -325,7 +324,31 @@ func (s *Service) Catalog(ctx context.Context) Catalog {
 		} else if cents, ok := list[k]; ok && cents > 0 {
 			opt.AmountCents, opt.Currency = cents, listCur
 		}
+		opt.ListCents = opt.AmountCents
 		out.Plans = append(out.Plans, opt)
+	}
+}
+
+func (s *Service) Catalog(ctx context.Context) Catalog {
+	all := s.AllLimits(ctx)
+	out := Catalog{CheckoutReady: s.polar.Configured() && len(s.cfg.Products) > 0}
+	for _, t := range Tiers {
+		out.Tiers = append(out.Tiers, TierInfo{Tier: t, Limits: all[t]})
+	}
+	now := s.now()
+	if saved := s.adminPrices(ctx); saved != nil {
+		// Prices set in the admin console are the source of truth for what the apps show.
+		for _, p := range saved {
+			_, sold := s.cfg.Products[p.Key()]
+			amt, disc := p.Apply(now)
+			out.Plans = append(out.Plans, PlanOption{
+				Key: p.Key(), Tier: p.Tier, Interval: p.Interval,
+				AmountCents: amt, ListCents: p.AmountCents, Currency: p.Currency,
+				Discount: disc, Available: sold && out.CheckoutReady,
+			})
+		}
+	} else {
+		s.defaultPlans(ctx, &out)
 	}
 	sort.Slice(out.Plans, func(i, j int) bool { return out.Plans[i].Key < out.Plans[j].Key })
 	if out.Plans == nil {
@@ -430,6 +453,15 @@ func (s *Service) Checkout(ctx context.Context, userID uuid.UUID, planKey string
 	product, ok := s.cfg.Products[planKey]
 	if !ok || TierOfPlanKey(planKey) == "" {
 		return "", httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{"plan": "unknown plan"})
+	}
+	if saved := s.adminPrices(ctx); saved != nil {
+		offered := false
+		for _, sp := range saved {
+			offered = offered || sp.Key() == planKey
+		}
+		if !offered {
+			return "", httpx.Field(http.StatusUnprocessableEntity, "VALIDATION", "invalid fields", map[string]string{"plan": "this plan is not offered"})
+		}
 	}
 	if !s.polar.Configured() {
 		return "", httpx.E(http.StatusServiceUnavailable, "BILLING_UNAVAILABLE", "payments are not set up yet")
@@ -657,6 +689,11 @@ type AdminOverview struct {
 	Setup         Setup             `json:"setup"`
 	Subscriptions []Subscription    `json:"subscriptions"`
 	Events        []Event           `json:"events"`
+	// Prices: the price cards (saved, or the defaults when PricesSaved is false).
+	Prices      []PlanPrice `json:"prices"`
+	PricesSaved bool        `json:"prices_saved"`
+	// PolarPrices: what Polar actually charges per plan key, to spot a mismatch.
+	PolarPrices map[string]int `json:"polar_prices,omitempty"`
 }
 
 func (s *Service) AdminOverview(ctx context.Context) (AdminOverview, error) {
@@ -673,10 +710,19 @@ func (s *Service) AdminOverview(ctx context.Context) (AdminOverview, error) {
 		return AdminOverview{}, err
 	}
 	days, tier := s.trial(ctx)
+	prices, saved := s.EffectivePrices(ctx)
+	polar := map[string]int{}
+	pp := s.productPrices(ctx)
+	for k, id := range s.cfg.Products {
+		if p, ok := pp[id]; ok {
+			polar[k] = p.AmountCents
+		}
+	}
 	return AdminOverview{
 		Stats: st, Limits: s.AllLimits(ctx), TrialDays: days, TrialTier: tier,
 		Setup:         s.Setup(),
 		Subscriptions: subs, Events: events,
+		Prices: prices, PricesSaved: saved, PolarPrices: polar,
 	}, nil
 }
 
@@ -692,6 +738,8 @@ type SettingsUpdate struct {
 	Limits    map[string]Limits `json:"limits"`
 	TrialDays *int              `json:"trial_days"`
 	TrialTier *string           `json:"trial_tier"`
+	// Prices replaces every price card when set; an empty list hides paid plans.
+	Prices *[]PlanPrice `json:"prices"`
 }
 
 func (s *Service) UpdateSettings(ctx context.Context, actor uuid.UUID, in SettingsUpdate) error {
@@ -734,6 +782,17 @@ func (s *Service) UpdateSettings(ctx context.Context, actor uuid.UUID, in Settin
 			return err
 		}
 		meta["trial_tier"] = *in.TrialTier
+	}
+	if in.Prices != nil {
+		clean, err := ValidatePrices(*in.Prices)
+		if err != nil {
+			return err
+		}
+		b, _ := json.Marshal(clean)
+		if err := s.store.SetSetting(ctx, settingPrices, string(b)); err != nil {
+			return err
+		}
+		meta["prices"] = clean
 	}
 	if s.audit != nil && len(meta) > 0 {
 		b, _ := json.Marshal(meta)

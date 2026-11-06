@@ -6,6 +6,7 @@ import { useAuth } from '../auth';
 import { Button } from '../components/Button';
 import { TIER_LABEL } from '../components/PlanBadge';
 import { relativeTime } from '../lib/audit';
+import { PriceCardsEditor } from '../components/PriceCardsEditor';
 
 const TIERS: PlanTier[] = ['free', 'plus', 'pro'];
 const nf = new Intl.NumberFormat();
@@ -179,6 +180,16 @@ export function BillingPage() {
         <PlanMix data={data} />
         <SetupCard data={data} />
       </div>
+
+      <PriceCardsEditor
+        data={data}
+        canManage={canManage}
+        onSaved={(next) => {
+          setData(next);
+          setNotice('Prices saved. The plan cards show them right away.');
+        }}
+        onError={setError}
+      />
 
       <LimitsEditor
         data={data}

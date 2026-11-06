@@ -2181,6 +2181,17 @@ export type PlanOption = {
   currency?: string;
   /** Can be bought now (a payment product is set up for it). */
   available?: boolean;
+  /** Price before the discount; amount_cents is what is paid now. */
+  list_cents?: number;
+  discount?: PlanDiscountNow | null;
+};
+
+export type PlanDiscountNow = {
+  kind: 'percent' | 'flat';
+  value: number;
+  label?: string;
+  off_cents: number;
+  ends_at?: string;
 };
 
 export type BillingCatalog = {
