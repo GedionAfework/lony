@@ -1,4 +1,5 @@
 import * as ImagePicker from 'expo-image-picker';
+import { ImageManipulator, SaveFormat } from 'expo-image-manipulator';
 import { Alert } from 'react-native';
 import { api } from './api';
 
@@ -14,6 +15,38 @@ export type ReceiptExtractDraft = {
   partial?: boolean;
 };
 
+/** Camera or gallery: a receipt is often already a screenshot or a saved photo. */
+function chooseSource(): Promise<'camera' | 'library' | null> {
+  return new Promise((resolve) => {
+    Alert.alert(
+      'Scan a receipt',
+      'Take a photo, or pick a receipt or statement you already have.',
+      [
+        { text: 'Take photo', onPress: () => resolve('camera') },
+        { text: 'Choose from gallery', onPress: () => resolve('library') },
+        { text: 'Cancel', style: 'cancel', onPress: () => resolve(null) },
+      ],
+      { cancelable: true, onDismiss: () => resolve(null) },
+    );
+  });
+}
+
+/**
+ * Phone photos are 3,000–4,000px wide: far more than reading needs, and over the AI's
+ * size limit once encoded. 1,600px keeps small print sharp and the upload well under 1MB.
+ */
+async function shrinkForReading(uri: string, width?: number): Promise<string | null> {
+  try {
+    const ctx = ImageManipulator.manipulate(uri);
+    if (!width || width > 1600) ctx.resize({ width: 1600 });
+    const ref = await ctx.renderAsync();
+    const out = await ref.saveAsync({ compress: 0.7, format: SaveFormat.JPEG, base64: true });
+    return out.base64 || null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Open the camera, send the photo to AI receipt scan, and return a draft for the
  * expense form (create: false). Always prefers opening the form with whatever
@@ -23,27 +56,33 @@ export async function scanReceiptWithCamera(
   token: string,
   accountId?: string,
 ): Promise<ReceiptExtractDraft | null> {
-  const cam = await ImagePicker.requestCameraPermissionsAsync();
-  if (!cam.granted) {
-    Alert.alert('Camera permission', 'Allow camera access to scan receipts and statements.');
+  const source = await chooseSource();
+  if (!source) return null;
+
+  let pick: ImagePicker.ImagePickerResult;
+  if (source === 'camera') {
+    const cam = await ImagePicker.requestCameraPermissionsAsync();
+    if (!cam.granted) {
+      Alert.alert('Camera permission', 'Allow camera access to scan receipts and statements.');
+      return null;
+    }
+    pick = await ImagePicker.launchCameraAsync({ quality: 0.9, allowsEditing: false, exif: false });
+  } else {
+    pick = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], quality: 0.9, allowsEditing: false, exif: false });
+  }
+  if (pick.canceled || !pick.assets?.[0]?.uri) return null;
+
+  const image = await shrinkForReading(pick.assets[0].uri, pick.assets[0].width);
+  if (!image) {
+    Alert.alert('Receipt scan failed', 'Could not open that picture. Try another one.');
     return null;
   }
 
-  const pick = await ImagePicker.launchCameraAsync({
-    // Smaller images are more reliable for vision APIs (Groq 20MB / token limits).
-    quality: 0.45,
-    base64: true,
-    allowsEditing: false,
-    exif: false,
-  });
-  if (pick.canceled || !pick.assets?.[0]?.base64) return null;
-
-  const asset = pick.assets[0];
   let res;
   try {
     res = await api.scanCashflowReceipt(token, {
-      mime: asset.mimeType || 'image/jpeg',
-      image_base64: asset.base64!,
+      mime: 'image/jpeg',
+      image_base64: image,
       account_id: accountId,
       create: false,
     });

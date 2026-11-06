@@ -1090,8 +1090,46 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
         return;
       }
 
+      // A pasted link is read directly (price, monthly plan, picture), not searched for.
+      if (/https?:\/\/|www\./i.test(text)) {
+        setAiStatus('Reading the link…');
+        const res = await api.extractGoalDraft(token, text, currency);
+        const d = res.draft ?? {};
+        if (!d.title && !d.target_amount) {
+          setAiMessages((prev) => [
+            ...prev,
+            { id: `a-${Date.now()}`, role: 'assistant', content: 'That page did not show a product or a price. Try the product page itself.' },
+          ]);
+          return;
+        }
+        const linkDraft = { ...d, goal_type: d.goal_type || 'purchase', currency_code: d.currency_code || currency };
+        setAiDraft({ ...(aiDraft ?? {}), ...linkDraft });
+        rememberEstimate('market_scrape', d.note || '', linkDraft);
+        const advice = d.target_amount
+          ? await savingAdvice(token, Number(d.target_amount), (d.currency_code || currency).toUpperCase(), d.target_date, user.locale)
+          : '';
+        const priceLine = d.target_amount
+          ? d.payment_months && d.monthly_payment
+            ? `${d.title || 'This'}: ${d.monthly_payment} ${d.source_currency || linkDraft.currency_code} a month for ${d.payment_months} months, ${d.target_amount} ${linkDraft.currency_code} in total.`
+            : `${d.title || 'This'}: ${d.target_amount} ${linkDraft.currency_code}.`
+          : `${d.title}. The page did not list a full price; add it on Detail.`;
+        const pic = d.image_url ? [{ image_url: d.image_url, thumb_url: d.image_thumb_url }] : [];
+        setAiMessages((prev) => [
+          ...prev,
+          {
+            id: `a-${Date.now()}`,
+            role: 'assistant',
+            content: [priceLine, d.currency_unknown ? `The page did not say the currency. Check it is ${currency}.` : '', advice].filter(Boolean).join('\n\n'),
+            chips: d.target_amount ? estimateChips(linkDraft) : undefined,
+            draft: linkDraft,
+            images: pic.length ? (pic as PlanAssistantImage[]) : undefined,
+          },
+        ]);
+        return;
+      }
+
       setAiStatus('Searching the web for prices, pictures and listings…');
-      const history = [...aiMessages, userMsg]
+      const history =[...aiMessages, userMsg]
         .filter((m) => m.role === 'user' || m.role === 'assistant')
         .slice(-12)
         .map((m) => ({ role: m.role, content: m.content }));

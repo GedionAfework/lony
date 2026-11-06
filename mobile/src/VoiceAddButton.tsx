@@ -41,6 +41,11 @@ export function VoiceAddButton({ token, locale, disabled, onDraft, onError }: Pr
   const recorderState = useAudioRecorderState(audioRecorder, 200);
   const [busy, setBusy] = useState(false);
   const startedAt = useRef(0);
+  const autoStop = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const toggleRef = useRef<() => Promise<void>>(async () => undefined);
+  useEffect(() => () => {
+    if (autoStop.current) clearTimeout(autoStop.current);
+  }, []);
   // Free users: captures left this month (null = unlimited or unknown).
   const [left, setLeft] = useState<number | null>(null);
   useEffect(() => {
@@ -59,6 +64,7 @@ export function VoiceAddButton({ token, locale, disabled, onDraft, onError }: Pr
     }
     try {
       if (recording || audioRecorder.isRecording) {
+        if (autoStop.current) clearTimeout(autoStop.current);
         await audioRecorder.stop();
         let uri = audioRecorder.uri;
         for (let i = 0; !uri && i < 8; i++) {
@@ -67,6 +73,10 @@ export function VoiceAddButton({ token, locale, disabled, onDraft, onError }: Pr
         }
         if (!uri) {
           onError(t(locale, 'voice.noAudio'));
+          return;
+        }
+        if (Date.now() - startedAt.current < 700) {
+          onError(t(locale, 'voice.tooShort'));
           return;
         }
         setBusy(true);
@@ -78,6 +88,7 @@ export function VoiceAddButton({ token, locale, disabled, onDraft, onError }: Pr
         }
         const res = await api.parseCashflowVoice(token, { mime: 'audio/mp4', audio_base64: b64 });
         const ex = res.extract || {};
+        if (!ex.amount) onError(t(locale, 'voice.noAmount').replace('{text}', ex.transcript || ''));
         onDraft({
           kind: ex.kind === 'income' ? 'income' : ex.kind === 'expense' ? 'expense' : undefined,
           title: ex.title,
@@ -107,14 +118,21 @@ export function VoiceAddButton({ token, locale, disabled, onDraft, onError }: Pr
       await audioRecorder.prepareToRecordAsync(RecordingPresets.HIGH_QUALITY);
       audioRecorder.record();
       startedAt.current = Date.now();
+      // A minute is plenty for one entry; stop on its own so it never records forever.
+      if (autoStop.current) clearTimeout(autoStop.current);
+      autoStop.current = setTimeout(() => {
+        if (audioRecorder.isRecording) void toggleRef.current();
+      }, 60_000);
     } catch (e) {
       setBusy(false);
       onError(e instanceof Error ? e.message : t(locale, 'voice.failed'));
     }
   }
 
+  toggleRef.current = toggle;
+
   const label = busy
-    ? t(locale, 'voice.listening')
+    ? t(locale, 'voice.reading')
     : recording
       ? t(locale, 'voice.stop')
       : t(locale, 'voice.sayIt');

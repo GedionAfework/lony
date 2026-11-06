@@ -34,7 +34,12 @@ type PlanDraft struct {
 	Note         string `json:"note,omitempty"`
 	SourceURL    string `json:"source_url,omitempty"`
 	ImageURL     string `json:"image_url,omitempty"`
-	TypeLabel    string `json:"type_label,omitempty"`
+	// ImageThumbURL: a search engine's copy of the picture, which always loads.
+	ImageThumbURL string `json:"image_thumb_url,omitempty"`
+	// MonthlyPayment/PaymentMonths: the page sells this as a monthly plan.
+	MonthlyPayment string `json:"monthly_payment,omitempty"`
+	PaymentMonths  int    `json:"payment_months,omitempty"`
+	TypeLabel      string `json:"type_label,omitempty"`
 	// SourcePrice/SourceCurrency: the listing's own price when it is in another currency
 	// than CurrencyCode (TargetAmount is then the converted figure). Sent back on create so
 	// price tracking compares like with like.
@@ -144,6 +149,21 @@ func (s *Service) Extract(ctx context.Context, userID uuid.UUID, text, currency 
 	}
 	if p, err := parsePositive(prev.Price); err == nil {
 		s.priceDraft(ctx, &draft, p, prev.Currency, currency, prev.SiteName)
+	}
+	if prev.MonthlyPayment != "" && prev.PaymentMonths > 0 {
+		draft.MonthlyPayment = prev.MonthlyPayment
+		draft.PaymentMonths = prev.PaymentMonths
+		if prev.PlanTotal {
+			draft.Note = joinNote(fmt.Sprintf("Paid monthly: %s %s × %d months = %s %s in total.",
+				prev.Currency, prev.MonthlyPayment, prev.PaymentMonths, prev.Currency, prev.Price), draft.Note)
+		}
+	}
+	// No picture on the page: find one by the product's name so the plan has a thumbnail.
+	if draft.ImageURL == "" && strings.TrimSpace(draft.Title) != "" {
+		if imgs := SearchImages(ctx, draft.Title, 1); len(imgs) > 0 {
+			draft.ImageURL = imgs[0].ImageURL
+			draft.ImageThumbURL = imgs[0].ThumbURL
+		}
 	}
 
 	if s.extractor != nil && rest != "" {

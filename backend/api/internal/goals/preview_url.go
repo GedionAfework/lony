@@ -28,6 +28,10 @@ type PreviewURLResult struct {
 	Price       string `json:"price,omitempty"`
 	Currency    string `json:"currency,omitempty"`
 	SiteName    string `json:"site_name,omitempty"`
+	// A monthly payment plan on the page: Price is then the whole plan when PlanTotal is set.
+	MonthlyPayment string `json:"monthly_payment,omitempty"`
+	PaymentMonths  int    `json:"payment_months,omitempty"`
+	PlanTotal      bool   `json:"plan_total,omitempty"`
 }
 
 var (
@@ -183,6 +187,10 @@ func PreviewProductURL(ctx context.Context, raw string) (PreviewURLResult, error
 	out.Price = normalizePrice(out.Price)
 	if len(out.Currency) != 3 {
 		out.Currency = ""
+	}
+	// "$68/mo for 24 months": the goal is the whole plan, not the first payment.
+	if plan, ok := detectInstallmentPlan(html); ok {
+		applyInstallmentPlan(&out, plan)
 	}
 	if out.Title == "" && out.Price == "" && out.ImageURL == "" {
 		return PreviewURLResult{}, httpx.E(http.StatusUnprocessableEntity, "NO_PREVIEW", "could not extract product details from url")

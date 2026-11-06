@@ -2,7 +2,6 @@ package ai
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -48,7 +47,7 @@ func (s *Service) ParseVoiceText(ctx context.Context, userID uuid.UUID, transcri
 	if err := s.allowLLM(ctx, userID); err != nil {
 		return expenses.ParseVoiceFallback(transcript), nil
 	}
-	prompt := voiceUserPrompt
+	prompt := voiceUserPrompt + "\nToday is " + s.now().Format("Monday 2006-01-02") + "; turn words like yesterday or last Friday into a date."
 	if len(categories) > 0 {
 		prompt += "\nKnown categories: " + strings.Join(categories, ", ")
 	}
@@ -66,7 +65,7 @@ func (s *Service) ParseVoiceText(ctx context.Context, userID uuid.UUID, transcri
 		}
 	}
 	var out expenses.VoiceExtract
-	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+	if !decodeLoose(raw, &out, "confidence") {
 		return expenses.ParseVoiceFallback(transcript), nil
 	}
 	out.Transcript = strings.TrimSpace(transcript)
@@ -81,10 +80,13 @@ func (s *Service) ParseVoiceText(ctx context.Context, userID uuid.UUID, transcri
 	if len(out.CurrencyCode) != 3 {
 		out.CurrencyCode = expenses.ParseVoiceFallback(transcript).CurrencyCode
 	}
+	out.Amount = normalizeAmount(out.Amount)
 	if out.Amount == "" {
 		fb := expenses.ParseVoiceFallback(transcript)
 		out.Amount = fb.Amount
 	}
+	// Account and category ids come from the server's own matching, never from the model.
+	out.AccountID, out.CategoryID = nil, nil
 	if out.Confidence <= 0 {
 		out.Confidence = 0.7
 	}

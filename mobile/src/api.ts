@@ -1654,7 +1654,9 @@ export type GoalDraft = {
   /** The page showed a price without saying which currency. */
   currency_unknown?: boolean;
   /** The price is an estimate, not read from a page. */
-  estimated?: boolean;
+  estimated?: boolean;  /** The page sells it as a monthly plan: target_amount is then the whole plan. */
+  monthly_payment?: string;
+  payment_months?: number;
 };
 
 export type PlanAssistantImage = {

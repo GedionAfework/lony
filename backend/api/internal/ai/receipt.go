@@ -2,7 +2,6 @@ package ai
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -13,7 +12,6 @@ import (
 	"equilend/api/internal/httpx"
 
 	"github.com/google/uuid"
-	"github.com/shopspring/decimal"
 )
 
 const receiptUserPrompt = `Extract payment details from this receipt/invoice/statement image.
@@ -27,6 +25,7 @@ occurred_at (YYYY-MM-DD if visible, else ""),
 note (optional one line),
 account_hint (optional),
 confidence (0-1 number).
+amount is the grand total actually paid (after tax, tip and discounts), not a subtotal or a single line.
 Prefer kind "expense" for store receipts. If amount is unclear, still return best guess with low confidence.
 JSON only — no markdown.`
 
@@ -73,7 +72,7 @@ func (s *Service) ExtractReceipt(ctx context.Context, userID uuid.UUID, mime, b6
 		}
 	}
 	var out expenses.ReceiptExtract
-	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+	if !decodeLoose(raw, &out, "confidence") {
 		// Last resort: pull a money-like token from free text.
 		out = expenses.ReceiptExtract{
 			Kind:       expenses.KindExpense,
@@ -125,15 +124,3 @@ func findAmountInText(s string) string {
 	return normalizeAmount(m[1])
 }
 
-func normalizeAmount(raw string) string {
-	raw = strings.TrimSpace(strings.ReplaceAll(raw, ",", ""))
-	raw = strings.TrimPrefix(raw, "$")
-	if raw == "" {
-		return ""
-	}
-	d, err := decimal.NewFromString(raw)
-	if err != nil || !d.GreaterThan(decimal.Zero) {
-		return strings.TrimSpace(raw)
-	}
-	return d.StringFixed(2)
-}

@@ -59,6 +59,9 @@ export function PlanPage() {
   // Product picture: shown as-is, and saved as the cover by the server after the plan is
   // created (a browser is usually not allowed to download other sites' images).
   const [coverUrl, setCoverUrl] = useState<string | null>(null);
+  const [coverThumb, setCoverThumb] = useState<string | null>(null);
+  // "$68 a month for 24 months": shown so the total is not a surprise.
+  const [monthlyPlan, setMonthlyPlan] = useState<{ amount: string; months: number; currency: string } | null>(null);
   // The product page's own price/currency, so price tracking compares like with like.
   const [listing, setListing] = useState<{ url: string; price?: string; currency?: string } | null>(null);
   const [aiReply, setAiReply] = useState('');
@@ -110,6 +113,8 @@ export function PlanPage() {
     setProductUrl('');
     setDescribeText('');
     setCoverUrl(null);
+    setCoverThumb(null);
+    setMonthlyPlan(null);
     setListing(null);
     setAiReply('');
     setAiSources([]);
@@ -141,7 +146,11 @@ export function PlanPage() {
     if (d.target_date) setTargetDate(d.target_date);
     if (d.note && !note.trim()) setNote(d.note.slice(0, 400));
     if (d.source_url) setProductUrl(d.source_url);
-    if (d.image_url) setCoverUrl(d.image_url);
+    if (d.image_url) {
+      setCoverUrl(d.image_url);
+      setCoverThumb(d.image_thumb_url || null);
+    }
+    setMonthlyPlan(d.monthly_payment && d.payment_months ? { amount: d.monthly_payment, months: d.payment_months, currency: (d.source_currency || d.currency_code || currency).toUpperCase() } : null);
   }
 
   /** Warns when the price needs a human check before saving. */
@@ -527,7 +536,27 @@ export function PlanPage() {
         <Button variant="secondary" onClick={() => void onFetchProductUrl()} busy={urlBusy} disabled={urlBusy || extractBusy || busy} block>
           {urlBusy ? 'Reading link…' : 'Fetch from link'}
         </Button>
-        {coverUrl ? <img src={coverUrl} alt="" className="cover-image" style={{ height: 120 }} onError={() => setCoverUrl(null)} /> : null}
+        {coverUrl ? (
+          <img
+            src={coverUrl}
+            alt=""
+            className="cover-image"
+            style={{ height: 120 }}
+            onError={() => {
+              // The store refused the picture: use the search engine's copy, which always loads.
+              setCoverUrl(coverThumb && coverThumb !== coverUrl ? coverThumb : null);
+              setCoverThumb(null);
+            }}
+          />
+        ) : null}
+        {monthlyPlan && target ? (
+          <div className="notice">
+            <div className="notice-text">
+              Sold as a monthly plan: {formatMoney(monthlyPlan.amount, monthlyPlan.currency, locale)} a month for {monthlyPlan.months} months. The target is the
+              whole plan, {formatMoney(stripAmount(target) || '0', currency, locale)}.
+            </div>
+          </div>
+        ) : null}
         <div className="muted" style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, marginTop: 8 }}>
           Details
         </div>

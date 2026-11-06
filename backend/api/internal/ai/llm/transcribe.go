@@ -21,16 +21,24 @@ func (c *Client) transcribeModel() string {
 	return "whisper-1"
 }
 
+// audioFileName names the upload so the transcriber decodes it right. Browsers send
+// parameters ("audio/webm;codecs=opus"), which are dropped first.
 func audioFileName(mime string) string {
-	switch strings.ToLower(strings.TrimSpace(mime)) {
+	base := strings.ToLower(strings.TrimSpace(mime))
+	if i := strings.Index(base, ";"); i >= 0 {
+		base = strings.TrimSpace(base[:i])
+	}
+	switch base {
 	case "audio/webm", "video/webm":
 		return "audio.webm"
 	case "audio/wav", "audio/x-wav", "audio/wave":
 		return "audio.wav"
 	case "audio/mpeg", "audio/mp3":
 		return "audio.mp3"
-	case "audio/ogg", "audio/opus":
+	case "audio/ogg", "audio/opus", "application/ogg":
 		return "audio.ogg"
+	case "audio/flac", "audio/x-flac":
+		return "audio.flac"
 	default:
 		return "audio.m4a"
 	}

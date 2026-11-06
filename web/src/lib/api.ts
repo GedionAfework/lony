@@ -1519,7 +1519,11 @@ export type GoalDraft = {
   /** The page showed a price without saying which currency. */
   currency_unknown?: boolean;
   /** The price is an estimate, not read from a page. */
-  estimated?: boolean;
+  estimated?: boolean;  /** The page sells it as a monthly plan: target_amount is then the whole plan. */
+  monthly_payment?: string;
+  payment_months?: number;
+  /** Search-engine thumbnail, used when image_url refuses to download. */
+  image_thumb_url?: string;
 };
 
 export type PlanAssistantSource = {

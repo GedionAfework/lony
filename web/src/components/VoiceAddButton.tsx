@@ -42,6 +42,18 @@ export function VoiceAddButton({ token, disabled, onDraft, onError }: Props) {
   const [recording, setRecording] = useState(false);
   const recRef = useRef<MediaRecorder | null>(null);
   const chunks = useRef<Blob[]>([]);
+  const startedAt = useRef(0);
+  const autoStop = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const gone = useRef(false);
+  // Leaving the page mid-recording frees the microphone and sends nothing.
+  useEffect(
+    () => () => {
+      gone.current = true;
+      if (autoStop.current) clearTimeout(autoStop.current);
+      if (recRef.current?.state === 'recording') recRef.current.stop();
+    },
+    [],
+  );
   // Free users: captures left this month (null = unlimited or unknown).
   const [left, setLeft] = useState<number | null>(null);
   useEffect(() => {
@@ -54,6 +66,7 @@ export function VoiceAddButton({ token, disabled, onDraft, onError }: Props) {
   async function toggle() {
     if (disabled || busy) return;
     if (recording && recRef.current) {
+      if (autoStop.current) clearTimeout(autoStop.current);
       recRef.current.stop();
       return;
     }
@@ -71,8 +84,13 @@ export function VoiceAddButton({ token, disabled, onDraft, onError }: Props) {
       };
       rec.onstop = () => {
         stream.getTracks().forEach((t) => t.stop());
+        if (gone.current) return;
         setRecording(false);
         const blob = new Blob(chunks.current, { type: rec.mimeType || 'audio/webm' });
+        if (Date.now() - startedAt.current < 700 || blob.size < 1000) {
+          onError('That was too short. Click Say it, speak, then click Stop.');
+          return;
+        }
         void (async () => {
           setBusy(true);
           try {
@@ -82,6 +100,7 @@ export function VoiceAddButton({ token, disabled, onDraft, onError }: Props) {
               audio_base64: b64,
             });
             const ex = res.extract || {};
+            if (!ex.amount) onError(`I heard “${ex.transcript || ''}” but no amount. Add it below.`);
             onDraft({
               kind: ex.kind === 'income' ? 'income' : ex.kind === 'expense' ? 'expense' : undefined,
               title: ex.title,
@@ -104,16 +123,22 @@ export function VoiceAddButton({ token, disabled, onDraft, onError }: Props) {
       };
       recRef.current = rec;
       rec.start();
+      startedAt.current = Date.now();
       setRecording(true);
+      // One entry never needs more than a minute.
+      autoStop.current = setTimeout(() => {
+        if (rec.state === 'recording') rec.stop();
+      }, 60_000);
     } catch (e) {
-      onError(e instanceof Error ? e.message : 'Microphone permission required');
+      const denied = e instanceof DOMException && (e.name === 'NotAllowedError' || e.name === 'SecurityError');
+      onError(denied ? 'Allow the microphone for this site to add by voice' : e instanceof Error ? e.message : 'Microphone permission required');
     }
   }
 
   return (
     <Button variant="secondary" size="sm" onClick={() => void toggle()} disabled={disabled || busy}>
       <Mic size={14} />
-      {busy ? 'Listening…' : recording ? 'Stop' : 'Say it'}
+      {busy ? 'Reading…' : recording ? 'Stop' : 'Say it'}
       {left !== null && !busy && !recording ? <span className="muted" style={{ fontSize: 11 }}>· {left} left</span> : null}
     </Button>
   );
