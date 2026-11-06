@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"regexp"
 	"strings"
@@ -1502,7 +1503,16 @@ func (s *Service) IngestSMS(ctx context.Context, userID uuid.UUID, in SMSIngestI
 	}
 	out.Entry = &entry
 	if skipDelta && accountID != nil && s.accounts != nil {
-		_ = s.accounts.SetStatedBalance(ctx, userID, *accountID, parsed.StatedBalance, "sms stated balance")
+		if err := s.accounts.SetStatedBalance(ctx, userID, *accountID, parsed.StatedBalance, "sms stated balance"); err != nil {
+			// The entry skipped its delta expecting the bank's balance; move by the amount instead
+			// so the account (and Total Balance) still follows the transfer.
+			log.Printf("sms ingest: stated balance not saved user=%s account=%s: %v", userID, *accountID, err)
+			if ledger, ok := s.store.(BalanceLedger); ok {
+				if aerr := ledger.ApplyEntryBalance(ctx, userID, entry.ID, accountID); aerr != nil {
+					log.Printf("sms ingest: fallback balance move failed entry=%s: %v", entry.ID, aerr)
+				}
+			}
+		}
 	}
 	if logger, ok := s.store.(SMSLogStore); ok {
 		excerpt := text
