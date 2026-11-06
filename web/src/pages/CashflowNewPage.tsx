@@ -20,6 +20,7 @@ import { Button } from '../components/Button';
 import { Segmented } from '../components/Segmented';
 import { useToast } from '../components/Toast';
 import { VoiceAddButton, type VoiceDraft } from '../components/VoiceAddButton';
+import { BrandLoader } from '../components/BrandLoader';
 
 type Kind = 'income' | 'expense';
 
@@ -316,7 +317,7 @@ export function CashflowNewPage() {
     }
   }
 
-  if (loading) return <div className="page">Loading…</div>;
+  if (loading) return <BrandLoader />;
 
   return (
     <div className="page page-narrow">

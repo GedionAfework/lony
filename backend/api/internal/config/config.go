@@ -4,7 +4,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -53,6 +55,9 @@ type Config struct {
 	PolarServer        string
 	PolarSuccessURL    string
 	PolarProducts      map[string]string
+	// BillingListPrices: advertised plan prices, "plus_month=4.99,pro_year=99.99" (in cents here).
+	BillingListPrices   map[string]int
+	BillingListCurrency string
 	// ExposeAuthCodes puts sign-up codes in API responses so local testing works without
 	// email. Opt-in only (DEV_EXPOSE_CODES=1) and never on a hosted server.
 	ExposeAuthCodes bool
@@ -100,6 +105,8 @@ func Load() (Config, error) {
 		PolarServer:         getenv("POLAR_SERVER", "sandbox"),
 		PolarSuccessURL:     strings.TrimSpace(os.Getenv("POLAR_SUCCESS_URL")),
 		PolarProducts:       parsePairs(os.Getenv("POLAR_PRODUCTS")),
+		BillingListPrices:   parsePrices(os.Getenv("BILLING_LIST_PRICES")),
+		BillingListCurrency: strings.ToLower(strings.TrimSpace(os.Getenv("BILLING_LIST_CURRENCY"))),
 	}
 
 	if cfg.DatabaseURL == "" {
@@ -213,6 +220,18 @@ func googleAudiences() []string {
 }
 
 // parsePairs reads "a=1,b=2" into a map, ignoring blanks.
+// parsePrices reads "plus_month=4.99,pro_year=99.99" into cents per plan key.
+func parsePrices(raw string) map[string]int {
+	out := map[string]int{}
+	for k, v := range parsePairs(raw) {
+		f, err := strconv.ParseFloat(strings.TrimPrefix(v, "$"), 64)
+		if err == nil && f > 0 {
+			out[k] = int(math.Round(f * 100))
+		}
+	}
+	return out
+}
+
 func parsePairs(raw string) map[string]string {
 	out := map[string]string{}
 	for _, part := range strings.Split(raw, ",") {

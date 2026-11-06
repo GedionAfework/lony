@@ -92,6 +92,7 @@ import {
 } from './src/oauth';
 import { OnboardingScreen } from './src/OnboardingScreen';
 import { TermsScreen } from './src/TermsScreen';
+import { BrandLoader } from './src/BrandLoader';
 import { ThemeProvider, fonts, radii, useTheme } from './src/theme';
 import { registerPushToken } from './src/push';
 import { storageDelete, storageGet, storageSet } from './src/secureStorage';
@@ -2147,9 +2148,7 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
   if (booting || !fontsReady) {
     return (
       <SafeAreaView style={styles.safe}>
-        <View style={styles.center}>
-          <ActivityIndicator color={colors.primary} />
-        </View>
+        <BrandLoader full plainFont={!fontsReady} />
       </SafeAreaView>
     );
   }
@@ -2865,6 +2864,14 @@ function AppShell({ fontsReady }: { fontsReady: boolean }) {
               tosVersion={user.tos_version}
               isAdmin={user.role === 'admin'}
               planTier={user.plan_tier}
+              onPlanChanged={() => {
+                if (!token) return;
+                api
+                  .me(token)
+                  .then((me) => applyUserProfile(me.user))
+                  .catch(() => undefined);
+              }}
+              onError={setError}
               token={token ?? undefined}
               avatarUrl={user.avatar_url}
               avatarLocalUri={avatarLocalUri}

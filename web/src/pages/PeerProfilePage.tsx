@@ -8,6 +8,7 @@ import { Card } from '../components/Card';
 import { Button } from '../components/Button';
 import { Avatar, prepareAvatar, primeAvatar } from '../components/Avatar';
 import { useToast } from '../components/Toast';
+import { BrandLoader } from '../components/BrandLoader';
 
 export function PeerProfilePage() {
   const { peerId } = useParams();
@@ -76,7 +77,7 @@ export function PeerProfilePage() {
     }
   }
 
-  if (loading) return <div className="page">Loading…</div>;
+  if (loading) return <BrandLoader />;
 
   const displayName = isSelf ? 'Self' : peer?.display_name || 'User';
   const initial = (isSelf ? user?.display_name || 'U' : displayName).slice(0, 1).toUpperCase();

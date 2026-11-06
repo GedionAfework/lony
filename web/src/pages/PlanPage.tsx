@@ -15,6 +15,7 @@ import { EmptyState } from '../components/EmptyState';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/Confirm';
 import { MediaImg } from '../components/Avatar';
+import { BrandLoader } from '../components/BrandLoader';
 
 const FALLBACK_GOAL_TYPES = [
   { id: 'travel', label: 'Travel' },
@@ -94,8 +95,9 @@ export function PlanPage() {
     }
   }, [token, showError]);
 
+  const [booted, setBooted] = useState(false);
   useEffect(() => {
-    void reload();
+    void reload().finally(() => setBooted(true));
   }, [reload]);
 
   const selected = goals.find((g) => g.id === selectedId) ?? null;
@@ -359,6 +361,9 @@ export function PlanPage() {
       setBusy(false);
     }
   }
+
+  // Lony's loading screen until the first load lands, instead of a page of zeros.
+  if (!booted) return <BrandLoader />;
 
   if (selected) {
     const pct = Math.min(100, Math.max(0, Math.round(selected.progress_percent || 0)));

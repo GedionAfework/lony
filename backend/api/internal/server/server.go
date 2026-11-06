@@ -2,8 +2,8 @@ package server
 
 import (
 	"context"
-	"fmt"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -15,8 +15,8 @@ import (
 	"equilend/api/internal/ai/llm"
 	"equilend/api/internal/auth"
 	"equilend/api/internal/banklink"
-	"equilend/api/internal/billing"
 	"equilend/api/internal/banks"
+	"equilend/api/internal/billing"
 	"equilend/api/internal/chat"
 	"equilend/api/internal/config"
 	"equilend/api/internal/dashboard"
@@ -123,6 +123,8 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 		WebhookSecret: cfg.PolarWebhookSecret,
 		SuccessURL:    cfg.PolarSuccessURL,
 		Products:      cfg.PolarProducts,
+		ListPrices:    cfg.BillingListPrices,
+		ListCurrency:  cfg.BillingListCurrency,
 	})
 	billingSvc.SetAudit(adminSvc.RecordAudit)
 	billingH := billing.NewHandler(billingSvc)
@@ -316,6 +318,7 @@ func New(cfg config.Config, pool *pgxpool.Pool, sqlStore *store.SQLStore) http.H
 
 			r.Get("/dashboard", dashH.Get)
 			r.Get("/wealth", accountsH.Wealth)
+			r.Get("/wealth/day", accountsH.Day)
 			r.Get("/accounts", accountsH.List)
 			r.Get("/accounts/reconcile", accountsH.ReconcileAll)
 			r.Get("/accounts/debt-matches", accountsH.DebtMatches)

@@ -21,6 +21,7 @@ import { Modal } from '../components/Modal';
 import { EmptyState } from '../components/EmptyState';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/Confirm';
+import { BrandLoader } from '../components/BrandLoader';
 
 const FALLBACK_ACCOUNT_TYPES: CatalogOption[] = [
   { id: 'bank', label: 'Bank' },
@@ -131,8 +132,9 @@ export function AccountsPage() {
     }
   }, [token, showError]);
 
+  const [booted, setBooted] = useState(false);
   useEffect(() => {
-    void reload();
+    void reload().finally(() => setBooted(true));
   }, [reload]);
 
   useEffect(() => {
@@ -553,10 +555,14 @@ export function AccountsPage() {
     return accounts[0]?.currency_code || pref || 'USD';
   })();
   const inHero = accounts.filter((a) => a.currency_code === heroCurrency);
-  const heroTotal = inHero.reduce((sum, a) => sum + (Number(a.balance) || 0), 0);
   const heroAssets = inHero.filter((a) => a.account_type !== 'credit_card').reduce((sum, a) => sum + (Number(a.balance) || 0), 0);
-  const heroCards = Math.abs(inHero.filter((a) => a.account_type === 'credit_card').reduce((sum, a) => sum + (Number(a.balance) || 0), 0));
+  // A card's balance is what you owe on it, so it comes off the total (it used to be added).
+  const heroCards = inHero.filter((a) => a.account_type === 'credit_card').reduce((sum, a) => sum + (Number(a.balance) || 0), 0);
+  const heroTotal = heroAssets - heroCards;
   const otherCurrencies = [...new Set(accounts.map((a) => a.currency_code).filter((c) => c !== heroCurrency))];
+
+  // Lony's loading screen until the first load lands, instead of a page of zeros.
+  if (!booted) return <BrandLoader />;
 
   return (
     <div className="page">

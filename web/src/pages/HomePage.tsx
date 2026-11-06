@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Plus, Repeat, TrendingDown, TrendingUp, X } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
-import { api, type Budget, type CashflowBill, type CashflowCalendar, type CashflowEntry, type CashflowSummary, type CategorySpend, type DeclinedShare, type Loan, type PaydayCycle, type TripBudget, type WealthSummary } from '../lib/api';
+import { api, type Budget, type CashflowBill, type CashflowCalendar, type CashflowEntry, type CashflowSummary, type CategorySpend, type DeclinedShare, type Loan, type PaydayCycle, type TripBudget, type WealthSummary, type DaySummary } from '../lib/api';
 import { CURRENCIES } from '../lib/catalogs';
 import { formatMoney, stripAmount } from '../lib/format';
 import { Card } from '../components/Card';
@@ -13,6 +13,7 @@ import { Field, SelectField } from '../components/Field';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/Confirm';
 import { CategoryIcon, Hero, HeroStat, Initials, SectionHead, hueFor } from '../components/Visuals';
+import { BrandLoader } from '../components/BrandLoader';
 
 type Tab = 'dashboard' | 'income' | 'expenses' | 'bills';
 
@@ -48,6 +49,13 @@ function toIsoLocal(d: Date): string {
   return `${y}-${m}-${day}`;
 }
 
+/** "Fri, 11-06-2026": the weekday, then the date as month-day-year. */
+function dayLabel(iso: string, locale?: string): string {
+  const [y, m, d] = iso.split('-');
+  const weekday = new Date(Number(y), Number(m) - 1, Number(d)).toLocaleDateString(locale || undefined, { weekday: 'short' });
+  return `${weekday}, ${m}-${d}-${y}`;
+}
+
 function loanRemaining(loan: Loan): number {
   return Number(loan.outstanding_amount || loan.expected_total || loan.principal || 0);
 }
@@ -62,6 +70,9 @@ export function HomePage() {
   const [declined, setDeclined] = useState<DeclinedShare[]>([]);
   const [summary, setSummary] = useState<CashflowSummary | null>(null);
   const [wealth, setWealth] = useState<WealthSummary | null>(null);
+  const [day, setDay] = useState<DaySummary | null>(null);
+  // The picked day's own entries, fetched for that day so none are cut off by the month list.
+  const [dayEntries, setDayEntries] = useState<{ iso: string; rows: CashflowEntry[] } | null>(null);
   const [income, setIncome] = useState<CashflowEntry[]>([]);
   const [expenseRows, setExpenseRows] = useState<CashflowEntry[]>([]);
   const [incomeTemplates, setIncomeTemplates] = useState<CashflowEntry[]>([]);
@@ -156,6 +167,7 @@ export function HomePage() {
       setIncomeTemplates(incT.entries ?? []);
       setExpenseTemplates(expT.entries ?? []);
       setWealth(wealthRes?.wealth ?? null);
+      setDayTick((n) => n + 1);
       setBreakdown(breakRes.breakdown ?? []);
       setBudgets(budgetRes.budgets ?? []);
       setPayday(budgetRes.payday ?? null);
@@ -172,9 +184,31 @@ export function HomePage() {
     }
   }, [token, period.from, period.to, preferred, showError, user?.timezone]);
 
+  const [booted, setBooted] = useState(false);
   useEffect(() => {
-    void reload();
+    void reload().finally(() => setBooted(true));
   }, [reload]);
+
+  // The picked calendar day: its balance at day's end and its money in and out.
+  const [dayTick, setDayTick] = useState(0);
+  useEffect(() => {
+    if (!token) return;
+    let cancelled = false;
+    const [y, m, d] = selectedIso.split('-').map(Number);
+    const from = new Date(y, m - 1, d);
+    const to = new Date(y, m - 1, d + 1);
+    api
+      .wealthDay(token, from, to, preferred)
+      .then((r) => !cancelled && setDay(r.day))
+      .catch(() => !cancelled && setDay(null));
+    api
+      .listCashflow(token, { from: from.toISOString(), to: to.toISOString(), limit: 500 })
+      .then((r) => !cancelled && setDayEntries({ iso: selectedIso, rows: r.entries ?? [] }))
+      .catch(() => !cancelled && setDayEntries(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [token, selectedIso, preferred, dayTick]);
 
   useEffect(() => {
     if (!token) return;
@@ -493,7 +527,13 @@ export function HomePage() {
   const catRows = breakdown.filter((b) => b.currency_code === currency).slice(0, 6);
   const catTotal = catRows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
   const selectedDay = heatByDate.get(selectedIso);
-  const dayRows = [...dayIncome, ...dayExpense].sort((a, b) => b.occurred_at.localeCompare(a.occurred_at));
+  const dayRows = (dayEntries?.iso === selectedIso
+    ? dayEntries.rows.filter((e) => !e.is_template && (e.occurred_at.slice(0, 10) === selectedIso || toIsoLocal(new Date(e.occurred_at)) === selectedIso))
+    : [...dayIncome, ...dayExpense]
+  ).sort((a, b) => b.occurred_at.localeCompare(a.occurred_at));
+
+  // Lony's loading screen until the first load lands, instead of a page of zeros.
+  if (!booted) return <BrandLoader />;
 
   return (
     <div className="page home">
@@ -536,18 +576,23 @@ export function HomePage() {
       ))}
 
       <Hero
-        label="Total balance"
-        value={formatMoney(wealth?.net_worth ?? '0', heroCurrency, locale)}
+        label={dayLabel(selectedIso, locale)}
+        value={formatMoney(day?.balance ?? wealth?.cash_on_hand ?? '0', day?.currency_code || heroCurrency, locale)}
         sub={
-          wealth?.converted
-            ? `All currencies at today's rate${wealth.missing_rates?.length ? ` · left out: ${wealth.missing_rates.join(', ')}` : ''}`
-            : undefined
+          <>
+            {selectedIso === todayIso ? 'Balance now' : 'Balance at the end of the day'}
+            {day?.converted ? " · all currencies at today's rate" : ''}
+            {day?.missing_rates?.length ? ` · left out: ${day.missing_rates.join(', ')}` : ''}
+          </>
         }
         aside={
           <>
-            <HeroStat label="Cash on hand" value={formatMoney(wealth?.cash_on_hand ?? '0', heroCurrency, locale)} />
-            <HeroStat label="Owed to you" value={formatMoney(wealth?.receivables ?? '0', heroCurrency, locale)} tone="up" />
-            <HeroStat label="You owe" value={formatMoney(wealth?.payables ?? '0', heroCurrency, locale)} tone="down" />
+            <HeroStat label="Money in" value={formatMoney(day?.income ?? '0', day?.currency_code || heroCurrency, locale)} tone="up" />
+            <HeroStat label="Money out" value={formatMoney(day?.expense ?? '0', day?.currency_code || heroCurrency, locale)} tone="down" />
+            <HeroStat
+              label="Day total"
+              value={`${Number(day?.net ?? 0) < 0 ? '−' : '+'}${formatMoney(Math.abs(Number(day?.net ?? 0)).toFixed(2), day?.currency_code || heroCurrency, locale)}`}
+            />
           </>
         }
       >

@@ -435,6 +435,21 @@ export const api = {
     return request<{ loans: Loan[] }>(`/loans${suffix}`, { method: 'GET' }, token);
   },
   dashboard: (token: string) => request<{ dashboard: Dashboard }>(`/dashboard`, { method: 'GET' }, token),
+  billingCatalog: () => request<BillingCatalog>('/billing/plans', { method: 'GET' }),
+  myBilling: (token: string) => request<MyBilling>('/billing/me', { method: 'GET' }, token),
+  startCheckout: (token: string, plan: string) =>
+    request<{ url: string }>('/billing/checkout', {
+      method: 'POST',
+      headers: { 'Idempotency-Key': idemKey('checkout') },
+      body: JSON.stringify({ plan }),
+    }, token),
+  billingPortal: (token: string) => request<{ url: string }>('/billing/portal', { method: 'POST', body: '{}' }, token),
+  /** One local day: balance at its end (accounts minus cards) and that day's money in and out. */
+  wealthDay: (token: string, from: Date, to: Date, currency?: string) => {
+    const q = new URLSearchParams({ from: from.toISOString(), to: to.toISOString() });
+    if (currency) q.set('currency', currency);
+    return request<{ day: DaySummary }>(`/wealth/day?${q.toString()}`, { method: 'GET' }, token);
+  },
   wealth: (token: string, currency?: string) => {
     const suffix = currency ? `?currency=${encodeURIComponent(currency)}` : '';
     return request<{ wealth: WealthSummary }>(`/wealth${suffix}`, { method: 'GET' }, token);
@@ -2142,6 +2157,77 @@ export type WealthCurrencySlice = {
   payables: string;
   net_worth: string;
   account_count: number;
+};
+
+export type PlanTier = 'free' | 'plus' | 'pro';
+
+export type PlanLimits = {
+  /** -1 = unlimited, 0 = not included. */
+  ai_monthly: number;
+  ai_daily: number;
+  captures_monthly: number;
+  insights_every_days: number;
+  reports: boolean;
+  bank_links: number;
+  trips: boolean;
+};
+
+export type PlanOption = {
+  key: string;
+  tier: PlanTier;
+  interval?: 'month' | 'year' | string;
+  name?: string;
+  amount_cents?: number;
+  currency?: string;
+  /** Can be bought now (a payment product is set up for it). */
+  available?: boolean;
+};
+
+export type BillingCatalog = {
+  tiers: { tier: PlanTier; limits: PlanLimits }[];
+  plans: PlanOption[];
+  checkout_ready: boolean;
+  trial_days: number;
+  trial_tier: PlanTier;
+};
+
+export type BillingSubscription = {
+  id: string;
+  plan_key?: string;
+  tier?: PlanTier;
+  status: string;
+  amount_cents: number;
+  currency: string;
+  interval?: string;
+  current_period_end?: string;
+  cancel_at_period_end: boolean;
+  trial_end?: string;
+};
+
+export type MyBilling = {
+  tier: PlanTier;
+  source: 'free' | 'trial' | 'admin' | 'polar';
+  expires_at?: string;
+  limits: PlanLimits;
+  usage: { ai_this_month: number; captures_this_month: number; bank_links: number };
+  subscription: BillingSubscription | null;
+  can_manage: boolean;
+};
+
+export type DaySummary = {
+  from: string;
+  to: string;
+  currency_code: string;
+  balance: string;
+  assets: string;
+  cards: string;
+  income: string;
+  expense: string;
+  net: string;
+  entries: number;
+  accounts: number;
+  converted: boolean;
+  missing_rates?: string[];
 };
 
 export type WealthSummary = {

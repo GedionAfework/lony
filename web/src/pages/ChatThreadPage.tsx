@@ -9,6 +9,7 @@ import { markRead, mergeMessages } from '../lib/chatSync';
 import { Button } from '../components/Button';
 import { useToast } from '../components/Toast';
 import { Avatar } from '../components/Avatar';
+import { BrandLoader } from '../components/BrandLoader';
 
 const REACTION_EMOJIS = ['👍', '❤️', '😂', '😮', '😢', '🙏', '🔥', '👏'];
 const COMPOSER_EMOJIS = ['😀', '😁', '😂', '🤣', '😊', '😍', '😘', '😎', '🤔', '😅', '😭', '😡', '👍', '👎', '❤️', '🔥', '🙏', '👏', '🎉', '✅', '💯', '🤝', '💪', '✨', '📌', '💰', '🏦', '📱'];
@@ -234,7 +235,7 @@ export function ChatThreadPage() {
     }
   }
 
-  if (loading) return <div className="page">Loading…</div>;
+  if (loading) return <BrandLoader />;
   if (!conversation) return <div className="page">Chat unavailable.</div>;
 
   const peerTitle = isSelfChat ? 'Self' : conversation.peer.display_name;

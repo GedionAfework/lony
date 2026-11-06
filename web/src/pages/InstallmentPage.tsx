@@ -8,6 +8,7 @@ import { Money } from '../components/Money';
 import { DueDatePill } from '../components/StatusPill';
 import { Button } from '../components/Button';
 import { useToast } from '../components/Toast';
+import { BrandLoader } from '../components/BrandLoader';
 
 export function InstallmentPage() {
   const { loanId, installmentId } = useParams();
@@ -47,7 +48,7 @@ export function InstallmentPage() {
     }
   }
 
-  if (loading) return <div className="page">Loading…</div>;
+  if (loading) return <BrandLoader />;
   if (!loan || !installment) return <div className="page">Not found.</div>;
 
   const paid = installment.status === 'paid';

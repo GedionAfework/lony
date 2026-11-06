@@ -25,6 +25,7 @@ import { RichText } from '../components/RichText';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/Confirm';
 import { CategoryIcon, Hero, HeroStat, Initials, SectionHead, hueFor } from '../components/Visuals';
+import { BrandLoader } from '../components/BrandLoader';
 
 type Tab = 'overview' | 'cashflow' | 'debts' | 'goals' | 'analysis' | 'reports' | 'coach';
 
@@ -282,8 +283,9 @@ export function InsightsPage() {
     }
   }, [token, preferred, isPremium, showError]);
 
+  const [booted, setBooted] = useState(false);
   useEffect(() => {
-    void reload();
+    void reload().finally(() => setBooted(true));
   }, [reload]);
 
   useEffect(() => {
@@ -435,6 +437,9 @@ export function InsightsPage() {
   useEffect(() => {
     coachEnd.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }, [coachMessages]);
+
+  // Lony's loading screen until the first load lands, instead of a page of zeros.
+  if (!booted) return <BrandLoader />;
 
   if (!preferred) {
     return (

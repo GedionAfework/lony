@@ -1,11 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Check, CreditCard, ExternalLink, Sparkles, X } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
-import { api, type BillingCatalog, type MyBilling, type PlanTier } from '../lib/api';
+import { api, type BillingCatalog, type MyBilling, type PlanOption, type PlanTier } from '../lib/api';
 import { TIER_BLURB, TIER_LABEL, featureLines, formatPrice, planStatusLine } from '../lib/plans';
 import { Button } from './Button';
-import { Segmented } from './Segmented';
 import { useToast } from './Toast';
 
 const LIVE = new Set(['active', 'trialing', 'past_due']);
@@ -35,7 +34,6 @@ export function BillingPanel() {
   const [params, setParams] = useSearchParams();
   const [catalog, setCatalog] = useState<BillingCatalog | null>(null);
   const [mine, setMine] = useState<MyBilling | null>(null);
-  const [interval, setBillingInterval] = useState<'month' | 'year'>('month');
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -78,15 +76,6 @@ export function BillingPanel() {
     return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const intervals = useMemo(() => {
-    const set = new Set((catalog?.plans ?? []).map((p) => p.interval).filter(Boolean));
-    return (['month', 'year'] as const).filter((i) => set.has(i));
-  }, [catalog]);
-
-  useEffect(() => {
-    if (intervals.length && !intervals.includes(interval)) setBillingInterval(intervals[0]);
-  }, [intervals, interval]);
 
   const subscribed = Boolean(mine?.source === 'polar' && mine.subscription && LIVE.has(mine.subscription.status));
 
@@ -134,12 +123,9 @@ export function BillingPanel() {
     );
   }
 
-  const yearSaving = (() => {
-    const m = catalog.plans.find((p) => p.tier === 'pro' && p.interval === 'month');
-    const y = catalog.plans.find((p) => p.tier === 'pro' && p.interval === 'year');
-    if (!m?.amount_cents || !y?.amount_cents || m.currency !== y.currency) return 0;
-    return Math.round((1 - y.amount_cents / (m.amount_cents * 12)) * 100);
-  })();
+  /** How much cheaper a year is than twelve months, in whole percent. */
+  const saving = (m?: PlanOption, y?: PlanOption) =>
+    m?.amount_cents && y?.amount_cents && m.currency === y.currency ? Math.round((1 - y.amount_cents / (m.amount_cents * 12)) * 100) : 0;
 
   return (
     <div className="billing">
@@ -173,16 +159,7 @@ export function BillingPanel() {
 
       <div className="plans-head">
         <div className="set-group-title" style={{ padding: 0 }}>Plans</div>
-        {intervals.length > 1 ? (
-          <Segmented
-            value={interval}
-            onChange={(v) => setBillingInterval(v as 'month' | 'year')}
-            options={[
-              { id: 'month', label: 'Monthly' },
-              { id: 'year', label: yearSaving > 0 ? `Yearly · save ${yearSaving}%` : 'Yearly' },
-            ]}
-          />
-        ) : null}
+        <span className="muted" style={{ fontSize: 12.5 }}>Pay monthly, or yearly and save</span>
       </div>
 
       {!catalog.checkout_ready ? (
@@ -191,10 +168,11 @@ export function BillingPanel() {
 
       <div className="plan-grid">
         {catalog.tiers.map(({ tier, limits }) => {
-          const option =
-            catalog.plans.find((p) => p.tier === tier && p.interval === interval) ?? catalog.plans.find((p) => p.tier === tier);
-          const price = tier === 'free' ? 'Free' : formatPrice(option);
-          const per = option?.interval === 'year' ? '/year' : option?.interval === 'month' ? '/month' : '';
+          const monthly = catalog.plans.find((p) => p.tier === tier && p.interval === 'month');
+          const yearly = catalog.plans.find((p) => p.tier === tier && p.interval === 'year');
+          const monthPrice = formatPrice(monthly);
+          const yearPrice = formatPrice(yearly);
+          const save = saving(monthly, yearly);
           const current = mine.tier === tier;
           return (
             <div key={tier} className={`plan-card ${current ? 'current' : ''} ${tier === 'pro' ? 'featured' : ''}`}>
@@ -206,10 +184,27 @@ export function BillingPanel() {
                 </div>
                 <div className="plan-card-blurb">{TIER_BLURB[tier as PlanTier]}</div>
               </div>
-              <div className="plan-card-price">
-                {price ?? '—'}
-                {price && tier !== 'free' ? <small>{per}</small> : null}
-              </div>
+              {tier === 'free' ? (
+                <div className="plan-prices">
+                  <div className="plan-card-price">
+                    $0<small>/forever</small>
+                  </div>
+                  <div className="plan-price-alt">No card needed</div>
+                </div>
+              ) : (
+                <div className="plan-prices">
+                  <div className="plan-card-price">
+                    {monthPrice ?? '—'}
+                    {monthPrice ? <small>/month</small> : null}
+                  </div>
+                  {yearPrice ? (
+                    <div className="plan-price-alt">
+                      or <strong>{yearPrice}</strong>/year
+                      {save > 0 ? <span className="plan-save">save {save}%</span> : null}
+                    </div>
+                  ) : null}
+                </div>
+              )}
               <ul className="plan-features">
                 {featureLines(limits).map((f) => (
                   <li key={f.text} className={f.on ? '' : 'off'}>
@@ -230,19 +225,23 @@ export function BillingPanel() {
                     </Button>
                   )
                 ) : (
-                  <Button
-                    block
-                    variant={tier === 'pro' ? 'primary' : 'secondary'}
-                    disabled={!catalog.checkout_ready || !option || busyKey !== null}
-                    busy={busyKey === option?.key}
-                    onClick={() => option && onUpgrade(option.key)}
-                  >
-                    {current && mine.source === 'trial'
-                      ? `Keep ${TIER_LABEL[tier]}`
-                      : current
-                        ? 'Subscribe'
-                        : `Upgrade to ${TIER_LABEL[tier]}`}
-                  </Button>
+                  <div className="plan-buy">
+                    {([monthly, yearly] as const).map((opt) =>
+                      opt ? (
+                        <Button
+                          key={opt.key}
+                          block
+                          variant={opt.interval === 'year' ? 'primary' : 'secondary'}
+                          disabled={!opt.available || busyKey !== null}
+                          busy={busyKey === opt.key}
+                          onClick={() => onUpgrade(opt.key)}
+                        >
+                          {opt.interval === 'year' ? 'Yearly' : 'Monthly'} · {formatPrice(opt) ?? ''}
+                        </Button>
+                      ) : null,
+                    )}
+                    {current && mine.source === 'trial' ? <div className="plan-price-alt">Keep {TIER_LABEL[tier]} after your trial</div> : null}
+                  </div>
                 )}
               </div>
             </div>

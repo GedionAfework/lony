@@ -120,6 +120,22 @@ type Config struct {
 	SuccessURL    string
 	// Products maps plan keys (pro_month, plus_year, ...) to Polar product IDs.
 	Products map[string]string
+	// ListPrices are the advertised prices in cents per plan key, shown when Polar has no
+	// price for a plan (or is not set up yet). Empty means DefaultListPrices.
+	ListPrices map[string]int
+	// ListCurrency is the currency of ListPrices (default "usd").
+	ListCurrency string
+}
+
+// StandardPlans are always offered, so every tier shows a monthly and a yearly price.
+var StandardPlans = []string{"plus_month", "plus_year", "pro_month", "pro_year"}
+
+// DefaultListPrices: yearly is about two months free. Override with BILLING_LIST_PRICES.
+var DefaultListPrices = map[string]int{
+	"plus_month": 499,
+	"plus_year":  4999,
+	"pro_month":  999,
+	"pro_year":   9999,
 }
 
 type Service struct {
@@ -255,6 +271,8 @@ type PlanOption struct {
 	Name        string `json:"name,omitempty"`
 	AmountCents int    `json:"amount_cents,omitempty"`
 	Currency    string `json:"currency,omitempty"`
+	// Available: this plan can be bought now (a Polar product is set up for it).
+	Available bool `json:"available"`
 }
 
 type TierInfo struct {
@@ -277,17 +295,37 @@ func (s *Service) Catalog(ctx context.Context) Catalog {
 		out.Tiers = append(out.Tiers, TierInfo{Tier: t, Limits: all[t]})
 	}
 	prices := s.productPrices(ctx)
-	for k, productID := range s.cfg.Products {
-		if tier := TierOfPlanKey(k); tier != "" {
-			opt := PlanOption{Key: k, Tier: tier, Interval: IntervalOfPlanKey(k)}
-			if pp, ok := prices[productID]; ok {
-				opt.Name, opt.AmountCents, opt.Currency = pp.Name, pp.AmountCents, pp.Currency
-				if opt.Interval == "" {
-					opt.Interval = pp.Interval
-				}
-			}
-			out.Plans = append(out.Plans, opt)
+	keys := map[string]bool{}
+	for _, k := range StandardPlans {
+		keys[k] = true
+	}
+	for k := range s.cfg.Products {
+		keys[k] = true
+	}
+	list := s.cfg.ListPrices
+	if len(list) == 0 {
+		list = DefaultListPrices
+	}
+	listCur := strings.ToLower(strings.TrimSpace(s.cfg.ListCurrency))
+	if listCur == "" {
+		listCur = "usd"
+	}
+	for k := range keys {
+		tier := TierOfPlanKey(k)
+		if tier == "" {
+			continue
 		}
+		productID, sold := s.cfg.Products[k]
+		opt := PlanOption{Key: k, Tier: tier, Interval: IntervalOfPlanKey(k), Available: sold && out.CheckoutReady}
+		if pp, ok := prices[productID]; sold && ok {
+			opt.Name, opt.AmountCents, opt.Currency = pp.Name, pp.AmountCents, pp.Currency
+			if opt.Interval == "" {
+				opt.Interval = pp.Interval
+			}
+		} else if cents, ok := list[k]; ok && cents > 0 {
+			opt.AmountCents, opt.Currency = cents, listCur
+		}
+		out.Plans = append(out.Plans, opt)
 	}
 	sort.Slice(out.Plans, func(i, j int) bool { return out.Plans[i].Key < out.Plans[j].Key })
 	if out.Plans == nil {

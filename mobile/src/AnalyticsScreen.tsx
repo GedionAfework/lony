@@ -20,6 +20,7 @@ import { t } from './i18n';
 import { TrustGradeModal } from './TrustGradeModal';
 import { fonts, radii, space, useTheme } from './theme';
 import { Card, EmptyState, HeroCard, PrimaryButton, SecondaryButton, Segmented } from './ui';
+import { BrandLoader } from './BrandLoader';
 
 type Tab = 'overview' | 'cashflow' | 'debts' | 'goals' | 'analysis' | 'reports' | 'coach';
 
@@ -695,8 +696,9 @@ export function AnalyticsScreen({
     }
   }, [preferred, token, onError, isPremium]);
 
+  const [booted, setBooted] = useState(false);
   useEffect(() => {
-    void reload();
+    void reload().finally(() => setBooted(true));
   }, [reload]);
 
   useEffect(() => {
@@ -913,6 +915,9 @@ export function AnalyticsScreen({
         : s === 'positive'
           ? { icon: 'line-chart' as FAName, fg: colors.success, bg: colors.successSoft, label: t(L, 'insights.sevPositive') }
           : { icon: 'lightbulb-o' as FAName, fg: colors.primary, bg: colors.primarySoft, label: t(L, 'insights.sevInfo') };
+
+  // Lony's loading screen until the first load lands, instead of empty cards.
+  if (!booted) return <BrandLoader />;
 
   return (
     <View style={{ gap: space.md }}>

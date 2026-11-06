@@ -42,6 +42,7 @@ import {
   SectionLabel,
   Segmented,
 } from './ui';
+import { BrandLoader } from './BrandLoader';
 
 type Props = {
   user: User;
@@ -326,8 +327,9 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
     }
   }, [token, onError, user.locale]);
 
+  const [booted, setBooted] = useState(false);
   useEffect(() => {
-    void reload();
+    void reload().finally(() => setBooted(true));
   }, [reload, reloadToken]);
 
   useEffect(() => {
@@ -1426,6 +1428,9 @@ export function PlanScreen({ user, token, formatMoney, onError, reloadToken = 0,
   })();
 
   const visibleCreateTab = !isPremiumPlan(user) && createTab === 'ai' ? 'detail' : createTab;
+
+  // Lony's loading screen until the first load lands, instead of empty cards.
+  if (!booted) return <BrandLoader />;
 
   if (mode === 'create') {
     return (

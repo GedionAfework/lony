@@ -11,6 +11,7 @@ import { Button } from '../components/Button';
 import { SelectField } from '../components/Field';
 import { useToast } from '../components/Toast';
 import { useConfirm } from '../components/Confirm';
+import { BrandLoader } from '../components/BrandLoader';
 
 function monthBounds(d = new Date()) {
   const from = new Date(Date.UTC(d.getFullYear(), d.getMonth(), 1));
@@ -90,7 +91,7 @@ export function CashflowShowPage() {
     }
   }
 
-  if (loading) return <div className="page">Loading…</div>;
+  if (loading) return <BrandLoader />;
   if (!entry) return <div className="page">Not found.</div>;
 
   const income = entry.kind === 'income';

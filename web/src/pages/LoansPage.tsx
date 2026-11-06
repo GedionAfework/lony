@@ -11,6 +11,7 @@ import { Segmented } from '../components/Segmented';
 import { DueDatePill } from '../components/StatusPill';
 import { Hero, HeroStat, Initials } from '../components/Visuals';
 import { useToast } from '../components/Toast';
+import { BrandLoader } from '../components/BrandLoader';
 
 const FILTERS = [
   { id: '', label: 'All' },
@@ -50,8 +51,9 @@ export function LoansPage() {
     }
   }, [token, showError]);
 
+  const [booted, setBooted] = useState(false);
   useEffect(() => {
-    void reload(filter);
+    void reload(filter).finally(() => setBooted(true));
   }, [reload, filter]);
 
   // Totals always use every loan, whatever filter is showing.
@@ -68,6 +70,9 @@ export function LoansPage() {
   const owedToMe = open.filter((l) => l.your_role === 'lender').reduce((n, l) => n + remaining(l), 0);
   const iOwe = open.filter((l) => l.your_role === 'borrower').reduce((n, l) => n + remaining(l), 0);
   const overdue = allLoans.filter((l) => l.status === 'overdue').length;
+
+  // Lony's loading screen until the first load lands, instead of a page of zeros.
+  if (!booted) return <BrandLoader />;
 
   return (
     <div className="page">

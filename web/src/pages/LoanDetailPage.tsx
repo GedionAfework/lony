@@ -17,6 +17,7 @@ import { EmptyState } from '../components/EmptyState';
 import { useToast } from '../components/Toast';
 import { Hero, HeroStat } from '../components/Visuals';
 import { useConfirm } from '../components/Confirm';
+import { BrandLoader } from '../components/BrandLoader';
 
 const STATUS_LABELS: Record<string, string> = {
   pending: 'Pending acceptance',
@@ -280,7 +281,7 @@ export function LoanDetailPage() {
     }
   }
 
-  if (loading) return <div className="page">Loading…</div>;
+  if (loading) return <BrandLoader />;
   if (!loan) return <div className="page">Not found.</div>;
 
   const peer = loan.your_role === 'borrower' ? loan.lender : loan.borrower;

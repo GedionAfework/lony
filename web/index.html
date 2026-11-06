@@ -24,7 +24,26 @@
     />
   </head>
   <body>
-    <div id="root"></div>
+    <!-- Shown until the app starts; React replaces it. -->
+    <div id="root">
+      <div class="boot-splash" role="status" aria-label="Loading Lony">
+        <img src="/lony-logo.png" alt="" width="56" height="56" />
+        <div class="boot-name">Lony</div>
+        <div class="boot-bar"><span></span></div>
+      </div>
+    </div>
+    <style>
+      .boot-splash { position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;
+        font-family: 'Plus Jakarta Sans', system-ui, sans-serif; color: #0E1726; }
+      [data-theme='dark'] .boot-splash { color: #EEF2F7; }
+      .boot-splash img { border-radius: 16px; animation: boot-breathe 1.6s ease-in-out infinite; }
+      .boot-name { font-size: 22px; font-weight: 800; letter-spacing: -0.4px; }
+      .boot-bar { width: 120px; height: 4px; border-radius: 999px; overflow: hidden; background: rgba(21, 158, 158, 0.16); }
+      .boot-bar span { display: block; width: 40%; height: 100%; border-radius: 999px; background: #159E9E; animation: boot-slide 1.2s ease-in-out infinite; }
+      @keyframes boot-breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.07); } }
+      @keyframes boot-slide { 0% { transform: translateX(-110%); } 100% { transform: translateX(260%); } }
+      @media (prefers-reduced-motion: reduce) { .boot-splash img, .boot-bar span { animation: none; } }
+    </style>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

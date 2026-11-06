@@ -18,6 +18,7 @@ import { SearchSelect } from './SearchSelect';
 import { IconBalance, IconCopy, IconEdit, IconLoans, IconRepeat, IconShare, IconTrash, IconUpload } from './icons';
 import { fonts, radii, space, useTheme } from './theme';
 import { Card, CheckRow, EmptyState, Field, HeroCard, PrimaryButton, ScreenHeader, SecondaryButton, SectionLabel, Segmented } from './ui';
+import { BrandLoader } from './BrandLoader';
 
 type Props = {
   user: User;
@@ -245,8 +246,9 @@ export function AccountsScreen({
     }
   }
 
+  const [booted, setBooted] = useState(false);
   useEffect(() => {
-    void reload();
+    void reload().finally(() => setBooted(true));
   }, [reload, reloadToken]);
 
   useEffect(() => {
@@ -877,6 +879,9 @@ export function AccountsScreen({
       onError(e instanceof Error ? e.message : 'Could not update the debt');
     }
   }
+
+  // Lony's loading screen until the first load lands, instead of empty cards.
+  if (!booted) return <BrandLoader />;
 
   return (
     <View style={{ gap: space.md }}>

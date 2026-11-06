@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { BrandLoader } from './components/BrandLoader';
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { useAuth } from './auth/AuthContext';
 import { ToastProvider } from './components/Toast';
@@ -32,11 +33,7 @@ import { SettingsPage } from './pages/SettingsPage';
 import { AdminPage } from './pages/AdminPage';
 
 function Splash() {
-  return (
-    <div className="center-page">
-      <div className="spinner" />
-    </div>
-  );
+  return <BrandLoader full />;
 }
 
 /** Gate for routes that require a signed-in, fully onboarded user. */

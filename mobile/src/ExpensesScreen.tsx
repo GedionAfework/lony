@@ -14,6 +14,7 @@ import {
   type Loan,
   type TripBudget,
   type User,
+  type DaySummary,
   type WealthSummary,
 } from './api';
 import { formatError } from './errors';
@@ -35,13 +36,14 @@ import { SearchSelect } from './SearchSelect';
 import { IconClose, IconRepeat } from './icons';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { listCashflowDrafts, removeCashflowDraft, type CashflowDraft } from './offlineDrafts';
-import { NetWorthCard } from './NetWorthCard';
+import { NetWorthCard, dayLabel } from './NetWorthCard';
 import { SmsReviewCard } from './SmsReviewCard';
 import { fonts, radii, space, useTheme, type ThemeColors } from './theme';
 import { t } from './i18n';
 import { Card, EmptyState, Field, HeroCard, Money, PrimaryButton, SecondaryButton, SectionLabel } from './ui';
 import { storageGet, storageSet } from './secureStorage';
 import { pushWidgetSnapshot } from './widgetSnapshot';
+import { BrandLoader } from './BrandLoader';
 
 const WEALTH_CACHE_KEY = 'lony.wealth_cache.v1';
 
@@ -384,13 +386,42 @@ export function ExpensesScreen({
   const selectedIso = useMemo(() => toIsoLocal(selectedDate), [selectedDate]);
   const preferred = (user.default_currency_code || 'USD').toUpperCase();
 
+  // The picked day: its balance at day's end, money in and out, and its own entries
+  // (fetched for that day, so a busy month's list can never hide them).
+  const [day, setDay] = useState<DaySummary | null>(null);
+  const [dayEntries, setDayEntries] = useState<{ iso: string; rows: CashflowEntry[] } | null>(null);
+  const [dayTick, setDayTick] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    const [y, m, d] = selectedIso.split('-').map(Number);
+    const from = new Date(y, m - 1, d);
+    const to = new Date(y, m - 1, d + 1);
+    api
+      .wealthDay(token, from, to, preferred)
+      .then((r) => !cancelled && setDay(r.day))
+      .catch(() => !cancelled && setDay(null));
+    api
+      .listCashflow(token, { from: from.toISOString(), to: to.toISOString(), limit: 500 })
+      .then((r) => !cancelled && setDayEntries({ iso: selectedIso, rows: (r.entries ?? []).filter((e) => !e.is_template) }))
+      .catch(() => !cancelled && setDayEntries(null));
+    return () => {
+      cancelled = true;
+    };
+  }, [token, selectedIso, preferred, dayTick]);
+
   const dayIncome = useMemo(
-    () => income.filter((e) => localDay(e.occurred_at) === selectedIso),
-    [income, selectedIso],
+    () =>
+      dayEntries?.iso === selectedIso
+        ? dayEntries.rows.filter((e) => e.kind === 'income')
+        : income.filter((e) => localDay(e.occurred_at) === selectedIso),
+    [income, selectedIso, dayEntries],
   );
   const dayExpense = useMemo(
-    () => expenseRows.filter((e) => localDay(e.occurred_at) === selectedIso),
-    [expenseRows, selectedIso],
+    () =>
+      dayEntries?.iso === selectedIso
+        ? dayEntries.rows.filter((e) => e.kind !== 'income')
+        : expenseRows.filter((e) => localDay(e.occurred_at) === selectedIso),
+    [expenseRows, selectedIso, dayEntries],
   );
 
   const heatByDate = useMemo(() => {
@@ -481,6 +512,7 @@ export function ExpensesScreen({
       const wealthRes = await api.wealth(token, preferred).catch(() => null);
       if (wealthRes?.wealth) {
         setWealth(wealthRes.wealth);
+        setDayTick((n) => n + 1);
         void storageSet(WEALTH_CACHE_KEY, JSON.stringify({ preferred, wealth: wealthRes.wealth }));
       }
     } catch {
@@ -610,8 +642,9 @@ export function ExpensesScreen({
     }
   }
 
+  const [booted, setBooted] = useState(false);
   useEffect(() => {
-    void reload();
+    void reload().finally(() => setBooted(true));
   }, [reload, reloadToken]);
 
   useEffect(() => {
@@ -820,6 +853,9 @@ export function ExpensesScreen({
       setTripBusy(false);
     }
   }
+
+  // Lony's loading screen until the first load lands, instead of empty cards.
+  if (!booted) return <BrandLoader />;
 
   return (
     <View style={{ gap: space.md }}>
@@ -1079,6 +1115,8 @@ export function ExpensesScreen({
             locale={user.locale}
             formatMoney={formatMoney}
             onOpenAccounts={onOpenAccounts}
+            dayIso={selectedIso}
+            day={day}
           />
           <SmsReviewCard
             token={token}
@@ -1106,7 +1144,7 @@ export function ExpensesScreen({
 
           <Card>
             <SectionTitle
-              title={selectedIso === toIsoLocal(new Date()) ? t(user.locale, 'common.today') : selectedIso}
+              title={selectedIso === toIsoLocal(new Date()) ? `${t(user.locale, 'common.today')} · ${dayLabel(selectedIso, user.locale)}` : dayLabel(selectedIso, user.locale)}
             />
             {dayIncome.length === 0 && dayExpense.length === 0 ? (
               <Text style={{ color: colors.muted, fontFamily: fonts.ui, fontSize: 13 }}>

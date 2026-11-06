@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Modal, Pressable, ScrollView, Text, View } from 'react-native';
-import { api, type InsightsMonthPoint, type MoneyAccount, type WealthSummary } from './api';
+import { api, type DaySummary, type InsightsMonthPoint, type MoneyAccount, type WealthSummary } from './api';
 import { IconClose } from './icons';
 import { formatMoneyAmount } from './amountFormat';
 import { t } from './i18n';
@@ -17,7 +17,22 @@ type Props = {
   locale?: string | null;
   formatMoney: (amount: string | null | undefined, currency: string | null | undefined, locale?: string) => string;
   onOpenAccounts?: () => void;
+  /** The picked calendar day (YYYY-MM-DD) and its summary: the card then shows that day. */
+  dayIso?: string;
+  day?: DaySummary | null;
 };
+
+/** "Fri, 11-06-2026": the weekday, then the date as month-day-year. */
+export function dayLabel(iso: string, locale?: string | null): string {
+  const [y, m, d] = iso.split('-');
+  const weekday = new Date(Number(y), Number(m) - 1, Number(d)).toLocaleDateString(locale || undefined, { weekday: 'short' });
+  return `${weekday}, ${m}-${d}-${y}`;
+}
+
+function todayIso(): string {
+  const n = new Date();
+  return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, '0')}-${String(n.getDate()).padStart(2, '0')}`;
+}
 
 /**
  * A smooth, continuous line through the points, with a soft fill under it. Drawn with plain
@@ -230,7 +245,9 @@ function MiniStat({ label, value, onPress }: { label: string; value: string; onP
 
 const HERO_TILE = 'rgba(255,255,255,0.16)';
 
-export function NetWorthCard({ token, wealth, currency, locale, formatMoney, onOpenAccounts }: Props) {
+export function NetWorthCard({ token, wealth, currency: walletCurrency, locale, formatMoney, onOpenAccounts, dayIso, day }: Props) {
+  // A picked day is summed in its own currency (the server converts every account into it).
+  const currency = (day?.currency_code || walletCurrency || 'USD').toUpperCase();
   const { colors } = useTheme();
   const [hidden, setHidden] = useState(false);
   const [modal, setModal] = useState<ModalKind>(null);
@@ -316,7 +333,7 @@ export function NetWorthCard({ token, wealth, currency, locale, formatMoney, onO
         />
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
           <Text style={{ color: colors.onPrimary, opacity: 0.85, fontFamily: fonts.uiSemi, fontSize: 14 }}>
-            {t(locale, 'wealth.totalBalance')}
+            {dayIso ? dayLabel(dayIso, locale) : t(locale, 'wealth.totalBalance')}
           </Text>
           <Pressable
             onPress={() => setHidden((h) => !h)}
@@ -344,10 +361,16 @@ export function NetWorthCard({ token, wealth, currency, locale, formatMoney, onO
             numberOfLines={1}
             adjustsFontSizeToFit
           >
-            {hidden ? '••••••' : formatMoneyAmount(net, locale ?? 'en')}
+            {hidden ? '••••••' : formatMoneyAmount(dayIso && day ? day.balance : net, locale ?? 'en')}
           </Text>
         </View>
-        {useTotal ? (
+        {dayIso ? (
+          <Text style={{ color: colors.onPrimary, opacity: 0.75, fontFamily: fonts.ui, fontSize: 12 }}>
+            {dayIso === todayIso() ? t(locale, 'wealth.balanceNow') : t(locale, 'wealth.balanceEndOfDay')}
+            {day?.missing_rates?.length ? ` · not included (no rate): ${day.missing_rates.join(', ')}` : ''}
+          </Text>
+        ) : null}
+        {useTotal && !dayIso ? (
           <Text style={{ color: colors.onPrimary, opacity: 0.75, fontFamily: fonts.ui, fontSize: 12 }}>
             All currencies at today's rate
             {wealth?.missing_rates?.length ? ` · not included (no rate): ${wealth.missing_rates.join(', ')}` : ''}
@@ -395,11 +418,23 @@ export function NetWorthCard({ token, wealth, currency, locale, formatMoney, onO
           />
         ) : null}
 
-        <View style={{ flexDirection: 'row', gap: 8 }}>
-          <MiniStat label={t(locale, 'wealth.cash')} value={money(cash)} onPress={() => setModal('cash')} />
-          <MiniStat label={t(locale, 'wealth.owedToYou')} value={money(recv)} onPress={() => setModal('recv')} />
-          <MiniStat label={t(locale, 'wealth.youOwe')} value={money(pay)} onPress={() => setModal('pay')} />
-        </View>
+        {dayIso ? (
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <MiniStat label={t(locale, 'wealth.moneyIn')} value={`+${money(day?.income ?? '0')}`} onPress={() => setModal('cash')} />
+            <MiniStat label={t(locale, 'wealth.moneyOut')} value={`−${money(day?.expense ?? '0')}`} onPress={() => setModal('pay')} />
+            <MiniStat
+              label={t(locale, 'wealth.dayTotal')}
+              value={`${Number(day?.net ?? 0) < 0 ? '−' : '+'}${money(Math.abs(Number(day?.net ?? 0)).toFixed(2))}`}
+              onPress={() => setModal('institutions')}
+            />
+          </View>
+        ) : (
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <MiniStat label={t(locale, 'wealth.cash')} value={money(cash)} onPress={() => setModal('cash')} />
+            <MiniStat label={t(locale, 'wealth.owedToYou')} value={money(recv)} onPress={() => setModal('recv')} />
+            <MiniStat label={t(locale, 'wealth.youOwe')} value={money(pay)} onPress={() => setModal('pay')} />
+          </View>
+        )}
 
         <Pressable
           onPress={() => setModal('institutions')}

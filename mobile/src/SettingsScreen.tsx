@@ -32,6 +32,7 @@ import { IconCamera } from './icons';
 import { PatternPad } from './PatternPad';
 import { PhoneField } from './PhoneField';
 import { SearchSelect } from './SearchSelect';
+import { PlanBilling } from './PlanBilling';
 import { ThemesScreen } from './ThemesScreen';
 import { fonts, radii, space, useTheme } from './theme';
 import {
@@ -57,6 +58,7 @@ type SettingsPage =
   | 'security'
   | 'extraFactor'
   | 'themes'
+  | 'plan'
   | 'admin';
 
 type Props = {
@@ -79,6 +81,9 @@ type Props = {
   tosVersion?: string | null;
   isAdmin?: boolean;
   planTier?: string;
+  /** The plan changed (after checkout): refresh the signed-in user. */
+  onPlanChanged?: () => void;
+  onError?: (message: string) => void;
   token?: string;
   avatarUrl?: string | null;
   /** Immediate local preview after picking a photo. */
@@ -441,6 +446,15 @@ export function SettingsScreen(props: Props) {
 
   if (page === 'themes') {
     return <ThemesScreen onBack={goHub} />;
+  }
+
+  if (page === 'plan' && props.token) {
+    return (
+      <View style={{ gap: space.lg }}>
+        <Back title="Plan & billing" />
+        <PlanBilling token={props.token} onChanged={props.onPlanChanged} onError={(m) => (props.onError ? props.onError(m) : Alert.alert('Plan & billing', m))} />
+      </View>
+    );
   }
 
   if (page === 'admin' && props.isAdmin && props.token) {
@@ -944,6 +958,19 @@ export function SettingsScreen(props: Props) {
         <Pressable onPress={() => goPage('profile')} style={{ padding: 12, borderRadius: 14, backgroundColor: colors.warningSoft }}>
           <Text style={{ color: colors.warning, fontFamily: fonts.uiSemi, fontSize: 13.5 }}>{t(L, 'settings.finishProfile')}</Text>
         </Pressable>
+      ) : null}
+
+      {props.token ? (
+        <Group>
+          <NavRow
+            icon="star"
+            tint="orange"
+            title="Plan & billing"
+            value={props.planTier === 'plus' ? 'Plus' : props.planTier === 'pro' || props.planTier === 'premium' ? 'Pro' : 'Upgrade'}
+            onPress={() => goPage('plan')}
+            last
+          />
+        </Group>
       ) : null}
 
       <Group title={t(L, 'settings.groupGeneral')}>
